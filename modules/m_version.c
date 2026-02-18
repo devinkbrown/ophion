@@ -136,10 +136,6 @@ confopts(void)
 	if(opers_see_all_users || ConfigFileEntry.operspy_dont_care_user_info)
 		*p++ = 'S';
 
-#ifdef HAVE_LIBZ
-	*p++ = 'Z';
-#endif
-
 	*p++ = '6';
 
 	*p = '\0';
