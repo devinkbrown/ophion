@@ -130,7 +130,7 @@ msgbuf_parse(struct MsgBuf *msgbuf, char *line)
 				}
 			}
 		} else {
-			return PARSE_UNTERMINATED_TAGS;
+			return 1;
 		}
 	}
 
@@ -145,22 +145,22 @@ msgbuf_parse(struct MsgBuf *msgbuf, char *line)
 
 		char *end = strchr(ch, ' ');
 		if (end == NULL)
-			return PARSE_UNTERMINATED_ORIGIN;
+			return 4;
 
 		*end = '\0';
 		ch = end + 1;
 	}
 
 	if (*ch == '\0')
-		return PARSE_NO_COMMAND;
+		return 2;
 
 	msgbuf->endp = &ch[strlen(ch)];
 	msgbuf->n_para = rb_string_to_array(ch, (char **)msgbuf->para, MAXPARA);
 	if (msgbuf->n_para == 0)
-		return PARSE_NO_PARAMS;
+		return 3;
 
 	msgbuf->cmd = msgbuf->para[0];
-	return PARSE_SUCCESS;
+	return 0;
 }
 
 /*

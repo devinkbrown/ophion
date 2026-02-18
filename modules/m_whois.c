@@ -373,7 +373,7 @@ single_whois(struct Client *source_p, struct Client *target_p, int operspy)
 		{
 			rb_inet_ntop_sock((struct sockaddr *)&ip4,
 					buf, sizeof buf);
-			sendto_one_numeric(source_p, RPL_WHOISSPECIAL,
+			sendto_one_numeric(source_p, RPL_WHOISTEXT,
 					"%s :Underlying IPv4 is %s",
 					target_p->name, buf);
 		}

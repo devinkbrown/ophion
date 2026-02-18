@@ -160,6 +160,7 @@
 #define RPL_NOTOPIC          331
 #define RPL_TOPIC            332
 #define RPL_TOPICWHOTIME     333
+#define RPL_WHOISTEXT        337
 #define RPL_WHOISACTUALLY    338
 
 #define RPL_INVITING         341
@@ -231,7 +232,6 @@
 #define ERR_WILDTOPLEVEL     414
 
 #define ERR_TOOMANYMATCHES   416
-#define ERR_INPUTTOOLONG     417
 
 #define ERR_UNKNOWNCOMMAND   421
 #define ERR_NOMOTD           422

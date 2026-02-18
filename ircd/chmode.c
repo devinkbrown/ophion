@@ -298,7 +298,7 @@ add_id(struct Client *source_p, struct Channel *chptr, const char *banid, const 
 
 	/* invalidate the can_send() cache */
 	if(mode_type == CHFL_BAN || mode_type == CHFL_EXCEPTION)
-		chptr->bants++;
+		chptr->bants = rb_current_time();
 
 	return true;
 }
@@ -328,7 +328,7 @@ del_id(struct Channel *chptr, const char *banid, rb_dlink_list * list, long mode
 
 			/* invalidate the can_send() cache */
 			if(mode_type == CHFL_BAN || mode_type == CHFL_EXCEPTION)
-				chptr->bants++;
+				chptr->bants = rb_current_time();
 
 			return banptr;
 		}
@@ -972,9 +972,9 @@ chm_ban(struct Client *source_p, struct Channel *chptr,
 		}
 
 		if(removed && removed->forward)
-			removed_mask_pos += snprintf(buf + old_removed_mask_pos, sizeof(buf) - old_removed_mask_pos, "%s$%s", removed->banstr, removed->forward) + 1;
+			removed_mask_pos += snprintf(buf + old_removed_mask_pos, sizeof(buf), "%s$%s", removed->banstr, removed->forward) + 1;
 		else
-			removed_mask_pos += rb_strlcpy(buf + old_removed_mask_pos, removed ? removed->banstr : mask, sizeof(buf) - old_removed_mask_pos) + 1;
+			removed_mask_pos += rb_strlcpy(buf + old_removed_mask_pos, mask, sizeof(buf)) + 1;
 		if(removed)
 		{
 			free_ban(removed);

@@ -99,9 +99,6 @@ parse(struct Client *client_p, char *pbuffer, char *bufend)
 	if (res)
 	{
 		ServerStats.is_empt++;
-		if (IsClient(client_p) &&
-		    (res == PARSE_UNTERMINATED_ORIGIN || res == PARSE_UNTERMINATED_TAGS))
-			sendto_one(from, form_str(ERR_INPUTTOOLONG), me.name, from->name);
 		return;
 	}
 

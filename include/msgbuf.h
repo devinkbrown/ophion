@@ -71,17 +71,9 @@ struct MsgBuf_cache {
 	struct MsgBuf_cache_entry *head; /* LRU cache head */
 };
 
-enum parse_result {
-	PARSE_SUCCESS = 0,
-	PARSE_UNTERMINATED_TAGS = 1,
-	PARSE_NO_COMMAND = 2,
-	PARSE_NO_PARAMS = 3,
-	PARSE_UNTERMINATED_ORIGIN = 4,
-};
-
 /*
  * parse a message into a MsgBuf.
- * returns PARSE_SUCCESS on success, or another parse_result value on error.
+ * returns 0 on success, 1 on error.
  */
 int msgbuf_parse(struct MsgBuf *msgbuf, char *line);
 
