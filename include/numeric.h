@@ -232,6 +232,7 @@
 #define ERR_WILDTOPLEVEL     414
 
 #define ERR_TOOMANYMATCHES   416
+#define ERR_INPUTTOOLONG     417
 
 #define ERR_UNKNOWNCOMMAND   421
 #define ERR_NOMOTD           422
