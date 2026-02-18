@@ -60,7 +60,7 @@ static void ms_taccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct 
 
 struct Message taccess_msgtab = {
 	"TACCESS", 0, 0, 0, 0,
-	{mg_ignore, mg_ignore, mg_ignore, {ms_taccess, 5}, mg_ignore, mg_ignore}
+	{mg_ignore, mg_ignore, mg_ignore, {ms_taccess, 4}, mg_ignore, mg_ignore}
 };
 
 mapi_clist_av1 ircx_access_clist[] = { &access_msgtab, &taccess_msgtab, NULL };
@@ -260,26 +260,23 @@ handle_access_clear(struct Channel *chptr, struct Client *source_p, const char *
 		return;
 	}
 
-	if (level_match)
+	rb_dlink_node *iter, *next;
+
+	/* propagate each deletion via TACCESS before clearing locally */
+	RB_DLINK_FOREACH_SAFE(iter, next, chptr->access_list.head)
 	{
-		rb_dlink_node *iter, *next;
+		struct AccessEntry *ae = iter->data;
 
-		RB_DLINK_FOREACH_SAFE(iter, next, chptr->access_list.head)
-		{
-			struct AccessEntry *ae = iter->data;
+		if (level_match && (ae->flags & level_match) != level_match)
+			continue;
 
-			if ((ae->flags & level_match) != level_match)
-				continue;
+		sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
+			":%s TACCESS %s %ld %ld %s :",
+			use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
+			ae->mask);
 
-			channel_access_delete(chptr, ae->mask);
-		}
+		channel_access_delete(chptr, ae->mask);
 	}
-	else
-		channel_access_clear(chptr);
-
-	sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
-		":%s ACCESS %s CLEAR %s",
-		use_id(source_p), chptr->chname, level_match ? ae_level_name(level_match) : "");
 }
 
 /*
@@ -329,9 +326,10 @@ handle_access_delete(struct Channel *chptr, struct Client *source_p, const char 
 			chptr->chname, ae_level_name(ae->flags), ae->mask);
 	}
 
+	/* propagate deletion to servers via TACCESS with empty level */
 	sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
-		":%s ACCESS %s DELETE %s %s",
-		use_id(source_p), chptr->chname, ae_level_name(ae->flags),
+		":%s TACCESS %s %ld %ld %s :",
+		use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
 		ae->mask);
 
 	channel_access_delete(chptr, ae->mask);
@@ -377,8 +375,9 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 	}
 
 	sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
-		":%s ACCESS %s ADD %s %s",
-		use_id(source_p), chptr->chname, ae_level_name(ae->flags), ae->mask);
+		":%s TACCESS %s %ld %ld %s %s",
+		use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
+		ae->mask, ae_level_name(ae->flags));
 }
 
 static void
@@ -392,16 +391,9 @@ apply_access_entries(struct Channel *chptr, struct Client *client_p)
 	if (!mode_char)
 		return;
 
-	struct membership *msptr = find_channel_membership(chptr, client_p);
-	s_assert(msptr != NULL);
-
-	sendto_channel_local(&me, ALL_MEMBERS, chptr, ":%s MODE %s +%c %s",
-			me.name, chptr->chname, mode_char, client_p->name);
-	sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
-			":%s TMODE %ld %s +%c %s",
-			me.id, (long) chptr->channelts, chptr->chname,
-			mode_char, client_p->id);
-	msptr->flags |= ae->flags;
+	char modestr[] = {'+', mode_char, '\0'};
+	const char *para[] = {modestr, client_p->name};
+	set_channel_mode(client_p, &me, chptr, NULL, 2, para);
 }
 
 static void
@@ -474,6 +466,17 @@ ms_taccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 	if (creation_ts > chptr->channelts)
 		return;
 
+	/* deletion: level missing or empty */
+	if (parc < 6 || !*parv[5])
+	{
+		channel_access_delete(chptr, parv[4]);
+
+		sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
+			":%s TACCESS %s %ld %ld %s :",
+			use_id(&me), chptr->chname, creation_ts, entry_ts, parv[4]);
+		return;
+	}
+
 	unsigned int flags = ae_level_from_name(parv[5]);
 	if (flags == 0)
 		return;
@@ -483,7 +486,7 @@ ms_taccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 
 	sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
 		":%s TACCESS %s %ld %ld %s %s",
-		use_id(source_p), chptr->chname, creation_ts, entry_ts,
+		use_id(&me), chptr->chname, creation_ts, entry_ts,
 		ae->mask, ae_level_name(ae->flags));
 }
 

@@ -35,7 +35,6 @@
 #include "modules.h"
 #include "monitor.h"
 #include "numeric.h"
-#include "s_assert.h"
 #include "s_conf.h"
 #include "s_serv.h"
 #include "send.h"
@@ -83,22 +82,8 @@ h_prop_channel_join(void *vdata)
 	if (strcmp(prop->value, data->key))
 		return;
 
-	/* do it the hard way for now */
-	struct membership *msptr = find_channel_membership(chptr, source_p);
-	s_assert(msptr != NULL);
-
-	sendto_channel_local(&me, ALL_MEMBERS, chptr, ":%s MODE %s +q %s",
-			me.name, chptr->chname, source_p->name);
-	sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
-			":%s TMODE %ld %s +q %s",
-			me.id, (long) chptr->channelts, chptr->chname,
-			source_p->id);
-	msptr->flags |= CHFL_ADMIN;
-
-#if 0
 	const char *para[] = {"+q", source_p->name};
 	set_channel_mode(source_p, &me, chptr, NULL, 2, para);
-#endif
 }
 
 static void

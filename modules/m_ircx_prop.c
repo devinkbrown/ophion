@@ -134,6 +134,19 @@ handle_prop_upsert_or_delete(const struct PropMatch *prop_match, struct Client *
 	{
 		sendto_one(source_p, ":%s!%s@%s PROP %s %s :", source_p->name, source_p->username, source_p->host,
 			prop_match->target_name, prop);
+
+		/* propagate deletion to servers */
+		if (prop_match->redistribute && !(IsChanPrefix(*prop_match->target_name) && *prop_match->target_name == '&'))
+		{
+			const char *target_for_server = prop_match->target_name;
+			if (!IsChanPrefix(*prop_match->target_name) && strncmp(prop_match->target_name, "account:", 8))
+				target_for_server = use_id((struct Client *)prop_match->target);
+
+			sendto_server(source_p, NULL, CAP_TS6, NOCAPS,
+				":%s TPROP %s %ld %ld %s :",
+				use_id(&me), target_for_server, prop_match->creation_ts, (long)rb_current_time(), prop);
+		}
+
 		goto broadcast;
 	}
 
@@ -149,25 +162,28 @@ handle_prop_upsert_or_delete(const struct PropMatch *prop_match, struct Client *
 	sendto_one(source_p, ":%s!%s@%s PROP %s %s :%s", source_p->name, source_p->username, source_p->host,
 		prop_match->target_name, property->name, property->value);
 
-	// XXX: enforce CAP_IRCX
-	// XXX: rewrite target to UID if needed
-
-	// don't redistribute updates for local channels
+	/* don't redistribute updates for local channels */
 	if (!prop_match->redistribute)
 		goto broadcast;
 
 	if (IsChanPrefix(*prop_match->target_name) && *prop_match->target_name == '&')
 		goto broadcast;
 
-	sendto_server(source_p, NULL, CAP_TS6, NOCAPS,
-			":%s PROP %s %s :%s",
-			use_id(source_p), prop_match->target_name,
+	{
+		const char *target_for_server = prop_match->target_name;
+		if (!IsChanPrefix(*prop_match->target_name) && strncmp(prop_match->target_name, "account:", 8))
+			target_for_server = use_id((struct Client *)prop_match->target);
+
+		sendto_server(source_p, NULL, CAP_TS6, NOCAPS,
+			":%s TPROP %s %ld %ld %s :%s",
+			use_id(&me), target_for_server, prop_match->creation_ts, (long)property->set_at,
 			property->name, property->value);
+	}
 
 	prop = property->name;
 	value = property->value;
 
-	// broadcast the property change to local members
+	/* broadcast the property change to local members */
 broadcast:
 	prop_activity.client = source_p;
 	prop_activity.target = prop_match->target_name;
@@ -261,6 +277,28 @@ ms_tprop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	if (creation_ts > prop_match.creation_ts)
 		return;
 
+	/* deletion: empty value */
+	if (!*parv[5])
+	{
+		propertyset_delete(prop_match.prop_list, parv[4]);
+
+		sendto_server(source_p, NULL, CAP_TS6, NOCAPS,
+			":%s TPROP %s %ld %ld %s :",
+			use_id(&me), parv[1], creation_ts, update_ts, parv[4]);
+
+		prop_activity.client = &me;
+		prop_activity.target = prop_match.target_name;
+		prop_activity.prop_list = prop_match.prop_list;
+		prop_activity.key = parv[4];
+		prop_activity.value = "";
+		prop_activity.alevel = CHFL_ADMIN;
+		prop_activity.approved = 1;
+		prop_activity.target_ptr = prop_match.target;
+
+		call_hook(h_prop_change, &prop_activity);
+		return;
+	}
+
 	/* do the upsert */
 	struct Property *prop = propertyset_add(prop_match.prop_list, parv[4], parv[5], source_p);
 	prop->set_at = update_ts;
@@ -269,7 +307,7 @@ ms_tprop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 		":%s TPROP %s %ld %ld %s :%s",
 		use_id(&me), parv[1], creation_ts, prop->set_at, prop->name, prop->value);
 
-	// broadcast the property change to local members
+	/* broadcast the property change to local members */
 	prop_activity.client = &me;
 	prop_activity.target = prop_match.target_name;
 	prop_activity.prop_list = prop_match.prop_list;

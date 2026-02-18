@@ -64,22 +64,29 @@ cap_prop_notify_change(hook_data_prop_activity *data)
 {
 	char prefix[BUFSIZE];
 
-	// XXX: at present, we only support prop-notify for channels
-	if (!IsChanPrefix(*data->target))
-		return;
-
 	if (IsPerson(data->client))
 		snprintf(prefix, sizeof prefix, "%s!%s@%s",
 			data->client->name, data->client->username, data->client->host);
 	else
 		rb_strlcpy(prefix, data->client->name, sizeof prefix);
 
-	// XXX: deconsting is not really needed but the send API needs to be fixed
-	struct Channel *chptr = (void *) data->target_ptr;
-	struct Client *client = (void *) data->client;
+	if (IsChanPrefix(*data->target))
+	{
+		struct Channel *chptr = (void *) data->target_ptr;
+		struct Client *client = (void *) data->client;
 
-	sendto_channel_local_with_capability(client, 0, CLICAP_PROP_NOTIFY, 0, chptr,
-		":%s PROP %s %s :%s", prefix, data->target, data->key, data->value);
+		sendto_channel_local_with_capability(client, 0, CLICAP_PROP_NOTIFY, 0, chptr,
+			":%s PROP %s %s :%s", prefix, data->target, data->key, data->value);
+	}
+	else if (strncmp(data->target, "account:", 8))
+	{
+		/* user prop: notify users on common channels */
+		struct Client *target_p = (void *) data->target_ptr;
+
+		if (target_p != NULL && IsPerson(target_p))
+			sendto_common_channels_local(target_p, CLICAP_PROP_NOTIFY, 0,
+				":%s PROP %s %s :%s", prefix, data->target, data->key, data->value);
+	}
 }
 
 DECLARE_MODULE_AV2(cap_prop_notify, NULL, NULL, NULL, NULL, cap_prop_notify_hfnlist, cap_prop_notify_cap_list, NULL, cap_prop_notify_desc);
