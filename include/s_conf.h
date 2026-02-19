@@ -276,6 +276,8 @@ struct config_channel_entry
 	int strip_topic_colors;
 	int opmod_send_statusmsg;
 	int max_prop;
+	int max_access;
+	int max_listx;
 };
 
 struct config_server_hide

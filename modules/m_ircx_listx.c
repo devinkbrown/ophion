@@ -81,7 +81,7 @@ m_listx(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	int users_min = 0;
 	int users_max = INT_MAX;
 	int count = 0;
-	int max_entries = 500;	/* prevent flooding */
+	int max_entries = ConfigChannel.max_listx;
 
 	/* parse filters */
 	if (parc > 1 && !EmptyString(parv[1]))

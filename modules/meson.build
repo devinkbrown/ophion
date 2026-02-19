@@ -58,6 +58,7 @@ modules = [
   'm_ircx_oper_autoowner',
   'm_ircx_oper_godmode',
   'm_ircx_oper_vhost',
+  'm_ircx_request',
   'm_ircx_whisper',
   'm_ison',
   'm_kline',
