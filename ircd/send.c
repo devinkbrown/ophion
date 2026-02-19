@@ -38,6 +38,7 @@
 #include "hook.h"
 #include "monitor.h"
 #include "msgbuf.h"
+#include "s_stats.h"
 
 /* send the message to the link the target is attached to */
 #define send_linebuf(a,b) _send_linebuf((a->from ? a->from : a) ,b)
