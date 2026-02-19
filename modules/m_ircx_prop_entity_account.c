@@ -91,13 +91,76 @@ burst_account(struct Client *client_p, struct Account *account_p)
 {
 	rb_dlink_node *it;
 
-	RB_DLINK_FOREACH(it, account_p->prop_list.head)
-	{
-		struct Property *prop = it->data;
+	if (rb_dlink_list_length(&account_p->prop_list) == 0)
+		return;
 
-		/* :source TPROP target creationTS updateTS propName [:propValue] */
-		sendto_one(client_p, ":%s TPROP account:%s %ld %ld %s :%s",
-			use_id(&me), account_p->name, account_p->creation_ts, prop->set_at, prop->name, prop->value);
+	if (IsCapable(client_p, CAP_BPROP))
+	{
+		static char buf[BUFSIZE];
+		char target[BUFSIZE];
+		char *t;
+		int mlen, cur_len;
+
+		snprintf(target, sizeof target, "account:%s", account_p->name);
+
+		cur_len = mlen = snprintf(buf, sizeof buf, ":%s BTPROP %s %ld :",
+			me.id, target, (long)account_p->creation_ts);
+		t = buf + mlen;
+
+		RB_DLINK_FOREACH(it, account_p->prop_list.head)
+		{
+			struct Property *prop = it->data;
+			char entry[BUFSIZE];
+			int elen;
+
+			elen = snprintf(entry, sizeof entry, "%ld %s %s",
+				(long)prop->set_at, prop->name, prop->value);
+
+			int need = elen + (cur_len > mlen ? 1 : 0);
+
+			if (cur_len + need > BUFSIZE - 3)
+			{
+				if (cur_len > mlen)
+				{
+					sendto_one(client_p, "%s", buf);
+					cur_len = mlen;
+					t = buf + mlen;
+				}
+
+				if (mlen + elen > BUFSIZE - 3)
+				{
+					sendto_one(client_p, ":%s TPROP %s %ld %ld %s :%s",
+						use_id(&me), target,
+						(long)account_p->creation_ts, (long)prop->set_at,
+						prop->name, prop->value);
+					continue;
+				}
+			}
+
+			if (cur_len > mlen)
+			{
+				*t++ = '\x1F';
+				cur_len++;
+			}
+
+			memcpy(t, entry, elen);
+			t += elen;
+			cur_len += elen;
+			*t = '\0';
+		}
+
+		if (cur_len > mlen)
+			sendto_one(client_p, "%s", buf);
+	}
+	else
+	{
+		RB_DLINK_FOREACH(it, account_p->prop_list.head)
+		{
+			struct Property *prop = it->data;
+
+			sendto_one(client_p, ":%s TPROP account:%s %ld %ld %s :%s",
+				use_id(&me), account_p->name, account_p->creation_ts, prop->set_at, prop->name, prop->value);
+		}
 	}
 }
 

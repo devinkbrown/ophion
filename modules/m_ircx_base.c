@@ -43,6 +43,7 @@
 static const char ircx_base_desc[] = "Provides core IRCX capabilities";
 
 static unsigned int CAP_IRCX;
+static unsigned int ircx_client_caps;	/* cached client caps to auto-enable */
 static int ircx_base_init(void);
 static void ircx_base_deinit(void);
 
@@ -73,6 +74,11 @@ ircx_base_init(void)
 	add_isupport("IRCX", isupport_string, "");
 
 	capability_require(serv_capindex, "IRCX");
+
+	/* cache the client capability bits that IRCX auto-enables */
+	ircx_client_caps = 0;
+	ircx_client_caps |= capability_get(cli_capindex, "ophion.dev/prop-notify", NULL);
+
 	return 0;
 }
 
@@ -85,5 +91,14 @@ ircx_base_deinit(void)
 static void
 m_ircx(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
+	/*
+	 * Auto-enable IRCX-related client capabilities (e.g. prop-notify)
+	 * when a client sends IRCX.  This ensures legacy IRCX clients like
+	 * mIRC receive property change notifications without needing to
+	 * negotiate capabilities via CAP REQ.
+	 */
+	if (MyClient(source_p) && ircx_client_caps)
+		source_p->localClient->caps |= ircx_client_caps;
+
 	sendto_one_numeric(client_p, RPL_IRCX, form_str(RPL_IRCX));
 }

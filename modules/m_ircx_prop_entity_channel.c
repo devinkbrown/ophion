@@ -127,6 +127,21 @@ h_prop_match(void *vdata)
 	prop_match->target = chan;
 }
 
+/*
+ * Batched TPROP burst.
+ *
+ * When the remote server supports CAP_BPROP, properties are batched into
+ * fewer messages using the BTPROP command.  Each entry in the trailing
+ * parameter is separated by \x1F (Unit Separator):
+ *
+ *   :<server> BTPROP <channel> <channelTS> :<updateTS> <name> <value>\x1F...
+ *
+ * Values can contain spaces since each entry is delimited by \x1F.
+ * Within each entry, the first two space-separated tokens are the
+ * updateTS and property name; everything after is the value.
+ *
+ * Fallback: one TPROP per property for servers without CAP_BPROP.
+ */
 static void
 h_prop_burst_channel(void *vdata)
 {
@@ -135,13 +150,78 @@ h_prop_burst_channel(void *vdata)
 	struct Client *client_p = hchaninfo->client;
 	rb_dlink_node *it;
 
-	RB_DLINK_FOREACH(it, chptr->prop_list.head)
-	{
-		struct Property *prop = it->data;
+	if (rb_dlink_list_length(&chptr->prop_list) == 0)
+		return;
 
-		/* :source TPROP target creationTS updateTS propName [:propValue] */
-		sendto_one(client_p, ":%s TPROP %s %ld %ld %s :%s",
-			use_id(&me), chptr->chname, chptr->channelts, prop->set_at, prop->name, prop->value);
+	if (IsCapable(client_p, CAP_BPROP))
+	{
+		static char buf[BUFSIZE];
+		char *t;
+		int mlen, cur_len;
+
+		cur_len = mlen = snprintf(buf, sizeof buf, ":%s BTPROP %s %ld :",
+			me.id, chptr->chname, (long)chptr->channelts);
+		t = buf + mlen;
+
+		RB_DLINK_FOREACH(it, chptr->prop_list.head)
+		{
+			struct Property *prop = it->data;
+			char entry[BUFSIZE];
+			int elen;
+
+			elen = snprintf(entry, sizeof entry, "%ld %s %s",
+				(long)prop->set_at, prop->name, prop->value);
+
+			/* +1 for \x1F separator (or nothing for first entry) */
+			int need = elen + (cur_len > mlen ? 1 : 0);
+
+			if (cur_len + need > BUFSIZE - 3)
+			{
+				/* flush current buffer */
+				if (cur_len > mlen)
+				{
+					sendto_one(client_p, "%s", buf);
+					cur_len = mlen;
+					t = buf + mlen;
+				}
+
+				/* single entry too large to batch */
+				if (mlen + elen > BUFSIZE - 3)
+				{
+					sendto_one(client_p, ":%s TPROP %s %ld %ld %s :%s",
+						use_id(&me), chptr->chname,
+						(long)chptr->channelts, (long)prop->set_at,
+						prop->name, prop->value);
+					continue;
+				}
+			}
+
+			if (cur_len > mlen)
+			{
+				*t++ = '\x1F';
+				cur_len++;
+			}
+
+			memcpy(t, entry, elen);
+			t += elen;
+			cur_len += elen;
+			*t = '\0';
+		}
+
+		if (cur_len > mlen)
+			sendto_one(client_p, "%s", buf);
+	}
+	else
+	{
+		RB_DLINK_FOREACH(it, chptr->prop_list.head)
+		{
+			struct Property *prop = it->data;
+
+			sendto_one(client_p, ":%s TPROP %s %ld %ld %s :%s",
+				use_id(&me), chptr->chname,
+				(long)chptr->channelts, (long)prop->set_at,
+				prop->name, prop->value);
+		}
 	}
 }
 

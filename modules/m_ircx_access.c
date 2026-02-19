@@ -63,7 +63,15 @@ struct Message taccess_msgtab = {
 	{mg_ignore, mg_ignore, mg_ignore, {ms_taccess, 4}, mg_ignore, mg_ignore}
 };
 
-mapi_clist_av1 ircx_access_clist[] = { &access_msgtab, &taccess_msgtab, NULL };
+/* :server BTACCESS #channel channelTS :entryTS mask level entryTS mask level ... */
+static void ms_btaccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[]);
+
+struct Message btaccess_msgtab = {
+	"BTACCESS", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, {ms_btaccess, 4}, mg_ignore, mg_ignore}
+};
+
+mapi_clist_av1 ircx_access_clist[] = { &access_msgtab, &taccess_msgtab, &btaccess_msgtab, NULL };
 
 static void h_access_channel_join(void *);
 static void h_access_burst_channel(void *);
@@ -97,9 +105,16 @@ struct AccessLevel {
 	unsigned int flag;
 };
 
+/* sentinel flags for entries stored in mode lists, not access_list */
+#define ACCESS_DENY_FLAG  0x80000000	/* stored in banlist (+b) */
+#define ACCESS_GRANT_FLAG 0x40000000	/* stored in invexlist (+I) */
+
 /* keep this in alphabetical order for bsearch(3)! */
 static const struct AccessLevel alevel[] = {
 	{"ADMIN", 'q', CHFL_ADMIN},
+	{"DENY", 0, ACCESS_DENY_FLAG},
+	{"GRANT", 0, ACCESS_GRANT_FLAG},
+	{"HOST", 'o', CHFL_CHANOP},
 	{"OP", 'o', CHFL_CHANOP},
 	{"OWNER", 'q', CHFL_ADMIN},
 	{"VOICE", 'v', CHFL_VOICE}
@@ -109,6 +124,12 @@ static const char *
 ae_level_name(unsigned int level)
 {
 	size_t i;
+
+	if (level == ACCESS_DENY_FLAG)
+		return "DENY";
+
+	if (level == ACCESS_GRANT_FLAG)
+		return "GRANT";
 
 	/*
 	 * We iterate backwards so that OWNER is preferred over ADMIN for
@@ -234,15 +255,43 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 
 	sendto_one_numeric(source_p, RPL_ACCESSSTART, form_str(RPL_ACCESSSTART), chptr->chname);
 
-	RB_DLINK_FOREACH(iter, chptr->access_list.head)
+	/* show access_list entries (membership levels: OWNER/HOST/OP/VOICE) */
+	if (level_match != ACCESS_DENY_FLAG && level_match != ACCESS_GRANT_FLAG)
 	{
-		const struct AccessEntry *ae = iter->data;
+		RB_DLINK_FOREACH(iter, chptr->access_list.head)
+		{
+			const struct AccessEntry *ae = iter->data;
 
-		if (level_match && (ae->flags & level_match) != level_match)
-			continue;
+			if (level_match && (ae->flags & level_match) != level_match)
+				continue;
 
-		sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
-			chptr->chname, ae_level_name(ae->flags), ae->mask, (long) 0, ae->who, "");
+			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
+				chptr->chname, ae_level_name(ae->flags), ae->mask, (long) 0, ae->who, "");
+		}
+	}
+
+	/* show ban list entries as DENY level */
+	if (!level_match || level_match == ACCESS_DENY_FLAG)
+	{
+		RB_DLINK_FOREACH(iter, chptr->banlist.head)
+		{
+			const struct Ban *ban = iter->data;
+
+			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
+				chptr->chname, "DENY", ban->banstr, (long) ban->when, ban->who, "");
+		}
+	}
+
+	/* show invite exception list entries as GRANT level */
+	if (!level_match || level_match == ACCESS_GRANT_FLAG)
+	{
+		RB_DLINK_FOREACH(iter, chptr->invexlist.head)
+		{
+			const struct Ban *ban = iter->data;
+
+			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
+				chptr->chname, "GRANT", ban->banstr, (long) ban->when, ban->who, "");
+		}
 	}
 
 	sendto_one_numeric(source_p, RPL_ACCESSEND, form_str(RPL_ACCESSEND), chptr->chname);
@@ -262,20 +311,53 @@ handle_access_clear(struct Channel *chptr, struct Client *source_p, const char *
 
 	rb_dlink_node *iter, *next;
 
-	/* propagate each deletion via TACCESS before clearing locally */
-	RB_DLINK_FOREACH_SAFE(iter, next, chptr->access_list.head)
+	/* clear access_list entries (membership levels) */
+	if (level_match != ACCESS_DENY_FLAG && level_match != ACCESS_GRANT_FLAG)
 	{
-		struct AccessEntry *ae = iter->data;
+		RB_DLINK_FOREACH_SAFE(iter, next, chptr->access_list.head)
+		{
+			struct AccessEntry *ae = iter->data;
 
-		if (level_match && (ae->flags & level_match) != level_match)
-			continue;
+			if (level_match && (ae->flags & level_match) != level_match)
+				continue;
 
-		sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
-			":%s TACCESS %s %ld %ld %s :",
-			use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
-			ae->mask);
+			sendto_server(source_p, chptr, CAP_TS6, NOCAPS,
+				":%s TACCESS %s %ld %ld %s :",
+				use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
+				ae->mask);
 
-		channel_access_delete(chptr, ae->mask);
+			channel_access_delete(chptr, ae->mask);
+		}
+	}
+
+	/* clear ban list entries (DENY level) via mode infrastructure */
+	if (!level_match || level_match == ACCESS_DENY_FLAG)
+	{
+		RB_DLINK_FOREACH_SAFE(iter, next, chptr->banlist.head)
+		{
+			struct Ban *ban = iter->data;
+			char mask_copy[BANLEN + 1];
+
+			rb_strlcpy(mask_copy, ban->banstr, sizeof(mask_copy));
+
+			const char *para[] = {"-b", mask_copy};
+			set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+		}
+	}
+
+	/* clear invite exception list entries (GRANT level) via mode infrastructure */
+	if (!level_match || level_match == ACCESS_GRANT_FLAG)
+	{
+		RB_DLINK_FOREACH_SAFE(iter, next, chptr->invexlist.head)
+		{
+			struct Ban *ban = iter->data;
+			char mask_copy[BANLEN + 1];
+
+			rb_strlcpy(mask_copy, ban->banstr, sizeof(mask_copy));
+
+			const char *para[] = {"-I", mask_copy};
+			set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+		}
 	}
 }
 
@@ -307,6 +389,45 @@ handle_access_delete(struct Channel *chptr, struct Client *source_p, const char 
 	struct AccessEntry *ae = channel_access_find(chptr, mask);
 	if (ae == NULL)
 	{
+		/*
+		 * Not found in access_list -- check the mode lists, since
+		 * DENY entries are stored as bans (+b) and GRANT entries
+		 * are stored as invite exceptions (+I).
+		 */
+		rb_dlink_list *lists[] = { &chptr->banlist, &chptr->invexlist };
+		const char *level_names[] = { "DENY", "GRANT" };
+		const char *modestrs[] = { "-b", "-I" };
+		rb_dlink_node *ptr;
+
+		for (size_t i = 0; i < ARRAY_SIZE(lists); i++)
+		{
+			RB_DLINK_FOREACH(ptr, lists[i]->head)
+			{
+				struct Ban *b = ptr->data;
+
+				if (irccmp(b->banstr, mask))
+					continue;
+
+				if (!can_write_to_access_list(chptr, source_p, CHFL_CHANOP))
+				{
+					sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
+						me.name, source_p->name, chptr->chname);
+					return;
+				}
+
+				if (MyClient(source_p))
+				{
+					sendto_one_numeric(source_p, RPL_ACCESSDELETE, form_str(RPL_ACCESSDELETE),
+						chptr->chname, level_names[i], mask,
+						(long) 0, source_p->name, "");
+				}
+
+				const char *para[] = {modestrs[i], mask};
+				set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+				return;
+			}
+		}
+
 		sendto_one_numeric(source_p, ERR_ACCESS_MISSING, form_str(ERR_ACCESS_MISSING),
 			chptr->chname, mask);
 		return;
@@ -323,7 +444,8 @@ handle_access_delete(struct Channel *chptr, struct Client *source_p, const char 
 	if (MyClient(source_p))
 	{
 		sendto_one_numeric(source_p, RPL_ACCESSDELETE, form_str(RPL_ACCESSDELETE),
-			chptr->chname, ae_level_name(ae->flags), ae->mask);
+			chptr->chname, ae_level_name(ae->flags), ae->mask,
+			(long) 0, ae->who, "");
 	}
 
 	/* propagate deletion to servers via TACCESS with empty level */
@@ -353,6 +475,32 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 	{
 		sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
 			me.name, source_p->name, chptr->chname);
+		return;
+	}
+
+	/*
+	 * DENY and GRANT entries are stored in channel mode lists, not in
+	 * the access_list.  Route through set_channel_mode so the change
+	 * is properly propagated via TMODE to all servers.
+	 *
+	 *   DENY  -> banlist (+b)
+	 *   GRANT -> invexlist (+I)
+	 */
+	if (newflags == ACCESS_DENY_FLAG || newflags == ACCESS_GRANT_FLAG)
+	{
+		const char *modestr = (newflags == ACCESS_DENY_FLAG) ? "+b" : "+I";
+		const char *level_name = (newflags == ACCESS_DENY_FLAG) ? "DENY" : "GRANT";
+
+		const char *para[] = {modestr, mask};
+		set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+
+		if (MyClient(source_p))
+		{
+			sendto_one_numeric(source_p, RPL_ACCESSADD, form_str(RPL_ACCESSADD),
+				chptr->chname, level_name, mask,
+				(long) 0, source_p->name, "");
+		}
+
 		return;
 	}
 
@@ -481,6 +629,10 @@ ms_taccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 	if (flags == 0)
 		return;
 
+	/* DENY and GRANT entries are propagated via TMODE, not TACCESS */
+	if (flags == ACCESS_DENY_FLAG || flags == ACCESS_GRANT_FLAG)
+		return;
+
 	struct AccessEntry *ae = channel_access_upsert(chptr, source_p, parv[4], flags);
 	ae->when = entry_ts;
 
@@ -488,6 +640,63 @@ ms_taccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 		":%s TACCESS %s %ld %ld %s %s",
 		use_id(&me), chptr->chname, creation_ts, entry_ts,
 		ae->mask, ae_level_name(ae->flags));
+}
+
+/*
+ * BTACCESS - Batched TACCESS for optimized burst.
+ *
+ * parv[1] = channel name
+ * parv[2] = channel TS
+ * parv[3] = space-separated triplets: "entryTS mask level entryTS mask level ..."
+ */
+static void
+ms_btaccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	struct Channel *chptr = find_channel(parv[1]);
+	if (chptr == NULL)
+		return;
+
+	time_t creation_ts = atol(parv[2]);
+	if (creation_ts > chptr->channelts)
+		return;
+
+	char *entries = LOCAL_COPY(parv[3]);
+	char *p = entries;
+	char *tok;
+
+	while ((tok = strtok_r(p, " ", &p)) != NULL)
+	{
+		time_t entry_ts = atol(tok);
+
+		char *mask = strtok_r(NULL, " ", &p);
+		if (mask == NULL)
+			break;
+
+		char *level_name = strtok_r(NULL, " ", &p);
+		if (level_name == NULL)
+			break;
+
+		unsigned int flags = ae_level_from_name(level_name);
+		if (flags == 0)
+			continue;
+
+		if (flags == ACCESS_DENY_FLAG || flags == ACCESS_GRANT_FLAG)
+			continue;
+
+		struct AccessEntry *ae = channel_access_upsert(chptr, source_p, mask, flags);
+		ae->when = entry_ts;
+
+		/* re-propagate as individual TACCESS to non-BPROP servers */
+		sendto_server(source_p, chptr, CAP_TS6, CAP_BPROP,
+			":%s TACCESS %s %ld %ld %s %s",
+			use_id(&me), chptr->chname, creation_ts, entry_ts,
+			ae->mask, ae_level_name(ae->flags));
+	}
+
+	/* re-propagate in batched form to BPROP-capable servers */
+	sendto_server(source_p, chptr, CAP_TS6 | CAP_BPROP, NOCAPS,
+		":%s BTACCESS %s %s :%s",
+		use_id(&me), parv[1], parv[2], parv[3]);
 }
 
 /* channel join hook */
@@ -501,7 +710,17 @@ h_access_channel_join(void *vdata)
 	apply_access_entries(chptr, client_p);
 }
 
-/* burst hook */
+/*
+ * Batched TACCESS burst.
+ *
+ * When the remote server supports CAP_BPROP, access entries are batched
+ * into fewer messages using the BTACCESS command.  Entries are packed as
+ * space-separated triplets (entryTS mask level) in the trailing parameter:
+ *
+ *   :<server> BTACCESS <channel> <channelTS> :<ts1> <mask1> <level1> <ts2> ...
+ *
+ * Fallback: one TACCESS per entry for servers without CAP_BPROP.
+ */
 static void
 h_access_burst_channel(void *vdata)
 {
@@ -510,13 +729,76 @@ h_access_burst_channel(void *vdata)
 	struct Client *client_p = hchaninfo->client;
 	rb_dlink_node *it;
 
-	RB_DLINK_FOREACH(it, chptr->access_list.head)
-	{
-		struct AccessEntry *ae = it->data;
+	if (rb_dlink_list_length(&chptr->access_list) == 0)
+		return;
 
-		sendto_one(client_p, ":%s TACCESS %s %ld %ld %s %s",
-			use_id(&me), chptr->chname, (long) chptr->channelts, ae->when,
-			ae->mask, ae_level_name(ae->flags));
+	if (IsCapable(client_p, CAP_BPROP))
+	{
+		static char buf[BUFSIZE];
+		char *t;
+		int mlen, cur_len;
+
+		cur_len = mlen = snprintf(buf, sizeof buf, ":%s BTACCESS %s %ld :",
+			me.id, chptr->chname, (long)chptr->channelts);
+		t = buf + mlen;
+
+		RB_DLINK_FOREACH(it, chptr->access_list.head)
+		{
+			struct AccessEntry *ae = it->data;
+			const char *level_name = ae_level_name(ae->flags);
+			char entry[BUFSIZE];
+			int elen;
+
+			elen = snprintf(entry, sizeof entry, "%ld %s %s",
+				(long)ae->when, ae->mask, level_name);
+
+			/* +1 for space separator */
+			int need = elen + (cur_len > mlen ? 1 : 0);
+
+			if (cur_len + need > BUFSIZE - 3)
+			{
+				if (cur_len > mlen)
+				{
+					sendto_one(client_p, "%s", buf);
+					cur_len = mlen;
+					t = buf + mlen;
+				}
+
+				if (mlen + elen > BUFSIZE - 3)
+				{
+					sendto_one(client_p, ":%s TACCESS %s %ld %ld %s %s",
+						use_id(&me), chptr->chname,
+						(long)chptr->channelts, (long)ae->when,
+						ae->mask, level_name);
+					continue;
+				}
+			}
+
+			if (cur_len > mlen)
+			{
+				*t++ = ' ';
+				cur_len++;
+			}
+
+			memcpy(t, entry, elen);
+			t += elen;
+			cur_len += elen;
+			*t = '\0';
+		}
+
+		if (cur_len > mlen)
+			sendto_one(client_p, "%s", buf);
+	}
+	else
+	{
+		RB_DLINK_FOREACH(it, chptr->access_list.head)
+		{
+			struct AccessEntry *ae = it->data;
+
+			sendto_one(client_p, ":%s TACCESS %s %ld %ld %s %s",
+				use_id(&me), chptr->chname, (long)chptr->channelts, ae->when,
+				ae->mask, ae_level_name(ae->flags));
+		}
 	}
 }
 

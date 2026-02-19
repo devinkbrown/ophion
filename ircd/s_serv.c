@@ -86,6 +86,7 @@ unsigned int CAP_EUID;
 unsigned int CAP_EOPMOD;
 unsigned int CAP_BAN;
 unsigned int CAP_MLOCK;
+unsigned int CAP_BPROP;
 
 unsigned int CLICAP_MULTI_PREFIX;
 unsigned int CLICAP_ACCOUNT_NOTIFY;
@@ -125,6 +126,7 @@ init_builtin_capabs(void)
 	CAP_EOPMOD = capability_put(serv_capindex, "EOPMOD", NULL);
 	CAP_BAN = capability_put(serv_capindex, "BAN", NULL);
 	CAP_MLOCK = capability_put(serv_capindex, "MLOCK", NULL);
+	CAP_BPROP = capability_put(serv_capindex, "BPROP", NULL);
 
 	capability_require(serv_capindex, "QS");
 	capability_require(serv_capindex, "EX");
