@@ -74,6 +74,7 @@ static void me_nonick_add(struct MsgBuf *, struct Client *, struct Client *, int
 static void me_nonick_del(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
 static void me_nonick_clr(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
 static void h_access_burst_finished(void *);
+static void h_access_server_cmd(void *);
 
 /*
  * Wildcard ban entries for channel names and nicknames.
@@ -232,9 +233,12 @@ h_access_nick_change(void *vdata)
 	if (wb == NULL)
 		return;
 
-	/* nick is banned - notify the user.
-	 * The nick change has already happened at this point in the hook chain,
-	 * but we can force them to use their UID instead.
+	/* The nick change is blocked by the RESV added when this NONICK entry
+	 * was created (find_nick_resv() in m_nick.c returns non-NULL and the
+	 * change is rejected before this hook fires).  This hook path is
+	 * therefore only reached if the RESV is absent (e.g. after a server
+	 * restart that reloaded NONICK entries but not their RESVs).  Notify
+	 * the user; the change will still proceed in this edge case.
 	 */
 	sendto_one_notice(source_p,
 		":Nickname '%s' is not allowed: %s",
@@ -287,6 +291,7 @@ mapi_hfn_list_av1 ircx_access_server_hfnlist[] = {
 	{ "channel_join", (hookfn) h_access_channel_join },
 	{ "local_nick_change", (hookfn) h_access_nick_change },
 	{ "burst_finished", (hookfn) h_access_burst_finished },
+	{ "access_server", (hookfn) h_access_server_cmd },
 	{ NULL, NULL }
 };
 
@@ -805,39 +810,16 @@ handle_clear(struct Client *source_p, const char *level)
 }
 
 /*
- * ACCESS * command handler
+ * dispatch_access_server - core of ACCESS * / SACCESS dispatch.
+ * Called by the msgtab handler and by the access_server hook (for ACCESS *).
+ * Requires source_p to already be verified as oper.
+ * parv[1] is the action (LIST/ADD/DELETE/CLEAR), arg_base is index of
+ * first argument after the action.
  */
 static void
-m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
-	struct Client *source_p, int parc, const char *parv[])
+dispatch_access_server(struct Client *source_p, int parc, const char *parv[],
+	const char *action, int arg_base)
 {
-	const char *target;
-	const char *action;
-	int arg_base;
-
-	if (!IsOper(source_p))
-	{
-		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
-		return;
-	}
-
-	target = parv[1];
-	if (!strcmp(target, "*"))
-	{
-		if (parc < 3)
-		{
-			handle_list(source_p, NULL);
-			return;
-		}
-		action = parv[2];
-		arg_base = 3;
-	}
-	else
-	{
-		action = parv[1];
-		arg_base = 2;
-	}
-
 	if (!rb_strcasecmp(action, "LIST"))
 	{
 		handle_list(source_p, (arg_base < parc) ? parv[arg_base] : NULL);
@@ -881,6 +863,70 @@ m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	{
 		sendto_one_notice(source_p, ":Usage: ACCESS * {LIST|ADD|DELETE|CLEAR} [args]");
 	}
+}
+
+/*
+ * SACCESS command handler.  Also handles SACCESS * <action> form for
+ * symmetry with the spec's ACCESS * syntax.
+ */
+static void
+m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	const char *action;
+	int arg_base;
+
+	if (!IsOper(source_p))
+	{
+		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		return;
+	}
+
+	if (!strcmp(parv[1], "*"))
+	{
+		if (parc < 3)
+		{
+			handle_list(source_p, NULL);
+			return;
+		}
+		action = parv[2];
+		arg_base = 3;
+	}
+	else
+	{
+		action = parv[1];
+		arg_base = 2;
+	}
+
+	dispatch_access_server(source_p, parc, parv, action, arg_base);
+}
+
+/*
+ * Hook handler: fires when m_ircx_access.c sees ACCESS * from a client.
+ * Delegates to the same dispatch logic as SACCESS.
+ */
+static void
+h_access_server_cmd(void *vdata)
+{
+	hook_data *data = vdata;
+	struct Client *source_p = data->client;
+	const char **parv = data->arg1;
+	int parc = (int)(intptr_t)data->arg2;
+
+	if (!IsOper(source_p))
+	{
+		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		return;
+	}
+
+	/* parv[1] is "*"; action starts at parv[2] */
+	if (parc < 3)
+	{
+		handle_list(source_p, NULL);
+		return;
+	}
+
+	dispatch_access_server(source_p, parc, parv, parv[2], 3);
 }
 
 /*

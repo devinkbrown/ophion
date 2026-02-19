@@ -89,6 +89,13 @@ static void h_access_channel_join(void *);
 static void h_access_burst_channel(void *);
 static void h_access_channel_lowerts(void *);
 
+static int h_access_server;
+
+mapi_hlist_av1 ircx_access_hlist[] = {
+	{ "access_server", &h_access_server },
+	{ NULL, NULL }
+};
+
 mapi_hfn_list_av1 ircx_access_hfnlist[] = {
 	{ "can_join", (hookfn) h_access_can_join, HOOK_HIGHEST },
 	{ "channel_join", (hookfn) h_access_channel_join },
@@ -97,7 +104,7 @@ mapi_hfn_list_av1 ircx_access_hfnlist[] = {
 	{ NULL, NULL }
 };
 
-DECLARE_MODULE_AV2(ircx_access, ircx_access_init, ircx_access_deinit, ircx_access_clist, NULL, ircx_access_hfnlist, NULL, NULL, ircx_access_desc);
+DECLARE_MODULE_AV2(ircx_access, ircx_access_init, ircx_access_deinit, ircx_access_clist, ircx_access_hlist, ircx_access_hfnlist, NULL, NULL, ircx_access_desc);
 
 static int
 ircx_access_init(void)
@@ -712,6 +719,17 @@ handle_access_sync(struct Channel *chptr, struct Client *source_p)
 static void
 m_access(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
+	/* ACCESS * -> server-level access (SACCESS); dispatch via hook */
+	if (!strcmp(parv[1], "*"))
+	{
+		hook_data hd;
+		hd.client = source_p;
+		hd.arg1 = (void *)parv;
+		hd.arg2 = (void *)(intptr_t)parc;
+		call_hook(h_access_server, &hd);
+		return;
+	}
+
 	struct Channel *chptr = find_channel(parv[1]);
 	if (chptr == NULL)
 	{
