@@ -47,6 +47,7 @@ modules = [
   'm_ircx_prop_onjoin',
   'm_ircx_prop_onpart',
   'm_ircx_prop_opkey',
+  'm_ircx_prop_user_profile',
   'm_ircx_whisper',
   'm_ison',
   'm_kline',

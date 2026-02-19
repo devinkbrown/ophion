@@ -41,6 +41,7 @@
 #include "send.h"
 #include "supported.h"
 #include "hash.h"
+#include "match.h"
 #include "propertyset.h"
 
 static const char ircx_prop_channel_builtins_desc[] =
@@ -65,7 +66,7 @@ DECLARE_MODULE_AV2(ircx_prop_channel_builtins, NULL, NULL, NULL, NULL,
 static inline bool
 key_matches(const char *keys, const char *name)
 {
-	return keys == NULL || rb_strcasestr(keys, name) != NULL;
+	return keys == NULL || match(keys, name);
 }
 
 /*

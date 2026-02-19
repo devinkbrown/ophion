@@ -246,6 +246,7 @@ struct config_file_entry
 	int hide_opers;
 
 	char *drain_reason;
+	char *cloaking_style;
 };
 
 struct config_channel_entry

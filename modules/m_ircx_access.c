@@ -471,6 +471,24 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 		return;
 	}
 
+	if (newflags == 0)
+	{
+		sendto_one(source_p, form_str(ERR_NEEDMOREPARAMS),
+			   me.name,
+			   EmptyString(source_p->name) ? "*" : source_p->name,
+			   "ACCESS ADD");
+		return;
+	}
+
+	/* validate mask format: must contain at least one non-whitespace char,
+	 * and must not be excessively long */
+	if (EmptyString(mask) || strlen(mask) > BANLEN)
+	{
+		sendto_one_numeric(source_p, ERR_INVALIDBAN, form_str(ERR_INVALIDBAN),
+			chptr->chname, 'b', mask ? mask : "*");
+		return;
+	}
+
 	if (!can_upsert_on_access_list(chptr, source_p, mask, newflags))
 	{
 		sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
@@ -584,7 +602,13 @@ m_access(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	else if (!rb_strcasecmp(parv[2], "ADD"))
 		handle_access_upsert(chptr, source_p, parv[3], parv[4]);
 	else if (!rb_strcasecmp(parv[2], "DEL") || !rb_strcasecmp(parv[2], "DELETE"))
-		handle_access_delete(chptr, source_p, parv[4]);
+	{
+		/* Accept both: ACCESS #chan DELETE mask
+		 *         and: ACCESS #chan DELETE level mask
+		 * If parv[4] exists, use it (level was given). Otherwise use parv[3]. */
+		const char *mask = (parc > 4 && parv[4] != NULL) ? parv[4] : parv[3];
+		handle_access_delete(chptr, source_p, mask);
+	}
 	else if (!rb_strcasecmp(parv[2], "CLEAR"))
 		handle_access_clear(chptr, source_p, parv[3]);
 	else if (!rb_strcasecmp(parv[2], "SYNC"))

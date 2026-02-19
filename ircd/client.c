@@ -54,6 +54,7 @@
 #include "wsproc.h"
 #include "s_assert.h"
 #include "propertyset.h"
+#include "chmode.h"
 
 #define DEBUG_EXITED_CLIENTS
 
@@ -1348,10 +1349,80 @@ exit_generic_client(struct Client *client_p, struct Client *source_p, struct Cli
 	if(IsOper(source_p))
 		rb_dlinkFindDestroy(source_p, &oper_list);
 
+	/*
+	 * Auditorium mode (+u) QUIT filtering: if the user is in any
+	 * channel with +u set and is not an op/voiced there, only ops
+	 * in that channel should see the QUIT.  We handle this by
+	 * doing per-channel delivery when auditorium mode is active.
+	 */
+	if (chmode_flags['u'])
+	{
+		bool has_auditorium = false;
+		rb_dlink_node *aptr;
+
+		RB_DLINK_FOREACH(aptr, source_p->user->channel.head)
+		{
+			struct membership *amsp = aptr->data;
+			struct Channel *achptr = amsp->chptr;
+
+			if ((achptr->mode.mode & chmode_flags['u']) && !is_chanop_voiced(amsp))
+			{
+				has_auditorium = true;
+				break;
+			}
+		}
+
+		if (has_auditorium)
+		{
+			/* per-channel QUIT delivery with auditorium filtering */
+			rb_dlink_node *cptr, *cnext;
+			rb_dlink_node *uptr, *unext;
+
+			++current_serial;
+
+			RB_DLINK_FOREACH_SAFE(cptr, cnext, source_p->user->channel.head)
+			{
+				struct membership *mscptr = cptr->data;
+				struct Channel *chptr = mscptr->chptr;
+				int auditorium_filtered = (chptr->mode.mode & chmode_flags['u']) &&
+							  !is_chanop_voiced(mscptr);
+
+				RB_DLINK_FOREACH_SAFE(uptr, unext, chptr->locmembers.head)
+				{
+					struct membership *msptr = uptr->data;
+					struct Client *target_p = msptr->client_p;
+
+					if (IsIOError(target_p) || target_p->serial == current_serial)
+						continue;
+
+					/* in auditorium channels, non-ops don't see non-op QUITs */
+					if (auditorium_filtered && !is_chanop_voiced(msptr))
+						continue;
+
+					target_p->serial = current_serial;
+					sendto_one(target_p, ":%s!%s@%s QUIT :%s",
+						   source_p->name, source_p->username,
+						   source_p->host, comment);
+				}
+			}
+
+			/* send to self if not already done */
+			if (MyConnect(source_p) && source_p->serial != current_serial)
+			{
+				sendto_one(source_p, ":%s!%s@%s QUIT :%s",
+					   source_p->name, source_p->username,
+					   source_p->host, comment);
+			}
+
+			goto quit_done;
+		}
+	}
+
 	sendto_common_channels_local(source_p, NOCAPS, NOCAPS, ":%s!%s@%s QUIT :%s",
 				     source_p->name,
 				     source_p->username, source_p->host, comment);
 
+quit_done:
 	remove_user_from_channels(source_p);
 
 	/* Should not be in any channels now */

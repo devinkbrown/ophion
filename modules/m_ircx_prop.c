@@ -41,6 +41,7 @@
 #include "send.h"
 #include "supported.h"
 #include "hash.h"
+#include "match.h"
 #include "propertyset.h"
 
 static const char ircx_prop_desc[] = "Provides IRCX PROP command";
@@ -108,7 +109,8 @@ handle_prop_list(const struct PropMatch *prop_match, struct Client *source_p, co
 		struct Property *prop = iter->data;
 		hook_data_prop_activity prop_activity;
 
-		if (keys != NULL && rb_strcasestr(keys, prop->name) == NULL)
+		/* support wildcard filtering: PROP #chan TOP* matches TOPIC etc */
+		if (keys != NULL && !match(keys, prop->name))
 			continue;
 
 		prop_activity.client = source_p;
@@ -220,9 +222,53 @@ broadcast:
 }
 
 /*
+ * PROP CLEAR: delete all properties on a target.
+ * Requires admin-level access for channels.
+ */
+static void
+handle_prop_clear(const struct PropMatch *prop_match, struct Client *source_p)
+{
+	rb_dlink_node *iter, *next;
+
+	/* delete all entries and propagate each deletion */
+	RB_DLINK_FOREACH_SAFE(iter, next, prop_match->prop_list->head)
+	{
+		struct Property *prop = iter->data;
+
+		if (prop_match->redistribute &&
+		    !(IsChanPrefix(*prop_match->target_name) && *prop_match->target_name == '&'))
+		{
+			const char *target_for_server = prop_match->target_name;
+			if (!IsChanPrefix(*prop_match->target_name) && strncmp(prop_match->target_name, "account:", 8))
+				target_for_server = use_id((struct Client *)prop_match->target);
+
+			sendto_server(source_p, NULL, CAP_TS6, NOCAPS,
+				":%s TPROP %s %ld %ld %s :",
+				use_id(&me), target_for_server, prop_match->creation_ts,
+				(long)rb_current_time(), prop->name);
+		}
+
+		hook_data_prop_activity prop_activity;
+		prop_activity.client = source_p;
+		prop_activity.target = prop_match->target_name;
+		prop_activity.prop_list = prop_match->prop_list;
+		prop_activity.key = prop->name;
+		prop_activity.value = "";
+		prop_activity.alevel = CHFL_ADMIN;
+		prop_activity.approved = 1;
+		prop_activity.target_ptr = prop_match->target;
+
+		call_hook(h_prop_change, &prop_activity);
+	}
+
+	propertyset_clear(prop_match->prop_list);
+}
+
+/*
  * LIST: PROP target [filters] (parc <= 3)
  * SET: PROP target key :value (parc == 4)
  * DELETE: PROP target key : (parc == 4)
+ * CLEAR: PROP target CLEAR (parc == 3, parv[2] == "CLEAR")
  */
 static void
 m_prop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
@@ -247,7 +293,17 @@ m_prop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		break;
 
 	case 3:
-		handle_prop_list(&prop_match, source_p, parv[2], prop_match.alevel);
+		if (!rb_strcasecmp(parv[2], "CLEAR"))
+		{
+			if (prop_match.match_grant != PROP_WRITE && MyClient(source_p))
+			{
+				sendto_one_numeric(source_p, ERR_PROPDENIED, form_str(ERR_PROPDENIED), parv[1]);
+				return;
+			}
+			handle_prop_clear(&prop_match, source_p);
+		}
+		else
+			handle_prop_list(&prop_match, source_p, parv[2], prop_match.alevel);
 		break;
 
 	case 4:
