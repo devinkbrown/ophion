@@ -15,6 +15,29 @@
  * All god mode actions are logged to the oper snomask so they can be
  * audited.  God mode has no timeout -- it stays active until the oper
  * removes it or de-opers.
+ *
+ * This module also implements the oper_kick_protection and oper_auto_op
+ * config flags (general {} block):
+ *
+ *   oper_kick_protection — O-lined users cannot be kicked or de-moded by
+ *     non-opers; opers can override channel moderation (+m/+n).
+ *
+ *   oper_auto_op — O-lined users are automatically promoted on channel join.
+ *     The promotion level is controlled per-oper via privileges:
+ *
+ *       oper:auto_op    (without oper:auto_admin)
+ *           → auto-join with +o; access ceiling = CHFL_CHANOP.
+ *             The oper can only modify +o and below (cannot grant/remove
+ *             +q or use admin-level channel operations), even in god mode.
+ *
+ *       oper:auto_admin (overrides oper:auto_op)
+ *           → auto-join with +q (channel-admin); full CHFL_ADMIN access.
+ *
+ *       Neither privilege + global oper_auto_op = yes
+ *           → auto-join with +q; full CHFL_ADMIN access (default).
+ *
+ *       IRC server admins (IsAdmin) are always unrestricted and always
+ *       receive +q; the ceiling does not apply to them.
  */
 
 #include "stdinc.h"
@@ -98,24 +121,56 @@ h_godmode_umode_changed(void *vdata)
 }
 
 /*
- * get_channel_access hook: grant CHFL_ADMIN level to god mode users.
- * This allows mode changes, topic changes, etc. even without membership.
+ * oper_channel_ceiling - returns the maximum channel access level for a
+ * given operator client based on their privileges and IRC admin status.
+ *
+ * IRC admins (IsAdmin) always get full access (CHFL_ADMIN) regardless of
+ * configured privileges — this function is only meaningful for non-admin
+ * IRC operators.
+ *
+ * For non-admin operators:
+ *   - oper:auto_op (without oper:auto_admin) → capped at CHFL_CHANOP
+ *   - oper:auto_admin or global oper_auto_op   → full CHFL_ADMIN access
+ *   - neither privilege set                    → full CHFL_ADMIN (god mode)
+ */
+static int
+oper_channel_ceiling(struct Client *source_p)
+{
+	if (IsAdmin(source_p))
+		return CHFL_ADMIN;
+
+	if (HasPrivilege(source_p, "oper:auto_op") &&
+	    !HasPrivilege(source_p, "oper:auto_admin"))
+		return CHFL_CHANOP;
+
+	return CHFL_ADMIN;
+}
+
+/*
+ * get_channel_access hook: grant elevated channel access to god mode users.
+ *
+ * IRC admins always receive full CHFL_ADMIN access.
+ * Non-admin IRC operators receive access up to their configured ceiling
+ * (see oper_channel_ceiling).
  */
 static void
 h_godmode_channel_access(void *vdata)
 {
 	hook_data_channel_approval *data = (hook_data_channel_approval *)vdata;
+	int ceiling;
 
 	if (data->dir == MODE_QUERY)
-		return;
-
-	if (data->approved >= CHFL_ADMIN)
 		return;
 
 	if (!IsGodMode(data->client))
 		return;
 
-	data->approved = CHFL_ADMIN;
+	ceiling = oper_channel_ceiling(data->client);
+
+	if (data->approved >= ceiling)
+		return;
+
+	data->approved = ceiling;
 
 	if (data->modestr)
 		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
@@ -240,13 +295,20 @@ h_godmode_can_send(void *vdata)
 /*
  * channel_join hook — auto-promote IRC operators on channel join.
  *
- * When oper_auto_op is enabled in ircd.conf, any O-lined user (IsOper or
- * IsAdmin) joining a channel is automatically granted channel-admin status
- * (+q / CHFL_ADMIN).  This applies only to local clients; remote opers'
- * status is propagated when their home server applies the same rule.
+ * The join-mode for each operator is determined by privilege and config:
  *
- * Explicit god mode (+G) also triggers the auto-promotion regardless of the
- * config flag, since god mode operators should always have elevated status.
+ *   oper:auto_op (without oper:auto_admin)
+ *       → joins with +o (CHFL_CHANOP); access ceiling is CHFL_CHANOP.
+ *         Can modify +o and below; cannot grant/remove +q or override
+ *         above chanop level, even in god mode.
+ *
+ *   oper:auto_admin  OR  global oper_auto_op = yes  OR  god mode (+G)
+ *       → joins with +q (CHFL_ADMIN); full channel-admin access.
+ *
+ *   IRC admins (IsAdmin) always receive +q and are never capped.
+ *
+ * Applies only to local clients; remote opers are handled by their
+ * home server.
  */
 static void
 h_godmode_channel_join(void *vdata)
@@ -255,35 +317,67 @@ h_godmode_channel_join(void *vdata)
 	struct Channel *chptr = data->chptr;
 	struct Client *source_p = data->client;
 	struct membership *msptr;
+	int op_only;
 
 	if (!MyClient(source_p))
 		return;
 
-	/* Only proceed if oper_auto_op is set or the user has god mode. */
-	if (!ConfigFileEntry.oper_auto_op && !IsGodMode(source_p))
+	if (!(IsOper(source_p) || IsAdmin(source_p)))
 		return;
 
-	/* Must be an O-lined user (god mode always implies oper). */
-	if (!(IsOper(source_p) || IsAdmin(source_p)))
+	/*
+	 * op_only: this non-admin oper is configured to join at +o level and
+	 * have their access capped at CHFL_CHANOP.  oper:auto_op takes
+	 * precedence over the global oper_auto_op flag for this oper.
+	 * IRC admins are never op_only.
+	 */
+	op_only = !IsAdmin(source_p) &&
+	          HasPrivilege(source_p, "oper:auto_op") &&
+	          !HasPrivilege(source_p, "oper:auto_admin");
+
+	/* Decide whether to auto-promote at all. */
+	if (!op_only &&
+	    !ConfigFileEntry.oper_auto_op &&
+	    !HasPrivilege(source_p, "oper:auto_admin") &&
+	    !IsGodMode(source_p))
 		return;
 
 	msptr = find_channel_membership(chptr, source_p);
 	if (msptr == NULL)
 		return;
 
-	if (is_admin(msptr))
-		return; /* already has +q */
+	if (op_only)
+	{
+		/* Join with +o; cannot exceed CHFL_CHANOP. */
+		if (is_chanop(msptr))
+			return;
 
-	/* All IRC operators receive +q (channel admin status) on join. */
-	msptr->flags |= CHFL_ADMIN;
+		msptr->flags |= CHFL_CHANOP;
 
-	sendto_channel_local(source_p, ALL_MEMBERS, chptr,
-		":%s MODE %s +q %s",
-		me.name, chptr->chname, source_p->name);
-	sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
-		":%s TMODE %ld %s +q %s",
-		me.id, (long)chptr->channelts,
-		chptr->chname, use_id(source_p));
+		sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+			":%s MODE %s +o %s",
+			me.name, chptr->chname, source_p->name);
+		sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
+			":%s TMODE %ld %s +o %s",
+			me.id, (long)chptr->channelts,
+			chptr->chname, use_id(source_p));
+	}
+	else
+	{
+		/* Join with +q (channel admin). */
+		if (is_admin(msptr))
+			return;
+
+		msptr->flags |= CHFL_ADMIN;
+
+		sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+			":%s MODE %s +q %s",
+			me.name, chptr->chname, source_p->name);
+		sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
+			":%s TMODE %ld %s +q %s",
+			me.id, (long)chptr->channelts,
+			chptr->chname, use_id(source_p));
+	}
 }
 
 /*
@@ -306,6 +400,10 @@ h_godmode_prop_chan_write(void *vdata)
 /*
  * prop_match hook: for god mode users, override the access level and grant
  * write permission for channel properties even without channel membership.
+ *
+ * The access level granted is capped by oper_channel_ceiling() so that
+ * non-admin opers with oper:auto_op cannot exceed CHFL_CHANOP for property
+ * operations either.  IRC admins always receive full access.
  */
 static void
 h_godmode_prop_match(void *vdata)
@@ -318,10 +416,10 @@ h_godmode_prop_match(void *vdata)
 	if (!IsGodMode(prop_match->source_p))
 		return;
 
-	/* elevate access level to admin */
-	prop_match->alevel = CHFL_ADMIN;
+	/* Elevate access level up to the oper's configured ceiling. */
+	prop_match->alevel = oper_channel_ceiling(prop_match->source_p);
 
-	/* grant write access if requested */
+	/* Grant write access if requested. */
 	if (prop_match->match_request == PROP_WRITE)
 		prop_match->match_grant = PROP_WRITE;
 }

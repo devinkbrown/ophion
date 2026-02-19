@@ -587,20 +587,66 @@ oper\_kick\_protection
     special Atheme configuration is required.
 
 oper\_auto\_op
-    A boolean (yes/no, default: no). When enabled, any O-lined user
-    joining a channel is automatically granted ``+q`` (channel-admin
-    status, prefix ``~``) on join.  The mode is applied by the local
-    server and propagated to the rest of the network via ``TMODE``.
+    A boolean (yes/no, default: no). When enabled, O-lined users
+    joining a channel are automatically promoted on join.  The mode
+    they receive and their access ceiling are controlled by per-oper
+    privileges in their ``privset {}`` block:
 
-    This flag is processed inside ``modules/m_ircx_oper_godmode.c``
-    via the ``channel_join`` hook.
+    ``oper:auto_op`` (without ``oper:auto_admin``)
+        The oper joins with ``+o`` (channel-operator).  Their access
+        ceiling is ``CHFL_CHANOP`` — they can only modify ``+o`` and
+        below (voice, regular users) and cannot grant or remove ``+q``,
+        nor perform admin-level channel operations.  This ceiling also
+        applies in god mode (``+G``).
+
+    ``oper:auto_admin``
+        The oper joins with ``+q`` (channel-admin, prefix ``~``).
+        Full ``CHFL_ADMIN`` access; no ceiling.  This privilege
+        overrides ``oper:auto_op`` if both are present.
+
+    Neither privilege set (or global ``oper_auto_op = yes`` without
+    per-oper override)
+        The oper joins with ``+q``; full access (the default).
+
+    IRC server admins (``IsAdmin`` / O-lined with ``admin`` flag) are
+    always promoted to ``+q`` and are **never** subject to the
+    ``oper:auto_op`` ceiling, regardless of privilege configuration.
+    In god mode, server admins can always override everything.
 
     Users with god mode (``+G``) also receive ``+q`` on channel join
-    regardless of this flag, since god mode operators should always
-    have elevated channel status.
+    regardless of this flag (subject to the per-oper ceiling above).
 
     Both flags work independently; you may enable either, both, or
     neither.
+
+**Per-oper channel level privileges**
+
+These privileges are placed in a ``privset {}`` block and referenced
+from ``operator {}`` blocks via the ``privset`` field:
+
+``oper:auto_op``
+    Auto-join channels with ``+o`` (channel-operator).  The operator's
+    channel access ceiling is ``CHFL_CHANOP`` — they can perform chanop
+    operations (kick regular users, set ``+o``/``+v``/``+b``, etc.) but
+    cannot grant or remove ``+q`` status, and cannot exceed chanop level
+    in god mode.
+
+``oper:auto_admin``
+    Auto-join channels with ``+q`` (channel-admin).  Full
+    ``CHFL_ADMIN`` access.  Overrides ``oper:auto_op``.  Not needed
+    if ``oper_auto_op = yes`` without a per-oper ``oper:auto_op``
+    override, since the default level is already ``+q``.
+
+Example privset configuration::
+
+    privset "chanop_oper" {
+        privs = oper:local_kill, oper:routing, oper:auto_op;
+    };
+
+    privset "server_admin" {
+        extends = "chanop_oper";
+        privs = oper:god, oper:auto_admin;
+    };
 
 channel {} block
 ----------------
