@@ -136,44 +136,53 @@ is_valid_base64(const char *s)
 }
 
 /*
+ * is_hex - return true if c is a valid hex digit
+ */
+static inline bool
+is_hex(char c)
+{
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+/*
  * is_valid_guid - validate MCCGUID format
  *
- * Expected format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
- * where x is a hex digit.  Rejects oversized or malformed GUIDs
- * that were used in known exploits.
+ * Enforces the exact standard UUID/GUID structure:
+ *   {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+ *    8 hex    4    4    4    12
+ * Total length with braces: 38 characters.
+ * Rejects anything that deviates, blocking the oversized-GUID exploit class.
  */
 static bool
 is_valid_guid(const char *s)
 {
-	size_t len;
-
-	if (s == NULL || *s == '\0')
+	/* exact length: { + 8 + - + 4 + - + 4 + - + 4 + - + 12 + } = 38 */
+	if (s == NULL || strlen(s) != 38)
 		return false;
 
-	len = strlen(s);
-
-	/* reject obviously oversized GUIDs (exploit vector) */
-	if (len > 48)
+	if (s[0] != '{' || s[37] != '}')
 		return false;
 
-	/* must start with { and end with } if braced format */
-	if (*s == '{')
-	{
-		if (len < 10 || s[len - 1] != '}')
-			return false;
-	}
-
-	/* check all chars are hex, dashes, or braces */
-	for (size_t i = 0; i < len; i++)
-	{
-		char c = s[i];
-		if ((c >= '0' && c <= '9') ||
-		    (c >= 'a' && c <= 'f') ||
-		    (c >= 'A' && c <= 'F') ||
-		    c == '-' || c == '{' || c == '}')
-			continue;
+	/* positions of dashes: 9, 14, 19, 24 (0-indexed) */
+	if (s[9] != '-' || s[14] != '-' || s[19] != '-' || s[24] != '-')
 		return false;
-	}
+
+	/* verify each hex segment */
+	/* segment 1: s[1..8] - 8 hex digits */
+	for (int i = 1; i <= 8; i++)
+		if (!is_hex(s[i])) return false;
+	/* segment 2: s[10..13] - 4 hex digits */
+	for (int i = 10; i <= 13; i++)
+		if (!is_hex(s[i])) return false;
+	/* segment 3: s[15..18] - 4 hex digits */
+	for (int i = 15; i <= 18; i++)
+		if (!is_hex(s[i])) return false;
+	/* segment 4: s[20..23] - 4 hex digits */
+	for (int i = 20; i <= 23; i++)
+		if (!is_hex(s[i])) return false;
+	/* segment 5: s[25..36] - 12 hex digits */
+	for (int i = 25; i <= 36; i++)
+		if (!is_hex(s[i])) return false;
 
 	return true;
 }

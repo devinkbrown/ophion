@@ -3,7 +3,9 @@
  *
  * IRCX channel modes per draft-pfenning-irc-extensions-04.
  *
- * This module implements all channel modes defined in the IRCX draft:
+ * This module implements the core IRCX channel modes.  Additional modes
+ * are provided by other modules: +w (m_ircx_whisper), +x (m_ircx_auditorium),
+ * +C (m_ircx_comic).  Modes registered here:
  *
  *   +u  KNOCK      - Enables KNOCK notifications to channel hosts/owners
  *   +h  HIDDEN     - Channel not listed via LIST/LISTX but queryable by name
@@ -50,8 +52,9 @@
 #include "supported.h"
 
 static const char ircx_modes_desc[] =
-	"Provides all IRCX channel modes: +u (knock), +h (hidden), +a (authonly), "
-	"+d (cloneable), +E (clone), +r (registered), +f (noformat), +z (service)";
+	"Provides IRCX channel modes: +u (knock), +h (hidden), +a (authonly), "
+	"+d (cloneable), +E (clone), +r (registered), +f (noformat), +z (service). "
+	"See also: m_ircx_whisper (+w), m_ircx_auditorium (+x), m_ircx_comic (+C)";
 
 /* Allocated mode bits */
 static unsigned int MODE_KNOCK;	/* +u */
