@@ -99,13 +99,15 @@ h_prop_match(void *vdata)
 		return;
 
 	struct Channel *chan = find_channel(prop_match->target_name);
-	struct membership *msptr = find_channel_membership(chan, prop_match->source_p);
+	struct membership *msptr;
 
 	if (chan == NULL)
 	{
 		sendto_one_numeric(prop_match->source_p, ERR_NOSUCHCHANNEL, form_str(ERR_NOSUCHCHANNEL), prop_match->target_name);
 		return;
 	}
+
+	msptr = find_channel_membership(chan, prop_match->source_p);
 
 	if (msptr != NULL)
 		prop_match->alevel = get_channel_access(prop_match->source_p, chan, msptr, MODE_ADD, NULL);

@@ -43,6 +43,10 @@
 static const char ircx_whisper_desc[] =
 	"Provides IRCX WHISPER command and +w (no whisper) channel mode";
 
+/* WHISPER rate limit: max commands per window */
+#define WHISPER_RATE_MAX     10
+#define WHISPER_RATE_WINDOW  10	/* seconds */
+
 static unsigned int MODE_NOWHISPER;
 
 static void m_whisper(struct MsgBuf *msgbuf_p, struct Client *client_p,
@@ -101,6 +105,31 @@ m_whisper(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		sendto_one(source_p, form_str(ERR_NOTEXTTOSEND),
 			   me.name, source_p->name);
 		return;
+	}
+
+	/* gagged users cannot send WHISPER */
+	if (IsGagged(source_p))
+		return;
+
+	/* dedicated rate limiting for WHISPER (not shared with PRIVMSG) */
+	if (MyClient(source_p) && !IsOper(source_p))
+	{
+		time_t now = rb_current_time();
+		if (now - source_p->localClient->last_whisper_time < WHISPER_RATE_WINDOW)
+		{
+			if (source_p->localClient->whisper_count > WHISPER_RATE_MAX)
+			{
+				sendto_one_notice(source_p,
+					":WHISPER rate limit exceeded, please wait");
+				return;
+			}
+		}
+		else
+		{
+			source_p->localClient->last_whisper_time = now;
+			source_p->localClient->whisper_count = 0;
+		}
+		source_p->localClient->whisper_count++;
 	}
 
 	chptr = find_channel(chname);
