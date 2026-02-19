@@ -49,6 +49,27 @@ static rb_bh *ban_heap;
 static rb_bh *topic_heap;
 static rb_bh *member_heap;
 
+/*
+ * Membership hash: O(1) lookup for find_channel_membership().
+ * Keyed on (channel pointer, client pointer) via pointer bit mixing.
+ */
+#define MEMBERSHIP_HASH_BITS 14
+#define MEMBERSHIP_HASH_SIZE (1 << MEMBERSHIP_HASH_BITS) /* 16384 */
+
+static rb_dlink_list membership_hash[MEMBERSHIP_HASH_SIZE];
+
+static inline unsigned int
+membership_hash_fn(const struct Channel *chptr, const struct Client *client_p)
+{
+	uintptr_t a = (uintptr_t)chptr;
+	uintptr_t b = (uintptr_t)client_p;
+	uint32_t h = (uint32_t)(a ^ (b >> 3) ^ (b << 13));
+	h ^= h >> 16;
+	h *= 0x45d9f3b;
+	h ^= h >> 16;
+	return h & (MEMBERSHIP_HASH_SIZE - 1);
+}
+
 static void free_topic(struct Channel *chptr);
 
 static int h_can_join;
@@ -171,6 +192,9 @@ send_channel_join(struct Channel *chptr, struct Client *client_p)
  * input	- channel to find them in, client to find
  * output	- membership of client in channel, else NULL
  * side effects	-
+ *
+ * Uses the membership hash table for O(1) average-case lookup
+ * instead of scanning channel member or user channel lists.
  */
 struct membership *
 find_channel_membership(struct Channel *chptr, struct Client *client_p)
@@ -181,28 +205,12 @@ find_channel_membership(struct Channel *chptr, struct Client *client_p)
 	if(!IsClient(client_p))
 		return NULL;
 
-	/* Pick the most efficient list to use to be nice to things like
-	 * CHANSERV which could be in a large number of channels
-	 */
-	if(rb_dlink_list_length(&chptr->members) < rb_dlink_list_length(&client_p->user->channel))
+	RB_DLINK_FOREACH(ptr, membership_hash[membership_hash_fn(chptr, client_p)].head)
 	{
-		RB_DLINK_FOREACH(ptr, chptr->members.head)
-		{
-			msptr = ptr->data;
+		msptr = ptr->data;
 
-			if(msptr->client_p == client_p)
-				return msptr;
-		}
-	}
-	else
-	{
-		RB_DLINK_FOREACH(ptr, client_p->user->channel.head)
-		{
-			msptr = ptr->data;
-
-			if(msptr->chptr == chptr)
-				return msptr;
-		}
+		if(msptr->chptr == chptr && msptr->client_p == client_p)
+			return msptr;
 	}
 
 	return NULL;
@@ -266,6 +274,8 @@ add_user_to_channel(struct Channel *chptr, struct Client *client_p, int flags)
 
 	rb_dlinkAdd(msptr, &msptr->usernode, &client_p->user->channel);
 	rb_dlinkAdd(msptr, &msptr->channode, &chptr->members);
+	rb_dlinkAdd(msptr, &msptr->hashnode,
+		    &membership_hash[membership_hash_fn(chptr, client_p)]);
 
 	if(MyClient(client_p))
 		rb_dlinkAdd(msptr, &msptr->locchannode, &chptr->locmembers);
@@ -291,6 +301,8 @@ remove_user_from_channel(struct membership *msptr)
 
 	rb_dlinkDelete(&msptr->usernode, &client_p->user->channel);
 	rb_dlinkDelete(&msptr->channode, &chptr->members);
+	rb_dlinkDelete(&msptr->hashnode,
+		       &membership_hash[membership_hash_fn(chptr, client_p)]);
 
 	if(client_p->servptr == &me)
 		rb_dlinkDelete(&msptr->locchannode, &chptr->locmembers);
@@ -326,6 +338,8 @@ remove_user_from_channels(struct Client *client_p)
 		chptr = msptr->chptr;
 
 		rb_dlinkDelete(&msptr->channode, &chptr->members);
+		rb_dlinkDelete(&msptr->hashnode,
+			       &membership_hash[membership_hash_fn(chptr, client_p)]);
 
 		if(client_p->servptr == &me)
 			rb_dlinkDelete(&msptr->locchannode, &chptr->locmembers);
