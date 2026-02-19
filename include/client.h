@@ -180,6 +180,12 @@ struct LocalUser
 					   spambot every time this gets to 0 */
 	time_t last_caller_id_time;
 
+	/* IRCX DATA/WHISPER rate limiting */
+	time_t last_data_time;
+	int data_count;
+	time_t last_whisper_time;
+	int whisper_count;
+
 	time_t lasttime;	/* last time we parsed something */
 	time_t firsttime;	/* time client was created */
 

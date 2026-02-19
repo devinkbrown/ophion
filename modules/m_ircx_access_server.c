@@ -67,6 +67,13 @@ static const char ircx_access_server_desc[] =
 
 static void m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	struct Client *source_p, int parc, const char *parv[]);
+static void me_nochan_add(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
+static void me_nochan_del(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
+static void me_nochan_clr(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
+static void me_nonick_add(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
+static void me_nonick_del(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
+static void me_nonick_clr(struct MsgBuf *, struct Client *, struct Client *, int, const char *[]);
+static void h_access_burst_finished(void *);
 
 /*
  * Wildcard ban entries for channel names and nicknames.
@@ -163,29 +170,6 @@ check_nonick(const char *nick)
 }
 
 /*
- * Hook: can_create_channel - enforce NOCHANNEL restrictions
- */
-static void
-h_access_can_create_channel(void *vdata)
-{
-	hook_data_client_approval *data = vdata;
-	struct Client *source_p = data->client;
-	struct wildcard_ban *wb;
-
-	if (data->approved != 0)
-		return;
-
-	/* opers are exempt */
-	if (IsOper(source_p))
-		return;
-
-	/* we don't have the channel name in hook_data_client_approval,
-	 * but the IRCX CREATE handler checks this separately.
-	 * For the core m_join path, we use the channel_join hook instead.
-	 */
-}
-
-/*
  * Hook: channel_join - enforce NOCHANNEL on join-create
  *
  * This hook fires after a user joins.  If the channel was just
@@ -262,12 +246,47 @@ struct Message saccess_msgtab = {
 	{mg_unreg, {m_access_server, 2}, mg_ignore, mg_ignore, mg_ignore, {m_access_server, 2}}
 };
 
-mapi_clist_av1 ircx_access_server_clist[] = { &saccess_msgtab, NULL };
+struct Message nochan_add_msgtab = {
+	"NOCHAN_ADD", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_nochan_add, 3}, mg_ignore}
+};
+
+struct Message nochan_del_msgtab = {
+	"NOCHAN_DEL", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_nochan_del, 2}, mg_ignore}
+};
+
+struct Message nochan_clr_msgtab = {
+	"NOCHAN_CLR", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_nochan_clr, 1}, mg_ignore}
+};
+
+struct Message nonick_add_msgtab = {
+	"NONICK_ADD", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_nonick_add, 3}, mg_ignore}
+};
+
+struct Message nonick_del_msgtab = {
+	"NONICK_DEL", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_nonick_del, 2}, mg_ignore}
+};
+
+struct Message nonick_clr_msgtab = {
+	"NONICK_CLR", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_nonick_clr, 1}, mg_ignore}
+};
+
+mapi_clist_av1 ircx_access_server_clist[] = {
+	&saccess_msgtab,
+	&nochan_add_msgtab, &nochan_del_msgtab, &nochan_clr_msgtab,
+	&nonick_add_msgtab, &nonick_del_msgtab, &nonick_clr_msgtab,
+	NULL
+};
 
 mapi_hfn_list_av1 ircx_access_server_hfnlist[] = {
-	{ "can_create_channel", (hookfn) h_access_can_create_channel },
 	{ "channel_join", (hookfn) h_access_channel_join },
 	{ "local_nick_change", (hookfn) h_access_nick_change },
+	{ "burst_finished", (hookfn) h_access_burst_finished },
 	{ NULL, NULL }
 };
 
@@ -475,7 +494,12 @@ handle_add_nochannel(struct Client *source_p, const char *pattern, int parc, con
 
 	add_wildcard_ban(&nochannel_list, pattern, reason, get_oper_name(source_p));
 
-	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+	/* propagate to all servers */
+	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+		":%s ENCAP * NOCHAN_ADD %s %s :%s",
+		use_id(source_p), pattern, get_oper_name(source_p), reason);
+
+	sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 		"%s added ACCESS * NOCHANNEL for [%s] [%s]",
 		get_oper_name(source_p), pattern, reason);
 
@@ -508,9 +532,16 @@ handle_add_nonick(struct Client *source_p, const char *pattern, int parc, const 
 	if (arg_offset < parc && !EmptyString(parv[arg_offset]))
 		reason = parv[arg_offset];
 
+	/* check for existing RESV to avoid conflicts */
+	if (find_nick_resv(pattern) != NULL)
+	{
+		sendto_one_notice(source_p, ":A nick reservation for [%s] already exists (RESV conflict)", pattern);
+		return;
+	}
+
 	add_wildcard_ban(&nonick_list, pattern, reason, get_oper_name(source_p));
 
-	/* also add a RESV to block at the nick validation level */
+	/* add a RESV to block at the nick validation level */
 	struct ConfItem *aconf = make_conf();
 	aconf->status = CONF_RESV_NICK;
 	aconf->host = rb_strdup(pattern);
@@ -518,7 +549,12 @@ handle_add_nonick(struct Client *source_p, const char *pattern, int parc, const 
 	aconf->info.oper = operhash_add(get_oper_name(source_p));
 	add_to_resv_hash(aconf->host, aconf);
 
-	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+	/* propagate to all servers */
+	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+		":%s ENCAP * NONICK_ADD %s %s :%s",
+		use_id(source_p), pattern, get_oper_name(source_p), reason);
+
+	sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 		"%s added ACCESS * NONICK for [%s] [%s]",
 		get_oper_name(source_p), pattern, reason);
 
@@ -553,7 +589,12 @@ handle_delete(struct Client *source_p, const char *level_or_mask, const char *ma
 	if (wb != NULL)
 	{
 		del_wildcard_ban(&nochannel_list, wb);
-		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * NOCHAN_DEL %s",
+			use_id(source_p), mask);
+
+		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s removed ACCESS * NOCHANNEL for [%s]",
 			get_oper_name(source_p), mask);
 		sendto_one_notice(source_p, ":Removed NOCHANNEL entry [%s]", mask);
@@ -571,7 +612,11 @@ handle_delete(struct Client *source_p, const char *level_or_mask, const char *ma
 
 		del_wildcard_ban(&nonick_list, wb);
 
-		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * NONICK_DEL %s",
+			use_id(source_p), mask);
+
+		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s removed ACCESS * NONICK for [%s]",
 			get_oper_name(source_p), mask);
 		sendto_one_notice(source_p, ":Removed NONICK entry [%s]", mask);
@@ -714,7 +759,12 @@ handle_clear(struct Client *source_p, const char *level)
 	if (level != NULL && !rb_strcasecmp(level, "NOCHANNEL"))
 	{
 		clear_wildcard_list(&nochannel_list);
-		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * NOCHAN_CLR",
+			use_id(source_p));
+
+		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s cleared all ACCESS * NOCHANNEL entries",
 			get_oper_name(source_p));
 		sendto_one_notice(source_p, ":All NOCHANNEL entries cleared");
@@ -733,7 +783,12 @@ handle_clear(struct Client *source_p, const char *level)
 				del_from_resv_hash(wb->pattern, aconf);
 		}
 		clear_wildcard_list(&nonick_list);
-		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * NONICK_CLR",
+			use_id(source_p));
+
+		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s cleared all ACCESS * NONICK entries",
 			get_oper_name(source_p));
 		sendto_one_notice(source_p, ":All NONICK entries cleared");
@@ -828,9 +883,141 @@ m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	}
 }
 
+/*
+ * ENCAP handlers for NOCHANNEL/NONICK propagation.
+ *
+ * :source ENCAP * NOCHAN_ADD <pattern> <setter> :<reason>
+ * :source ENCAP * NOCHAN_DEL <pattern>
+ * :source ENCAP * NOCHAN_CLR
+ * :source ENCAP * NONICK_ADD <pattern> <setter> :<reason>
+ * :source ENCAP * NONICK_DEL <pattern>
+ * :source ENCAP * NONICK_CLR
+ */
+static void
+me_nochan_add(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	const char *pattern = parv[1];
+	const char *setter = parv[2];
+	const char *reason = (parc > 3 && !EmptyString(parv[3])) ? parv[3] : "Server policy";
+
+	if (find_wildcard_ban(&nochannel_list, pattern) != NULL)
+		return;
+
+	add_wildcard_ban(&nochannel_list, pattern, reason, setter);
+}
+
+static void
+me_nochan_del(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	struct wildcard_ban *wb = find_wildcard_ban(&nochannel_list, parv[1]);
+	if (wb != NULL)
+		del_wildcard_ban(&nochannel_list, wb);
+}
+
+static void
+me_nochan_clr(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	clear_wildcard_list(&nochannel_list);
+}
+
+static void
+me_nonick_add(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	const char *pattern = parv[1];
+	const char *setter = parv[2];
+	const char *reason = (parc > 3 && !EmptyString(parv[3])) ? parv[3] : "Server policy";
+
+	if (find_wildcard_ban(&nonick_list, pattern) != NULL)
+		return;
+
+	add_wildcard_ban(&nonick_list, pattern, reason, setter);
+
+	/* add local RESV if none exists */
+	if (find_nick_resv(pattern) == NULL)
+	{
+		struct ConfItem *aconf = make_conf();
+		aconf->status = CONF_RESV_NICK;
+		aconf->host = rb_strdup(pattern);
+		aconf->passwd = rb_strdup(reason);
+		aconf->info.oper = operhash_add(setter);
+		add_to_resv_hash(aconf->host, aconf);
+	}
+}
+
+static void
+me_nonick_del(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	struct wildcard_ban *wb = find_wildcard_ban(&nonick_list, parv[1]);
+	if (wb != NULL)
+	{
+		struct ConfItem *aconf = find_nick_resv(parv[1]);
+		if (aconf != NULL)
+			del_from_resv_hash(parv[1], aconf);
+
+		del_wildcard_ban(&nonick_list, wb);
+	}
+}
+
+static void
+me_nonick_clr(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, nonick_list.head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		struct ConfItem *aconf = find_nick_resv(wb->pattern);
+		if (aconf != NULL)
+			del_from_resv_hash(wb->pattern, aconf);
+	}
+	clear_wildcard_list(&nonick_list);
+}
+
+/*
+ * Burst sync: send all NOCHANNEL/NONICK entries to a newly linked server.
+ */
+static void
+h_access_burst_finished(void *vdata)
+{
+	hook_data_client *hclientinfo = vdata;
+	struct Client *server_p = hclientinfo->client;
+	rb_dlink_node *ptr;
+
+	RB_DLINK_FOREACH(ptr, nochannel_list.head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		sendto_one(server_p, ":%s ENCAP %s NOCHAN_ADD %s %s :%s",
+			use_id(&me), server_p->name,
+			wb->pattern, wb->setter, wb->reason);
+	}
+
+	RB_DLINK_FOREACH(ptr, nonick_list.head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		sendto_one(server_p, ":%s ENCAP %s NONICK_ADD %s %s :%s",
+			use_id(&me), server_p->name,
+			wb->pattern, wb->setter, wb->reason);
+	}
+}
+
 static void
 ircx_access_server_deinit(void)
 {
+	/* remove RESVs created by NONICK entries before clearing */
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, nonick_list.head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		struct ConfItem *aconf = find_nick_resv(wb->pattern);
+		if (aconf != NULL)
+			del_from_resv_hash(wb->pattern, aconf);
+	}
+
 	clear_wildcard_list(&nochannel_list);
 	clear_wildcard_list(&nonick_list);
 }

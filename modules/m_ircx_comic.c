@@ -322,7 +322,7 @@ h_comic_privmsg_channel(void *vdata)
 }
 
 /*
- * DATA command handler
+ * DATA command handler (local clients)
  *
  * DATA <target> <tag> :<content>
  *
@@ -330,11 +330,12 @@ h_comic_privmsg_channel(void *vdata)
  * The tag identifies the data type (#c, #e, #g, #p, #t, #w, #s, #a).
  *
  * Security:
+ * - Gagged users cannot send DATA
  * - Tag must be a known valid Comic Chat tag
  * - Payload is sanitized (control chars stripped, length capped)
- * - Rate limited per client
+ * - Rate limited per client (dedicated counter, independent of PRIVMSG)
  * - Blocked on +C channels
- * - Only relayed to local clients, not to servers (client-local data)
+ * - Propagated to remote servers for channel targets
  */
 static void
 m_data(struct MsgBuf *msgbuf_p, struct Client *client_p,
@@ -352,21 +353,24 @@ m_data(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		return;
 	}
 
+	/* gagged users cannot send DATA */
+	if (IsGagged(source_p))
+		return;
+
 	/* validate tag - must be a known Comic Chat data tag */
 	if (!is_valid_data_tag(tag))
 	{
-		sendto_one_numeric(source_p, ERR_CANNOTSENDTOCHAN,
-			"%s :Unknown DATA tag", target);
+		sendto_one_notice(source_p, ":Unknown DATA tag '%s'", tag);
 		return;
 	}
 
-	/* rate limiting - reuse the privmsg counter on struct Client */
+	/* dedicated rate limiting for DATA (not shared with PRIVMSG) */
 	if (MyClient(source_p) && !IsOper(source_p))
 	{
 		time_t now = rb_current_time();
-		if (now - source_p->localClient->last_caller_id_time < DATA_RATE_WINDOW)
+		if (now - source_p->localClient->last_data_time < DATA_RATE_WINDOW)
 		{
-			if (source_p->received_number_of_privmsgs > DATA_RATE_MAX)
+			if (source_p->localClient->data_count > DATA_RATE_MAX)
 			{
 				sendto_one_notice(source_p,
 					":DATA rate limit exceeded, please wait");
@@ -375,10 +379,10 @@ m_data(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		}
 		else
 		{
-			source_p->localClient->last_caller_id_time = now;
-			source_p->received_number_of_privmsgs = 0;
+			source_p->localClient->last_data_time = now;
+			source_p->localClient->data_count = 0;
 		}
-		source_p->received_number_of_privmsgs++;
+		source_p->localClient->data_count++;
 	}
 
 	/* sanitize the data payload */
@@ -386,7 +390,6 @@ m_data(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	{
 		if (!sanitize_data_payload(safe_content, sizeof safe_content, content))
 		{
-			/* payload failed sanitization - likely exploit attempt */
 			sendto_one_notice(source_p, ":DATA payload rejected (invalid content)");
 			return;
 		}
@@ -424,10 +427,9 @@ m_data(struct MsgBuf *msgbuf_p, struct Client *client_p,
 			return;
 		}
 
-		/* relay to channel members (local only, not propagated to servers) */
-		sendto_channel_local(source_p, ALL_MEMBERS, chptr,
-			":%s!%s@%s DATA %s %s :%s",
-			source_p->name, source_p->username, source_p->host,
+		/* relay to all channel members (local + remote via sendto_channel_flags) */
+		sendto_channel_flags(client_p, ALL_MEMBERS, source_p, chptr,
+			"DATA %s %s :%s",
 			chptr->chname, tag, safe_content);
 	}
 	else
@@ -441,17 +443,76 @@ m_data(struct MsgBuf *msgbuf_p, struct Client *client_p,
 			return;
 		}
 
-		/* relay to target user */
-		sendto_one(target_p,
-			":%s!%s@%s DATA %s %s :%s",
-			source_p->name, source_p->username, source_p->host,
-			target_p->name, tag, safe_content);
+		if (MyClient(target_p))
+		{
+			sendto_one(target_p,
+				":%s!%s@%s DATA %s %s :%s",
+				source_p->name, source_p->username, source_p->host,
+				target_p->name, tag, safe_content);
+		}
+		else
+		{
+			sendto_one(target_p, ":%s DATA %s %s :%s",
+				use_id(source_p), target_p->name, tag, safe_content);
+		}
+	}
+}
+
+/*
+ * ms_data - DATA command handler (server-to-server)
+ *
+ * :<uid> DATA <target> <tag> :<content>
+ *
+ * Relays DATA to local channel members and propagates to other servers.
+ * No sanitization needed - trust server-to-server data.
+ */
+static void
+ms_data(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	struct Client *source_p, int parc, const char *parv[])
+{
+	const char *target = parv[1];
+	const char *tag = parv[2];
+	const char *content = (parc > 3 && !EmptyString(parv[3])) ? parv[3] : "";
+
+	if (IsChanPrefix(*target))
+	{
+		struct Channel *chptr = find_channel(target);
+		if (chptr == NULL)
+			return;
+
+		/* check +C on receiving end too */
+		if (MODE_NOCOMICDATA && (chptr->mode.mode & MODE_NOCOMICDATA))
+			return;
+
+		/* relay to local members and propagate to other servers */
+		sendto_channel_flags(client_p, ALL_MEMBERS, source_p, chptr,
+			"DATA %s %s :%s",
+			chptr->chname, tag, content);
+	}
+	else
+	{
+		struct Client *target_p = find_person(parv[1]);
+		if (target_p == NULL)
+			return;
+
+		if (MyClient(target_p))
+		{
+			sendto_one(target_p,
+				":%s!%s@%s DATA %s %s :%s",
+				source_p->name, source_p->username, source_p->host,
+				target_p->name, tag, content);
+		}
+		else
+		{
+			sendto_one(target_p, ":%s DATA %s %s :%s",
+				use_id(source_p), use_id(target_p), tag, content);
+		}
 	}
 }
 
 struct Message data_msgtab = {
 	"DATA", 0, 0, 0, 0,
-	{mg_unreg, {m_data, 3}, mg_ignore, mg_ignore, mg_ignore, {m_data, 3}}
+	{mg_unreg, {m_data, 3}, {ms_data, 4}, mg_ignore, mg_ignore, {m_data, 3}}
 };
 
 mapi_clist_av1 ircx_comic_clist[] = { &data_msgtab, NULL };
