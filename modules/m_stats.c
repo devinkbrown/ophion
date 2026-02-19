@@ -130,6 +130,7 @@ static void stats_servlinks(struct Client *);
 static void stats_ltrace(struct Client *, int, const char **);
 static void stats_comm(struct Client *);
 static void stats_capability(struct Client *);
+static void stats_perfmon(struct Client *);
 
 #define HANDLER_NORM(fn, admin, priv) \
 		{ { .handler = fn }, .need_parv = false, .need_priv = priv, .need_admin = admin }
@@ -190,6 +191,7 @@ static struct stats_cmd stats_cmd_table[256] = {
 	['y'] = HANDLER_NORM(stats_class,	false,	NULL),
 	['Y'] = HANDLER_NORM(stats_class,	false,	NULL),
 	['z'] = HANDLER_NORM(stats_memory,	false,	"oper:general"),
+	['Z'] = HANDLER_NORM(stats_perfmon,	false,	"oper:general"),
 	['?'] = HANDLER_NORM(stats_servlinks,	false,	NULL),
 };
 
@@ -1751,4 +1753,31 @@ stats_p_spy (struct Client *source_p)
 	data.arg1 = data.arg2 = NULL;
 
 	call_hook(doing_stats_p_hook, &data);
+}
+
+/*
+ * stats_perfmon - STATS Z
+ *
+ * Reports two runtime performance counters:
+ *   - Event loop lag: how many milliseconds the 1-second heartbeat event
+ *     fired late (max and average since startup).  Positive values mean the
+ *     process was busy and couldn't service the timer on time.
+ *   - sendq EAGAIN count: how many times rb_linebuf_flush returned EAGAIN
+ *     (kernel TCP send buffer was full).  High values mean one or more
+ *     clients are consistently too slow to drain their queues.
+ */
+static void
+stats_perfmon(struct Client *source_p)
+{
+	unsigned long avg_ms = 0;
+
+	if(loop_lag_count > 0)
+		avg_ms = (unsigned long)(loop_lag_total_ms / loop_lag_count);
+
+	sendto_one_numeric(source_p, RPL_STATSDEBUG,
+		"Z :event loop lag  max %lums avg %lums samples %lu",
+		loop_lag_max_ms, avg_ms, loop_lag_count);
+	sendto_one_numeric(source_p, RPL_STATSDEBUG,
+		"Z :sendq EAGAIN %llu",
+		ServerStats.is_sendq_eagain);
 }

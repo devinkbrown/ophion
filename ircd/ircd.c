@@ -111,6 +111,61 @@ bool ircd_zlib_ok = true;
 int testing_conf = 0;
 time_t startup_time;
 
+/*
+ * generate_sid_from_name
+ *
+ * Deterministically derive a valid TS6 SID from a server name using
+ * FNV-1a so restarts produce the same SID without requiring one in the
+ * config.  SID format: digit [0-9], then two alphanumeric [0-9A-Z].
+ * 10 × 36 × 36 = 12,960 distinct values — more than sufficient.
+ */
+static void
+generate_sid_from_name(const char *name, char sid[4])
+{
+	static const char sid_chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+	uint32_t h = 2166136261u;
+	const unsigned char *p = (const unsigned char *)name;
+
+	while(*p)
+	{
+		h ^= *p++;
+		h *= 16777619u;
+	}
+
+	sid[0] = '0' + (h % 10);
+	sid[1] = sid_chars[(h / 10) % 36];
+	sid[2] = sid_chars[(h / 360) % 36];
+	sid[3] = '\0';
+}
+
+/* Event loop lag tracking (CLOCK_MONOTONIC, millisecond resolution) */
+unsigned long loop_lag_max_ms = 0;
+unsigned long long loop_lag_total_ms = 0;
+unsigned long loop_lag_count = 0;
+static struct timespec loop_lag_last;
+
+static void
+check_loop_lag(void *unused)
+{
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	if(loop_lag_last.tv_sec != 0)
+	{
+		long elapsed_ms = (now.tv_sec - loop_lag_last.tv_sec) * 1000L
+		                + (now.tv_nsec - loop_lag_last.tv_nsec) / 1000000L;
+		long lag_ms = elapsed_ms - 1000L;
+		if(lag_ms > 0)
+		{
+			if((unsigned long)lag_ms > loop_lag_max_ms)
+				loop_lag_max_ms = (unsigned long)lag_ms;
+			loop_lag_total_ms += (unsigned long long)lag_ms;
+		}
+		loop_lag_count++;
+	}
+	loop_lag_last = now;
+}
+
 int default_server_capabs;
 
 int splitmode;
@@ -339,8 +394,6 @@ initialize_global_set_options(void)
 		splitmode = 1;
 		splitchecking = 1;
 	}
-
-	GlobalSetOptions.ident_timeout = ConfigFileEntry.default_ident_timeout;
 
 	rb_strlcpy(GlobalSetOptions.operstring,
 		ConfigFileEntry.default_operstring,
@@ -788,8 +841,10 @@ charybdis_main(int argc, char * const argv[])
 
 	if(ServerInfo.sid[0] == '\0')
 	{
-		ierror("no server sid specified in serverinfo block.");
-		return -2;
+		generate_sid_from_name(me.name, ServerInfo.sid);
+		inotice("no sid in serverinfo{} — auto-generated %s from server name"
+		        " (set sid = \"%.3s\"; to silence this notice)",
+		        ServerInfo.sid, ServerInfo.sid);
 	}
 	rb_strlcpy(me.id, ServerInfo.sid, sizeof(me.id));
 	init_uid();
@@ -852,6 +907,7 @@ charybdis_main(int argc, char * const argv[])
 	rb_event_addonce("try_connections_startup", try_connections, NULL, 2);
 	rb_event_add("check_rehash", check_rehash, NULL, 3);
 	rb_event_addish("reseed_srand", seed_random, NULL, 300); /* reseed every 10 minutes */
+	rb_event_add("check_loop_lag", check_loop_lag, NULL, 1);
 
 	if(splitmode)
 		check_splitmode_ev = rb_event_add("check_splitmode", check_splitmode, NULL, 5);

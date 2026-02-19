@@ -198,18 +198,17 @@ ms_request(struct MsgBuf *msgbuf_p, struct Client *client_p,
 /*
  * m_reply - REPLY command handler (local clients)
  *
- * REPLY <nick> <tag> :<text>
+ * REPLY <channel|nick> <nick|tag> :<text>
  *
- * parv[1] = nick (recipient of the reply)
- * parv[2] = tag (must match the REQUEST tag)
- * parv[3] = text
+ * When parv[1] is a channel: REPLY <channel> <target-nick> :<text>
+ * When parv[1] is a nick:    REPLY <nick> <tag> :<text>
  */
 static void
 m_reply(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	struct Client *source_p, int parc, const char *parv[])
 {
-	const char *nick = parv[1];
-	const char *tag  = parv[2];
+	const char *target = parv[1];
+	const char *nick_or_tag = parv[2];
 	const char *text = parv[3];
 
 	if (EmptyString(text))
@@ -222,24 +221,51 @@ m_reply(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	if (IsGagged(source_p))
 		return;
 
-	struct Client *target_p = find_named_person(nick);
-	if (target_p == NULL)
+	/* REPLY <channel> <nick> :<text> - channel-scoped reply */
+	if (IsChanPrefix(*target))
 	{
-		sendto_one_numeric(source_p, ERR_NOSUCHNICK,
-				   form_str(ERR_NOSUCHNICK), nick);
-		return;
-	}
+		struct Client *target_p = find_named_person(nick_or_tag);
+		if (target_p == NULL)
+		{
+			sendto_one_numeric(source_p, ERR_NOSUCHNICK,
+					   form_str(ERR_NOSUCHNICK), nick_or_tag);
+			return;
+		}
 
-	if (MyClient(target_p))
-	{
-		sendto_one(target_p, ":%s!%s@%s REPLY %s %s :%s",
-			   source_p->name, source_p->username, source_p->host,
-			   target_p->name, tag, text);
+		if (MyClient(target_p))
+		{
+			sendto_one(target_p, ":%s!%s@%s REPLY %s %s :%s",
+				   source_p->name, source_p->username, source_p->host,
+				   target, target_p->name, text);
+		}
+		else
+		{
+			sendto_one(target_p, ":%s REPLY %s %s :%s",
+				   use_id(source_p), target, use_id(target_p), text);
+		}
 	}
 	else
 	{
-		sendto_one(target_p, ":%s REPLY %s %s :%s",
-			   use_id(source_p), use_id(target_p), tag, text);
+		/* REPLY <nick> <tag> :<text> - direct reply */
+		struct Client *target_p = find_named_person(target);
+		if (target_p == NULL)
+		{
+			sendto_one_numeric(source_p, ERR_NOSUCHNICK,
+					   form_str(ERR_NOSUCHNICK), target);
+			return;
+		}
+
+		if (MyClient(target_p))
+		{
+			sendto_one(target_p, ":%s!%s@%s REPLY %s %s :%s",
+				   source_p->name, source_p->username, source_p->host,
+				   target_p->name, nick_or_tag, text);
+		}
+		else
+		{
+			sendto_one(target_p, ":%s REPLY %s %s :%s",
+				   use_id(source_p), use_id(target_p), nick_or_tag, text);
+		}
 	}
 }
 

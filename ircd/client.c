@@ -1797,7 +1797,7 @@ exit_client(struct Client *client_p,	/* The local client originating the
 			ret = exit_remote_server(client_p, source_p, from, comment);
 	}
 
-	call_hook(h_after_client_exit, NULL);
+	call_hook(h_after_client_exit, &hdata);
 
 	return ret;
 }

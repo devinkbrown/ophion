@@ -715,8 +715,6 @@ show_iline_prefix(struct Client *sptr, struct ConfItem *aconf, char *name)
 	prefix_ptr = prefix_of_host;
 	if(IsNoTilde(aconf))
 		*prefix_ptr++ = '-';
-	if(IsNeedIdentd(aconf))
-		*prefix_ptr++ = '+';
 	if(IsConfDoSpoofIp(aconf))
 		*prefix_ptr++ = '=';
 	if(IsOper(sptr) && IsConfExemptFlood(aconf))

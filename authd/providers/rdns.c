@@ -53,6 +53,7 @@ static void client_success(struct auth_client *auth);
 static void dns_answer_callback(const char *res, bool status, query_type type, void *data);
 
 static int rdns_timeout = RDNS_TIMEOUT_DEFAULT;
+static bool rdns_enabled = true;
 
 static void
 dns_answer_callback(const char *res, bool status, query_type type, void *data)
@@ -127,6 +128,13 @@ rdns_destroy(void)
 static bool
 rdns_start(struct auth_client *auth)
 {
+	if(!rdns_enabled)
+	{
+		/* Skip rDNS — hostname stays as IP address */
+		provider_done(auth, SELF_PID);
+		return true;
+	}
+
 	struct user_query *query = rb_malloc(sizeof(struct user_query));
 
 	auth_client_ref(auth);
@@ -163,9 +171,16 @@ add_conf_dns_timeout(const char *key, int parc, const char **parv)
 	rdns_timeout = timeout;
 }
 
+static void
+set_rdns_enabled(const char *key, int parc, const char **parv)
+{
+	rdns_enabled = atoi(parv[0]) != 0;
+}
+
 struct auth_opts_handler rdns_options[] =
 {
 	{ "rdns_timeout", 1, add_conf_dns_timeout },
+	{ "rdns_enabled", 1, set_rdns_enabled },
 	{ NULL, 0, NULL },
 };
 

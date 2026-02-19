@@ -38,6 +38,7 @@
 #include "hook.h"
 #include "monitor.h"
 #include "msgbuf.h"
+#include "s_stats.h"
 
 /* send the message to the link the target is attached to */
 #define send_linebuf(a,b) _send_linebuf((a->from ? a->from : a) ,b)
@@ -173,6 +174,8 @@ send_queued(struct Client *to)
 			dead_link(to, 0);
 			return;
 		}
+		/* retlen < 0 && rb_ignore_errno: EAGAIN/EWOULDBLOCK — kernel TCP send buffer full */
+		ServerStats.is_sendq_eagain++;
 	}
 
 	if(rb_linebuf_len(&to->localClient->buf_sendq))
