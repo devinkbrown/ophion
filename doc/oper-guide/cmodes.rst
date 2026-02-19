@@ -73,8 +73,8 @@ Only channel operators can see ``+e`` changes or request the list.
 ------------------------------------
 
 .. note:: When the ``m_ircx_modes`` module is loaded, ``+f`` is
-          repurposed as the IRCX NOFORMAT mode. The original charybdis
-          channel forwarding mode is saved and restored if the module
+          repurposed as the IRCX NOFORMAT mode. The original channel
+          forwarding mode is saved and restored if the module
           is unloaded.
 
 **IRCX NOFORMAT mode (with m_ircx_modes loaded):**
@@ -276,7 +276,7 @@ way.
 -----------------------
 
 .. note:: When the ``m_ircx_modes`` module is loaded, ``+z`` is
-          repurposed as the IRCX SERVICE mode. The original charybdis
+          repurposed as the IRCX SERVICE mode. The original
           opmoderate/reduced moderation mode is saved and restored if
           the module is unloaded.
 
@@ -335,7 +335,7 @@ server when a clone channel is created due to overflow on a ``+d``
 channel.
 
 .. note:: The IRCX draft uses ``+e`` for CLONE, but since ``+e`` is
-          used for ban exceptions in the charybdis/solanum lineage,
+          used for ban exceptions in the charybdis lineage,
           CLONE has been remapped to ``+E`` to avoid the conflict.
 
 ``+h``, HIDDEN (IRCX)
