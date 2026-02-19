@@ -58,6 +58,7 @@
 #include "logger.h"
 #include "modules.h"
 #include "newconf.h"
+#include "defaults.h"
 #include "msgbuf.h"
 #include "parse.h"
 #include "s_conf.h"
@@ -66,6 +67,9 @@
 #include "s_user.h"
 #include "send.h"
 #include "discordproc.h"
+
+#include <errno.h>
+#include <stdio.h>
 
 /* -------------------------------------------------------------------------
  * Module-level state
@@ -86,6 +90,13 @@ static rb_dictionary *discord_to_irc = NULL;
 /* irc_channel_name -> discord_channel_id (char* -> char*) */
 static rb_dictionary *irc_to_discord = NULL;
 
+/*
+ * discord_user_id -> NickServ account name (heap strings, both sides).
+ * Populated by h_account_login; persisted across restarts in
+ * IRCD_PATH_ETC/discord_accounts.db.
+ */
+static rb_dictionary *discord_account_cache = NULL;
+
 static char *discordd_path = NULL;
 
 /* -------------------------------------------------------------------------
@@ -103,6 +114,9 @@ static void discord_phantom_join_channel(struct Client *phantom,
 static void discord_exit_all_phantoms(void);
 static void hook_discord_privmsg(void *vdata);
 static void hook_discord_tagmsg(void *vdata);
+static void hook_discord_account_login(void *vdata);
+static void load_discord_accounts(void);
+static void save_discord_accounts(void);
 
 /* -------------------------------------------------------------------------
  * Percent-encoding helpers
@@ -398,7 +412,13 @@ discord_find_or_create_phantom(const char *nick, const char *user_id)
 	rb_strlcpy(client_p->username, "discord", USERLEN + 1);
 	rb_strlcpy(client_p->host, "discord.invalid", HOSTLEN + 1);
 	rb_strlcpy(client_p->orighost, "discord.invalid", HOSTLEN + 1);
-	rb_strlcpy(client_p->sockhost, "discord.invalid", HOSTIPLEN + 1);
+	/*
+	 * Store the Discord snowflake in sockhost.  Phantoms have no real IP,
+	 * and sockhost is included in WHOIS "Actual IP" only for opers, so
+	 * using it for the Discord user ID is safe.  The account-login hook
+	 * uses this field to map the phantom back to its Discord UID.
+	 */
+	rb_strlcpy(client_p->sockhost, uid_buf, HOSTIPLEN + 1);
 	rb_strlcpy(client_p->info, "Discord User", REALLEN + 1);
 
 	client_p->tsinfo = rb_current_time();
@@ -428,6 +448,26 @@ discord_find_or_create_phantom(const char *nick, const char *user_id)
 
 	/* Mark as a service so most spam/flood guards ignore it. */
 	client_p->flags |= FLAGS_SERVICE;
+
+	/*
+	 * If this Discord user has previously identified to NickServ, pre-set
+	 * their suser field before introduction.  This causes the UID burst to
+	 * carry the account name, so Atheme/services sees them as identified
+	 * from the moment they appear — enabling ChanServ auto-op/voice on
+	 * channel join without requiring them to identify again.
+	 *
+	 * Services are optional: if the cache is empty or the user has never
+	 * identified, suser remains empty and services simply won't auto-op.
+	 */
+	{
+		const char *cached_account = NULL;
+		if(discord_account_cache != NULL)
+			cached_account = rb_dictionary_retrieve(discord_account_cache,
+								uid_buf);
+		if(cached_account != NULL)
+			rb_strlcpy(client_p->user->suser, cached_account,
+				   sizeof(client_p->user->suser));
+	}
 
 	/* Announce to the network. */
 	introduce_client(&me, client_p, client_p->user, safe_nick, 1);
@@ -686,6 +726,60 @@ parse_discordd_reply(rb_helper *helper)
 		}
 
 		/*
+		 * I <channel_id> <user_id> <nick_pct> :<identify_args_pct>
+		 * Discord user issued "!identify [account] password".
+		 *
+		 * Find or create the phantom for this user, join them to the
+		 * bridged channel, then relay the args to NickServ as a
+		 * PRIVMSG IDENTIFY.  Services are optional: if NickServ is not
+		 * present the line is silently dropped.
+		 */
+		case 'I':
+		{
+			struct Client *phantom;
+			struct Client *ns_p;
+			const char *channel_id, *user_id, *nick, *identify_args;
+			const char *irc_channel;
+			char decoded_args[BUFSIZE];
+
+			if(parc < 5) break;
+			channel_id    = argv[1];
+			user_id       = argv[2];
+			nick          = argv[3];
+			identify_args = argv[4];
+
+			irc_channel = rb_dictionary_retrieve(discord_to_irc,
+							     channel_id);
+			if(irc_channel == NULL) break;
+
+			phantom = discord_find_or_create_phantom(nick, user_id);
+			if(phantom == NULL) break;
+
+			discord_phantom_join_channel(phantom, irc_channel);
+
+			/*
+			 * Services are optional.  If NickServ is not connected
+			 * (no Atheme or other services), just drop the request.
+			 */
+			ns_p = find_named_client("NickServ");
+			if(ns_p == NULL)
+			{
+				ilog(L_MAIN,
+				     "discord: !identify from %s ignored: NickServ not present",
+				     user_id);
+				break;
+			}
+
+			rb_strlcpy(decoded_args, identify_args, sizeof(decoded_args));
+			pct_decode(decoded_args);
+
+			/* Route PRIVMSG NickServ :IDENTIFY <args> from phantom. */
+			sendto_one(ns_p->from, ":%s PRIVMSG %s :IDENTIFY %s",
+				   use_id(phantom), use_id(ns_p), decoded_args);
+			break;
+		}
+
+		/*
 		 * W <level> :<message_pct>
 		 * Warning/log message from discordd.
 		 */
@@ -810,6 +904,137 @@ hook_discord_tagmsg(void *vdata)
 }
 
 /* -------------------------------------------------------------------------
+ * NickServ account persistence — discord_accounts.db
+ *
+ * Format: one entry per line: <discord_uid>\t<account_name>
+ * Lines starting with '#' are comments.
+ * ---------------------------------------------------------------------- */
+
+static void
+save_account_cb(rb_dictionary_element *elem, void *privdata)
+{
+	FILE *fp = privdata;
+	fprintf(fp, "%s\t%s\n",
+		(const char *)elem->key,
+		(const char *)elem->data);
+}
+
+static void
+save_discord_accounts(void)
+{
+	char path[PATH_MAX];
+	FILE *fp;
+
+	if(discord_account_cache == NULL)
+		return;
+
+	snprintf(path, sizeof(path), "%s/discord_accounts.db",
+		 ircd_paths[IRCD_PATH_ETC]);
+
+	fp = fopen(path, "w");
+	if(fp == NULL)
+	{
+		ilog(L_MAIN, "discord: could not write %s: %s",
+		     path, strerror(errno));
+		return;
+	}
+	fprintf(fp, "# discord_accounts.db — auto-generated by Ophion\n");
+	fprintf(fp, "# discord_snowflake<TAB>nickserv_account\n");
+	rb_dictionary_foreach(discord_account_cache, save_account_cb, fp);
+	fclose(fp);
+}
+
+static void
+load_discord_accounts(void)
+{
+	char path[PATH_MAX];
+	FILE *fp;
+	char line[512];
+
+	if(discord_account_cache == NULL)
+		return;
+
+	snprintf(path, sizeof(path), "%s/discord_accounts.db",
+		 ircd_paths[IRCD_PATH_ETC]);
+
+	fp = fopen(path, "r");
+	if(fp == NULL)
+		return;   /* file doesn't exist yet — that's fine */
+
+	while(fgets(line, sizeof(line), fp) != NULL)
+	{
+		char *nl, *tab;
+
+		nl = strchr(line, '\n');
+		if(nl != NULL) *nl = '\0';
+
+		if(line[0] == '#' || line[0] == '\0')
+			continue;
+
+		tab = strchr(line, '\t');
+		if(tab == NULL)
+			continue;
+		*tab = '\0';
+
+		/* Avoid duplicate entries. */
+		if(rb_dictionary_retrieve(discord_account_cache, line) == NULL)
+			rb_dictionary_add(discord_account_cache,
+					  rb_strdup(line),
+					  rb_strdup(tab + 1));
+	}
+	fclose(fp);
+}
+
+/* -------------------------------------------------------------------------
+ * h_account_login hook — persist discord_uid → NickServ account mapping
+ *
+ * Fires when services sends SU <uid> <account> to mark a user as identified.
+ * If the client is a Discord phantom (host == "discord.invalid"), we save
+ * the discord_uid → account mapping so future sessions can pre-identify.
+ * ---------------------------------------------------------------------- */
+
+static void
+hook_discord_account_login(void *vdata)
+{
+	hook_data_account_login *data = vdata;
+	struct Client *client = data->source_p;
+	const char *discord_uid;
+	char *old_account;
+
+	if(client == NULL || EmptyString(data->account_name))
+		return;
+
+	/* Is this a Discord phantom?  Phantoms have "discord.invalid" as host. */
+	if(strcmp(client->host, "discord.invalid") != 0)
+		return;
+
+	/* sockhost holds the Discord snowflake (set in find_or_create_phantom). */
+	discord_uid = client->sockhost;
+	if(EmptyString(discord_uid) ||
+	   strcmp(discord_uid, "discord.invalid") == 0)
+		return;
+
+	if(discord_account_cache == NULL)
+		return;
+
+	/* Update or insert the mapping. */
+	old_account = rb_dictionary_retrieve(discord_account_cache, discord_uid);
+	if(old_account != NULL)
+	{
+		rb_free(old_account);
+		rb_dictionary_delete(discord_account_cache, discord_uid);
+	}
+	rb_dictionary_add(discord_account_cache,
+			  rb_strdup(discord_uid),
+			  rb_strdup(data->account_name));
+
+	ilog(L_MAIN, "discord: linked %s (Discord) → %s (NickServ)",
+	     discord_uid, data->account_name);
+
+	save_discord_accounts();
+}
+
+/* -------------------------------------------------------------------------
  * Public interface
  * ---------------------------------------------------------------------- */
 
@@ -867,12 +1092,18 @@ init_discordproc(void)
 					       rb_strcasecmp);
 	irc_to_discord  = rb_dictionary_create("irc->discord channel map",
 					       rb_strcasecmp);
+	discord_account_cache = rb_dictionary_create("discord account cache",
+						     rb_strcasecmp);
 
 	memset(&discord_config, 0, sizeof(discord_config));
+
+	/* Load persisted discord_uid → NickServ account mappings. */
+	load_discord_accounts();
 
 	/* Register channel message hooks. */
 	add_hook("privmsg_channel", hook_discord_privmsg);
 	add_hook("tagmsg_channel",  hook_discord_tagmsg);
+	add_hook("account_login",   hook_discord_account_login);
 
 	ilog(L_MAIN, "Discord bridge subsystem initialised");
 }

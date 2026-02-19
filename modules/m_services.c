@@ -134,7 +134,16 @@ me_su(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 	if(EmptyString(parv[2]))
 		target_p->user->suser[0] = '\0';
 	else
+	{
 		rb_strlcpy(target_p->user->suser, parv[2], sizeof(target_p->user->suser));
+
+		/* Notify subsystems (e.g. Discord bridge) that an account login occurred. */
+		hook_data_account_login hdata = {
+			.source_p    = target_p,
+			.account_name = target_p->user->suser,
+		};
+		call_hook(h_account_login, &hdata);
+	}
 
 	sendto_common_channels_local_butone(target_p, CLICAP_ACCOUNT_NOTIFY, NOCAPS, ":%s!%s@%s ACCOUNT %s",
 					    target_p->name, target_p->username, target_p->host,
