@@ -195,8 +195,8 @@ rb_select_select(long delay)
 
 	for(;;)
 	{
-		to.tv_sec = 0;
-		to.tv_usec = delay * 1000;
+		to.tv_sec = delay / 1000;
+		to.tv_usec = (delay % 1000) * 1000;
 		num = select(rb_maxfd + 1, &tmpreadfds, &tmpwritefds, NULL, &to);
 		if(num >= 0)
 			break;
