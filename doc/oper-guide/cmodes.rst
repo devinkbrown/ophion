@@ -211,12 +211,29 @@ This makes it less likely modes, bans and the topic will be lost and
 makes it harder to abuse network splits, but also causes more unwanted
 restoring of old modes, bans and topics after long splits.
 
-``+q``, quiet
--------------
+``+q``, channel admin
+---------------------
 
-This mode behaves exactly like ``+b`` (ban), except that the user may still
-join the channel. The net effect is that they cannot knock on the
-channel, send to the channel or change their nick while on channel.
+.. note:: In Ophion, ``+q`` is a **membership status mode** (channel admin,
+          prefix ``~``), not the quiet ban-like mode found in standard
+          charybdis.  Users with ``+q`` are channel administrators.
+
+This mode takes one parameter (a nick) and grants or removes channel-admin
+status to that user.  Channel admins have the highest privilege level within
+a channel (``CHFL_ADMIN``) and can perform all chanop operations as well as
+grant or remove ``+q`` and ``+o`` from other users.
+
+Setting or removing ``+q`` requires the source to already have
+``CHFL_ADMIN`` access (i.e., be a channel admin or have god mode with an
+admin-level ceiling).
+
+When ``oper_auto_op = yes`` is set in ``ircd.conf``, IRC operators and
+server admins automatically receive ``+q`` on channel join (unless they have
+the ``oper:auto_op`` privilege, which limits them to ``+o`` instead).
+
+In most clients channel admins are marked with a ``~`` (tilde) prefix.
+
+The privilege is lost if the user leaves the channel or server.
 
 ``+Q``, block forwarded users
 -----------------------------

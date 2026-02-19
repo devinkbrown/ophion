@@ -117,20 +117,77 @@ oper:xline, xline and unxline
 
 Allows using ``XLINE`` and ``UNXLINE``, to ban/unban users by realname.
 
-oper:autoowner, automatic channel owner
----------------------------------------
+oper:god, god mode
+------------------
 
-When an oper with this privilege joins any channel, they are automatically
-granted channel owner (``+q``) status. This is useful for server administrators
-who need full control over channels.
+Allows the operator to activate god mode (umode ``+G``).  When god mode is
+enabled the operator can:
 
-Configure in ``privset{}`` blocks::
+- Join any channel regardless of bans, keys, invite-only, limits, or other
+  restrictions.
+- Change any channel mode even without being a member or having channel-op
+  status.
+- Kick any user from any channel.
+- Send to any channel regardless of moderation (``+m``, ``+n``) or bans.
+- Modify any channel PROP (property) from outside the channel.
+- Modify any channel ACCESS entry from outside the channel.
 
-    privset "admin" {
-        privs = oper:admin, oper:autoowner;
+All god mode actions are logged to the oper snomask (``+s``/``+g``) for
+auditing.  The access level granted by god mode is subject to the oper's
+configured channel ceiling (see ``oper:auto_op`` and ``oper:auto_admin``
+below).
+
+Provided by the ``m_ircx_oper_godmode`` module.
+
+oper:auto\_op, channel-operator auto-join level
+------------------------------------------------
+
+When this privilege is present in an oper's privset **without**
+``oper:auto_admin``, the oper automatically joins channels with ``+o``
+(channel-operator) when ``oper_auto_op = yes`` in ``ircd.conf``.
+
+Crucially, this also sets the oper's **channel access ceiling** to
+``CHFL_CHANOP``.  Even in god mode (``+G``), this oper cannot:
+
+- Grant or remove ``+q`` (channel-admin) status from any user.
+- Perform any operation requiring admin-level (``CHFL_ADMIN``) access.
+- Exceed chanop level when modifying channel properties (PROPs).
+
+They can still kick users, set ``+o``/``+v``/``+b``, and do all other
+chanop-level operations.
+
+IRC server admins (``IsAdmin``) are **never** subject to this ceiling;
+the privilege is only meaningful for non-admin IRC operators.
+
+Provided by the ``m_ircx_oper_godmode`` module.
+
+oper:auto\_admin, channel-admin auto-join level
+------------------------------------------------
+
+When this privilege is present, the oper automatically joins channels with
+``+q`` (channel-admin, prefix ``~``) when ``oper_auto_op = yes`` in
+``ircd.conf``.  This gives full ``CHFL_ADMIN`` channel access with no
+ceiling.
+
+``oper:auto_admin`` overrides ``oper:auto_op`` if both are present in the
+same privset.
+
+Not required if the global ``oper_auto_op = yes`` and the oper does not
+have ``oper:auto_op`` (the default level without any per-oper override is
+already ``+q``).
+
+Provided by the ``m_ircx_oper_godmode`` module.
+
+Example privset configuration::
+
+    privset "chanop_oper" {
+        privs = oper:local_kill, oper:routing, oper:auto_op;
     };
 
-Provided by the ``m_ircx_oper_autoowner`` module.
+    privset "server_admin" {
+        extends = "chanop_oper";
+        privs = oper:god, oper:auto_admin;
+    };
 
 snomask:nick\_changes, see nick changes
 ---------------------------------------

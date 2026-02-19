@@ -23,6 +23,23 @@ Support of this umode is indicated by the ``DEAF`` token in ``RPL_ISUPPORT``
 several common IRCD implementations have an umode like this (typically
 ``+d``) but do not have the token in 005.
 
+``+G``, god mode
+----------------
+
+.. note:: This umode is only available when the ``m_ircx_oper_godmode``
+          module is loaded, and requires the ``oper:god`` privilege.
+
+When set, the operator gains unrestricted access to all channel
+operations.  See ``oper:god`` in the oper privileges document for the
+full list of capabilities.
+
+The access level granted by god mode may be subject to a per-oper ceiling
+based on the ``oper:auto_op`` / ``oper:auto_admin`` privileges.  IRC server
+admins (``+a``) are always unrestricted.
+
+God mode is automatically cleared when the operator de-opers (loses
+umode ``+o``).
+
 ``+g``, Caller ID
 -----------------
 
