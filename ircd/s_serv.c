@@ -102,6 +102,7 @@ unsigned int CLICAP_MESSAGE_TAGS;
 unsigned int CLICAP_BATCH;
 unsigned int CLICAP_SETNAME;
 unsigned int CLICAP_LABELED_RESPONSE;
+unsigned int CLICAP_STANDARD_REPLIES;
 
 /*
  * initialize our builtin capability table. --nenolod
@@ -155,6 +156,7 @@ init_builtin_capabs(void)
 	CLICAP_BATCH = capability_put(cli_capindex, "batch", NULL);
 	CLICAP_SETNAME = capability_put(cli_capindex, "setname", NULL);
 	CLICAP_LABELED_RESPONSE = capability_put(cli_capindex, "labeled-response", NULL);
+	CLICAP_STANDARD_REPLIES = capability_put(cli_capindex, "standard-replies", NULL);
 }
 
 static CNCB serv_connect_callback;

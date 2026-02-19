@@ -36,6 +36,7 @@
 #include "ircd.h"
 #include "ircd_defs.h"
 #include "send.h"
+#include "s_conf.h"
 #include "s_serv.h"
 #include "numeric.h"
 #include "msg.h"
@@ -46,10 +47,11 @@ static const char m_setname_desc[] =
 	"Provides the setname client capability and SETNAME command";
 
 static void m_setname(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
+static void me_setname(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 
 struct Message setname_msgtab = {
 	"SETNAME", 0, 0, 0, 0,
-	{mg_unreg, {m_setname, 2}, mg_ignore, mg_ignore, mg_ignore, {m_setname, 2}}
+	{mg_unreg, {m_setname, 2}, mg_ignore, mg_ignore, {me_setname, 2}, {m_setname, 2}}
 };
 
 mapi_clist_av1 setname_clist[] = { &setname_msgtab, NULL };
@@ -104,6 +106,11 @@ m_setname(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 	/* Update the client's realname */
 	rb_strlcpy(source_p->info, new_realname, sizeof(source_p->info));
 
+	/* Propagate to other servers via ENCAP */
+	sendto_server(client_p, NULL, CAP_TS6, NOCAPS,
+		      ":%s ENCAP * SETNAME :%s",
+		      use_id(source_p), source_p->info);
+
 	/* Notify the sender (echo) */
 	sendto_one(source_p, ":%s!%s@%s SETNAME :%s",
 		   source_p->name, source_p->username, source_p->host,
@@ -111,6 +118,38 @@ m_setname(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 
 	/* Notify all users sharing a channel who have the setname capability */
 	sendto_common_channels_local_butone(source_p, CLICAP_SETNAME, NOCAPS,
+		":%s!%s@%s SETNAME :%s",
+		source_p->name, source_p->username, source_p->host,
+		source_p->info);
+}
+
+/*
+ * me_setname
+ *
+ * ENCAP handler for SETNAME from a remote server.
+ * Updates the source client's realname and broadcasts to local users.
+ *
+ * parv[1] = new realname
+ */
+static void
+me_setname(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
+	   int parc, const char *parv[])
+{
+	if (!IsPerson(source_p))
+		return;
+
+	if (parc < 2 || EmptyString(parv[1]))
+		return;
+
+	const char *new_realname = parv[1];
+
+	if (strlen(new_realname) > REALLEN)
+		return;
+
+	rb_strlcpy(source_p->info, new_realname, sizeof(source_p->info));
+
+	/* Broadcast to local users sharing a channel with this remote user */
+	sendto_common_channels_local(source_p, CLICAP_SETNAME, NOCAPS,
 		":%s!%s@%s SETNAME :%s",
 		source_p->name, source_p->username, source_p->host,
 		source_p->info);

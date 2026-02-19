@@ -35,13 +35,16 @@
 #include "client.h"
 #include "ircd.h"
 #include "send.h"
+#include "s_conf.h"
 #include "s_serv.h"
+#include "s_newconf.h"
 #include "channel.h"
 #include "hash.h"
 #include "numeric.h"
 #include "msg.h"
 #include "parse.h"
 #include "msgbuf.h"
+#include "tgchange.h"
 #include "inline/stringops.h"
 
 static const char cap_message_tags_desc[] =
@@ -109,6 +112,8 @@ static void
 m_tagmsg(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 	 int parc, const char *parv[])
 {
+	int result;
+
 	if (parc < 2 || EmptyString(parv[1]))
 	{
 		sendto_one(source_p, form_str(ERR_NORECIPIENT),
@@ -126,6 +131,9 @@ m_tagmsg(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 		return;
 	}
 
+	if (!IsFloodDone(source_p))
+		flood_endgrace(source_p);
+
 	const char *target = parv[1];
 
 	if (IsChanPrefix(*target))
@@ -139,13 +147,34 @@ m_tagmsg(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 			return;
 		}
 
-		/* Only deliver to local members with message-tags; skip remote
-		 * servers – full network propagation requires server support. */
-		sendto_channel_local_with_capability_butone(source_p, ALL_MEMBERS,
-			CLICAP_MESSAGE_TAGS, NOCAPS, chptr,
-			":%s!%s@%s TAGMSG %s",
-			source_p->name, source_p->username, source_p->host,
-			chptr->chname);
+		/* Enforce can_send() – same checks as PRIVMSG/NOTICE */
+		if ((result = can_send(chptr, source_p, NULL)))
+		{
+			if (result != CAN_SEND_OPV &&
+			    !IsOperGeneral(source_p) &&
+			    !add_channel_target(source_p, chptr))
+			{
+				sendto_one(source_p, form_str(ERR_TARGCHANGE),
+					   me.name, source_p->name, chptr->chname);
+				return;
+			}
+
+			if (result == CAN_SEND_OPV ||
+			    !flood_attack_channel(MESSAGE_TYPE_PRIVMSG, source_p, chptr, chptr->chname))
+			{
+				sendto_channel_local_with_capability_butone(source_p, ALL_MEMBERS,
+					CLICAP_MESSAGE_TAGS, NOCAPS, chptr,
+					":%s!%s@%s TAGMSG %s",
+					source_p->name, source_p->username, source_p->host,
+					chptr->chname);
+			}
+		}
+		else
+		{
+			sendto_one_numeric(source_p, ERR_CANNOTSENDTOCHAN,
+					   form_str(ERR_CANNOTSENDTOCHAN), chptr->chname);
+			return;
+		}
 
 		/* Echo back to sender if they have echo-message */
 		if (IsCapable(source_p, CLICAP_ECHO_MESSAGE))
@@ -164,13 +193,26 @@ m_tagmsg(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 			return;
 		}
 
+		/* Target change tracking */
+		if (ConfigFileEntry.target_change && !IsOperGeneral(source_p) &&
+		    !find_allowing_channel(source_p, target_p) &&
+		    !add_target(source_p, target_p))
+		{
+			sendto_one(source_p, form_str(ERR_TARGCHANGE),
+				   me.name, source_p->name, target_p->name);
+			return;
+		}
+
 		if (MyClient(target_p))
 		{
 			/* Only deliver if target has message-tags */
 			if (IsCapable(target_p, CLICAP_MESSAGE_TAGS))
+			{
+				add_reply_target(target_p, source_p);
 				sendto_one(target_p, ":%s!%s@%s TAGMSG %s",
 					   source_p->name, source_p->username, source_p->host,
 					   target_p->name);
+			}
 		}
 		else
 		{
