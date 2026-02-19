@@ -64,6 +64,7 @@ struct Channel
 	rb_dlink_list banlist;
 	rb_dlink_list exceptlist;
 	rb_dlink_list invexlist;
+	rb_dlink_list quietlist;	/* +Z: users can join but cannot speak */
 
 	time_t first_received_message_time;	/* channel flood control */
 	int received_number_of_privmsgs;
@@ -189,6 +190,7 @@ typedef int (*ExtbanFunc)(const char *data, struct Client *client_p,
 #define CHFL_BAN        0x10000000	/* ban channel flag */
 #define CHFL_EXCEPTION  0x20000000	/* exception to ban channel flag */
 #define CHFL_INVEX      0x40000000
+#define CHFL_QUIET      0x08000000	/* quiet/mute ban-list flag (+Z) */
 
 #define CHFL_ACL	(CHFL_EXCEPTION | CHFL_INVEX)
 
@@ -234,6 +236,8 @@ struct matchset;
 extern int is_banned(struct Channel *chptr, struct Client *who,
                      struct membership *msptr, const struct matchset *ms,
                      const char **);
+extern int is_quieted(struct Channel *chptr, struct Client *who,
+                      struct membership *msptr);
 extern int can_join(struct Client *source_p, struct Channel *chptr,
 		    const char *key, const char **forward);
 

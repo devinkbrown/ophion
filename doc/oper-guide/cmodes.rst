@@ -211,12 +211,29 @@ This makes it less likely modes, bans and the topic will be lost and
 makes it harder to abuse network splits, but also causes more unwanted
 restoring of old modes, bans and topics after long splits.
 
-``+q``, quiet
--------------
+``+q``, channel admin
+---------------------
 
-This mode behaves exactly like ``+b`` (ban), except that the user may still
-join the channel. The net effect is that they cannot knock on the
-channel, send to the channel or change their nick while on channel.
+.. note:: In Ophion, ``+q`` is a **membership status mode** (channel admin,
+          prefix ``~``), not the quiet ban-like mode found in standard
+          charybdis.  Users with ``+q`` are channel administrators.
+
+This mode takes one parameter (a nick) and grants or removes channel-admin
+status to that user.  Channel admins have the highest privilege level within
+a channel (``CHFL_ADMIN``) and can perform all chanop operations as well as
+grant or remove ``+q`` and ``+o`` from other users.
+
+Setting or removing ``+q`` requires the source to already have
+``CHFL_ADMIN`` access (i.e., be a channel admin or have god mode with an
+admin-level ceiling).
+
+When ``oper_auto_op = yes`` is set in ``ircd.conf``, IRC operators and
+server admins automatically receive ``+q`` on channel join (unless they have
+the ``oper:auto_op`` privilege, which limits them to ``+o`` instead).
+
+In most clients channel admins are marked with a ``~`` (tilde) prefix.
+
+The privilege is lost if the user leaves the channel or server.
 
 ``+Q``, block forwarded users
 -----------------------------
@@ -274,6 +291,34 @@ This mode takes one parameter, the name of a channel (``+y
 somebody attempts to join without either being explicitly invited, or
 having an invex (``+I``), then they will instead join the channel
 named in the mode parameter.
+
+``+Z``, quiet/mute list
+-----------------------
+
+.. note:: In standard charybdis ``+q`` was the quiet mode.  In Ophion ``+q``
+          has been repurposed as channel-admin status (see above), and the
+          quiet/mute functionality has been moved to ``+Z``.
+
+This mode takes one parameter of the same form as bans (``nick!user@host``
+masks, CIDR, extbans, etc.).  Users matching the ``+Z`` list may join the
+channel and are visible in ``/NAMES``, but any attempt to send a message to
+the channel is silently blocked.
+
+Unlike ``+b``, a ``+Z`` quiet entry does **not** prevent the user from
+joining.  ``+e`` (ban exceptions) also lift the quiet restriction —
+a user who matches both ``+Z`` and ``+e`` can speak normally.
+
+IRC operators and server admins bypass ``+Z`` entirely when
+``oper_kick_protection = yes`` is set — their messages are elevated to
+``CAN_SEND_OPV`` by the godmode hook regardless of any quiet entries.
+
+Non-operators cannot add a ``+Z`` entry that matches a current IRC operator
+or server admin on the channel when ``oper_kick_protection`` is enabled.
+
+``+Z`` entries can also be added and removed via the ``ACCESS`` command::
+
+    ACCESS #channel ADD nick!user@host QUIET
+    ACCESS #channel DEL nick!user@host
 
 ``+z``, SERVICE (IRCX)
 -----------------------

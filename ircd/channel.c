@@ -676,6 +676,59 @@ is_banned_list(struct Channel *chptr, rb_dlink_list *list,
 	return ((actualBan ? CHFL_BAN : 0));
 }
 
+/* is_quieted()
+ *
+ * input	- channel, user to check, optional membership
+ * output	- CHFL_QUIET if the user matches the +Z quiet list and is not
+ *                exempted by +e; 0 otherwise
+ * side effects -
+ *
+ * Like is_banned() but checks the quietlist instead of banlist.  Users on
+ * the quiet list can still join the channel but cannot send messages.
+ * +e (ban exceptions) also lift the quiet restriction.
+ *
+ * IRC operators / server admins bypass the quiet check when
+ * oper_kick_protection is enabled — the can_send hook in m_ircx_oper_godmode
+ * handles elevating CAN_SEND_NO to CAN_SEND_OPV for them.
+ */
+int
+is_quieted(struct Channel *chptr, struct Client *who, struct membership *msptr)
+{
+	struct matchset ms;
+	rb_dlink_node *ptr;
+	struct Ban *ban;
+
+	if (!MyClient(who))
+		return 0;
+
+	matchset_for_client(who, &ms);
+
+	/* Check the quiet list. */
+	RB_DLINK_FOREACH(ptr, chptr->quietlist.head)
+	{
+		ban = ptr->data;
+		if (matches_mask(&ms, ban->banstr) ||
+		    match_extban(ban->banstr, who, chptr, CHFL_QUIET))
+			goto check_exception;
+	}
+	return 0;
+
+check_exception:
+	/* +e (ban exceptions) also lift the quiet restriction. */
+	if (ConfigChannel.use_except)
+	{
+		RB_DLINK_FOREACH(ptr, chptr->exceptlist.head)
+		{
+			ban = ptr->data;
+			if (matches_mask(&ms, ban->banstr) ||
+			    match_extban(ban->banstr, who, chptr, CHFL_EXCEPTION))
+				return 0;
+		}
+	}
+
+	return CHFL_QUIET;
+}
+
 /* is_banned()
  *
  * input	- channel to check bans for, user to check bans against
@@ -851,6 +904,10 @@ can_send(struct Channel *chptr, struct Client *source_p, struct membership *mspt
 				moduledata.approved = CAN_SEND_NO;
 		}
 		else if(is_banned(chptr, source_p, msptr, NULL, NULL) == CHFL_BAN)
+			moduledata.approved = CAN_SEND_NO;
+
+		/* +Z quiet mode: user may be in the channel but cannot send. */
+		if(is_quieted(chptr, source_p, msptr) == CHFL_QUIET)
 			moduledata.approved = CAN_SEND_NO;
 	}
 

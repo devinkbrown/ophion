@@ -21,6 +21,9 @@
  *      If the user is not identified, and NickServ is loaded, they receive
  *      a notice explaining how to run !identify from Discord.
  *
+ *   4. Implements IRC operator protection in concert with Ophion's
+ *      oper_kick_protection ircd.conf flag (see below).
+ *
  * Discord phantom clients
  * -----------------------
  * Phantom clients (representing Discord users) have:
@@ -49,6 +52,34 @@
  * from the phantom's UID.  On success, NickServ sends SU <uid> <account>,
  * which Ophion records in discord_accounts.db and uses to pre-identify
  * future sessions for that Discord user.
+ *
+ * IRC Operator Protection
+ * -----------------------
+ * When oper_kick_protection = yes is set in Ophion's ircd.conf (general {}
+ * block), the following protections are enforced at the IRCd level:
+ *
+ *   - IRC operators and server admins (O-lined users) cannot be kicked from
+ *     any channel by non-oper sources, INCLUDING ChanServ's AKICK and
+ *     RESTRICTED mode enforcement.  Ophion's KICK handler (m_kick.c)
+ *     rejects these kicks before they are applied, so ChanServ's KICK
+ *     commands are silently dropped.
+ *
+ *   - Non-operators cannot remove channel-operator (+o) or voice (+v) from
+ *     an IRC oper via MODE commands.  Ophion's chmode.c enforces this.
+ *
+ *   - IRC opers can override channel moderation (+m, +n) and send freely.
+ *
+ *   - When oper_auto_op = yes is set, IRC opers are automatically given
+ *     +o status on channel join.
+ *
+ * Because the oper protection is enforced at the IRCd protocol level,
+ * Atheme/ChanServ automatically "respects" it — its KICK and MODE commands
+ * are rejected by Ophion before they take effect.  No special Atheme
+ * configuration is required.
+ *
+ * This module additionally hooks channel_join to give opers a notice
+ * when they join a channel that has RESTRICTED mode set, warning them
+ * that normal users would be kicked but they are protected.
  *
  * Services are optional
  * ---------------------
@@ -106,6 +137,18 @@ static inline bool
 is_discord_phantom(const struct user *u)
 {
 	return u != NULL && strcmp(u->host, "discord.invalid") == 0;
+}
+
+/*
+ * is_irc_oper - returns true if the user carries IRC operator status.
+ *
+ * In Atheme, the user's umode string from the UID burst is stored in
+ * u->modes as a bitmask.  The +o umode corresponds to UF_IRCOP.
+ */
+static inline bool
+is_irc_oper(const struct user *u)
+{
+	return u != NULL && (u->flags & UF_IRCOP);
 }
 
 /*
@@ -171,6 +214,62 @@ ophion_user_identify(struct user *u)
 	 */
 }
 
+/*
+ * ophion_channel_join - fired when any user joins a channel.
+ *
+ * For IRC operators: if ChanServ is loaded and the channel has RESTRICTED
+ * mode set, send the oper a notice that they are protected and will not
+ * be kicked.  (The actual kick protection is enforced at the IRCd level
+ * in m_kick.c — this is an informational notice only.)
+ *
+ * For unidentified Discord phantoms in restricted channels: the phantom
+ * may be kicked by ChanServ's RESTRICTED enforcement.  The oper notice
+ * is only relevant for real IRC operators.
+ *
+ * Services are optional: if chansvs.me == NULL, this is a no-op.
+ */
+static void
+ophion_channel_join(hook_channel_joinpart_t *data)
+{
+	struct chanuser *cu = data->cu;
+	struct user *u;
+	struct channel *ch;
+	struct mychan *mc;
+
+	if (cu == NULL)
+		return;
+
+	u  = cu->user;
+	ch = cu->chan;
+
+	if (!is_irc_oper(u))
+		return;
+
+	/* Services are optional. */
+	if (chansvs.me == NULL)
+		return;
+
+	mc = mychan_find(ch->name);
+	if (mc == NULL)
+		return;
+
+	/*
+	 * If the channel is RESTRICTED, inform the oper that normal users
+	 * without access would be kicked but that their IRC oper status
+	 * protects them.  The IRCd will reject any KICK attempt against
+	 * them from ChanServ.
+	 */
+	if (mc->flags & MC_RESTRICTED)
+	{
+		notice(chansvs.nick, u->nick,
+		       "[\x02%s\x02] This channel has RESTRICTED mode set. "
+		       "Your IRC operator status protects you from being kicked. "
+		       "ChanServ kick commands against IRC operators are blocked "
+		       "at the IRCd level by Ophion's oper protection.",
+		       ch->name);
+	}
+}
+
 static void
 mod_init(struct module *const restrict m)
 {
@@ -186,6 +285,13 @@ mod_init(struct module *const restrict m)
 	/* Register Discord-bridge-aware hooks. */
 	hook_add_user_add(ophion_user_add);
 	hook_add_user_identify(ophion_user_identify);
+
+	/*
+	 * Register the channel join hook for oper protection notices.
+	 * This informs IRC operators when they join RESTRICTED channels
+	 * that they are protected from ChanServ kicks at the IRCd level.
+	 */
+	hook_add_channel_join(ophion_channel_join);
 }
 
 static void
@@ -193,6 +299,7 @@ mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	hook_del_user_add(ophion_user_add);
 	hook_del_user_identify(ophion_user_identify);
+	hook_del_channel_join(ophion_channel_join);
 }
 
 SIMPLE_DECLARE_MODULE_V1("protocol/ophion", MODULE_UNLOAD_CAPABILITY_NEVER)

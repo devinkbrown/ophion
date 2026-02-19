@@ -36,6 +36,7 @@
 #include "packet.h"
 #include "s_serv.h"
 #include "hook.h"
+#include "s_conf.h"
 
 static const char kick_desc[] = "Provides the KICK command to remove a user from a channel";
 
@@ -135,6 +136,35 @@ m_kick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		{
 			sendto_one(source_p, form_str(ERR_ISCHANSERVICE),
 				   me.name, source_p->name, who->name, chptr->chname);
+			return;
+		}
+
+		/*
+		 * Oper kick protection — applies to ALL sources, including
+		 * services (e.g. ChanServ AKICK / RESTRICTED mode kicks).
+		 *
+		 * When oper_kick_protection is enabled in ircd.conf:
+		 *   - O-lined users (IRC operators and admins) cannot be kicked
+		 *     from any channel by a non-oper source.
+		 *   - An IRC oper CAN still kick another IRC oper.
+		 *   - This is enforced here (not just via h_can_kick) so that
+		 *     server-sourced KICK commands from services are also blocked.
+		 *
+		 * A notice is sent back to local sources; remote sources (e.g.
+		 * ChanServ) are silently rejected (the kick is not applied).
+		 */
+		if(!IsServer(source_p) &&
+		   ConfigFileEntry.oper_kick_protection &&
+		   (IsOper(who) || IsAdmin(who)) &&
+		   !(IsOper(source_p) || IsAdmin(source_p)))
+		{
+			if(MyClient(source_p))
+				sendto_one_numeric(source_p, ERR_ISCHANSERVICE,
+					"%s %s :IRC operators cannot be kicked from channels.",
+					who->name, chptr->chname);
+			sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+				"%s attempted to kick oper %s from %s (blocked: oper_kick_protection)",
+				source_p->name, who->name, chptr->chname);
 			return;
 		}
 

@@ -245,6 +245,23 @@ struct config_file_entry
 
 	char *drain_reason;
 	char *cloaking_style;
+
+	/*
+	 * Oper protection flags.
+	 *
+	 * oper_kick_protection: when enabled, O-lined users (IRC operators and
+	 *   admins) cannot be kicked from any channel by non-opers.  Any kick
+	 *   attempt against an oper is denied with an error notice.
+	 *
+	 * oper_auto_op: when enabled, IRC operators and admins are
+	 *   automatically given channel-operator status (+o) upon joining any
+	 *   channel they are not already opped in.
+	 *
+	 * Both flags default to off (0) so that stock charybdis behaviour is
+	 * preserved unless explicitly enabled in ircd.conf.
+	 */
+	int oper_kick_protection;
+	int oper_auto_op;
 };
 
 struct config_channel_entry

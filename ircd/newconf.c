@@ -2791,6 +2791,8 @@ static struct ConfEntry conf_general_table[] =
 	{ "drain_reason",	CF_QSTRING, NULL, BUFSIZE, &ConfigFileEntry.drain_reason	},
 	{ "cloaking_style",	CF_QSTRING, NULL, BUFSIZE, &ConfigFileEntry.cloaking_style	},
 	{ "tls_ciphers_oper_only",	CF_YESNO, NULL, 0, &ConfigFileEntry.tls_ciphers_oper_only	},
+	{ "oper_kick_protection",	CF_YESNO, NULL, 0, &ConfigFileEntry.oper_kick_protection	},
+	{ "oper_auto_op",		CF_YESNO, NULL, 0, &ConfigFileEntry.oper_auto_op		},
 	{ "\0", 		0, 	  NULL, 0, NULL }
 };
 
