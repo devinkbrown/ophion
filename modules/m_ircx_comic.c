@@ -268,8 +268,9 @@ h_comic_prop_user_write(void *vdata)
 		return;
 	}
 
-	/* validate base64 encoding for MCC data payload */
-	if (!rb_strcasecmp(data->key, "MCC") && data->value != NULL)
+	/* validate base64 encoding for MCC and MCCEX data payloads */
+	if ((!rb_strcasecmp(data->key, "MCC") || !rb_strcasecmp(data->key, "MCCEX")) &&
+	    data->value != NULL)
 	{
 		if (!is_valid_base64(data->value))
 		{

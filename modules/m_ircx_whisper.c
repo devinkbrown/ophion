@@ -194,6 +194,9 @@ m_whisper(struct MsgBuf *msgbuf_p, struct Client *client_p,
  * ms_whisper - WHISPER command handler (server-to-server)
  *
  * :<uid> WHISPER #channel <target-uid> :message
+ *
+ * Both sender and target must be members of the channel.
+ * The channel must not have +w (NOWHISPER) set.
  */
 static void
 ms_whisper(struct MsgBuf *msgbuf_p, struct Client *client_p,
@@ -208,8 +211,20 @@ ms_whisper(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	if (chptr == NULL)
 		return;
 
+	/* sender must be in the channel */
+	if (find_channel_membership(chptr, source_p) == NULL)
+		return;
+
+	/* channel must not have +w */
+	if (chptr->mode.mode & MODE_NOWHISPER)
+		return;
+
 	target_p = find_person(parv[2]);
 	if (target_p == NULL)
+		return;
+
+	/* target must be in the channel */
+	if (find_channel_membership(chptr, target_p) == NULL)
 		return;
 
 	if (MyClient(target_p))
