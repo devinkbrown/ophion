@@ -1,11 +1,13 @@
-.. Charybdis operator guide documentation master file, created by
-   sphinx-quickstart on Sat Mar 25 10:41:29 2017.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+.. Ophion operator guide documentation master file
 
 ============================================
-Operators guide for the charybdis IRC server
+Operators guide for the Ophion IRC server
 ============================================
+
+Ophion is a chat service built on charybdis, implementing IRCv3 and
+relevant parts of the IRCX specification (draft-pfenning-irc-extensions-04).
+This guide covers both the standard charybdis operator functionality and
+the IRCX extensions.
 
 Contents:
 

@@ -9,6 +9,8 @@
  *   +h  HIDDEN     - Channel not listed via LIST/LISTX but queryable by name
  *   +a  AUTHONLY   - Only authenticated (PASS/AUTH'd) users may join
  *   +d  CLONEABLE  - Channel creates numbered clones when full
+ *   +E  CLONE      - Marks channel as a clone of a CLONEABLE channel
+ *                     (IRCX +e, remapped to +E to avoid ban exception conflict)
  *   +f  NOFORMAT   - Raw text, clients should not format messages
  *   +z  SERVICE    - Indicates a service is monitoring the channel
  *
@@ -44,13 +46,14 @@
 
 static const char ircx_modes_desc[] =
 	"Provides all IRCX channel modes: +u (knock), +h (hidden), +a (authonly), "
-	"+d (cloneable), +f (noformat), +z (service)";
+	"+d (cloneable), +E (clone), +f (noformat), +z (service)";
 
 /* Allocated mode bits */
 static unsigned int MODE_KNOCK;	/* +u */
 static unsigned int MODE_HIDDEN_IRCX;	/* +h */
 static unsigned int MODE_AUTHONLY;	/* +a */
 static unsigned int MODE_CLONEABLE;	/* +d */
+static unsigned int MODE_CLONE;	/* +E (IRCX +e, remapped to avoid ban exception conflict) */
 
 /* Overridden mode bits for +f and +z */
 static unsigned int MODE_NOFORMAT;	/* +f (replaces forwarding) */
@@ -196,7 +199,7 @@ ircx_modes_init(void)
 	 * Register IRCX modes on available slots via cflag_add.
 	 */
 
-	/* +u: NOKNOCK */
+	/* +u: KNOCK - enables KNOCK notifications to channel hosts/owners */
 	MODE_KNOCK = cflag_add('u', chm_simple);
 	if (MODE_KNOCK == 0)
 		return -1;
@@ -214,6 +217,15 @@ ircx_modes_init(void)
 	/* +d: CLONEABLE */
 	MODE_CLONEABLE = cflag_add('d', chm_simple);
 	if (MODE_CLONEABLE == 0)
+		return -1;
+
+	/* +E: CLONE (IRCX +e remapped to +E; +e is ban exceptions in charybdis)
+	 * Per IRCX spec section 8.1.17: indicates this channel is a numbered
+	 * clone of a CLONEABLE (+d) channel.  Set automatically by the server
+	 * when a clone channel is created.  Oper-only set for manual use.
+	 */
+	MODE_CLONE = cflag_add('E', chm_simple);
+	if (MODE_CLONE == 0)
 		return -1;
 
 	/*
@@ -249,6 +261,7 @@ ircx_modes_deinit(void)
 	cflag_orphan('h');
 	cflag_orphan('a');
 	cflag_orphan('d');
+	cflag_orphan('E');
 
 	/* Restore original +f and +z handlers */
 	chmode_table[(unsigned char)'f'] = saved_mode_f;
