@@ -652,7 +652,7 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	{
 		switch (*(s++))
 		{
-		case 'f':
+		case 'y':
 			rb_strlcpy(mode.forward, parv[4 + args], sizeof(mode.forward));
 			args++;
 			if(parc < 5 + args)
@@ -1266,7 +1266,7 @@ set_final_mode(char *mbuf, char *parabuf, struct Mode *mode, struct Mode *oldmod
 			*mbuf++ = '+';
 			dir = MODE_ADD;
 		}
-		*mbuf++ = 'f';
+		*mbuf++ = 'y';
 		len = sprintf(pbuf, "%s ", mode->forward);
 		pbuf += len;
 	}

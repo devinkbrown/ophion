@@ -20,7 +20,7 @@ NO PARAMETERS:
               messages is stripped.
      +g     - Free invite.  Everyone may invite users.  Significantly
               weakens +i control.
-     +z     - Op moderated.  Messages blocked by +m, +b and +q are instead
+     +M     - Op moderated.  Messages blocked by +m, +b and +q are instead
               sent to ops.
      +L     - Large ban list.  Increase maximum number of +beIq entries.
               Only settable by opers.
@@ -39,9 +39,9 @@ NO PARAMETERS:
               mode is set. Users already in the channel are not affected.
 
 WITH PARAMETERS:
-     +f     - Forward.  Forwards users who cannot join because of +i,
+     +y     - Forward.  Forwards users who cannot join because of +i,
               +j, +l or +r.
-              PARAMS: /mode #channel +f #channel2
+              PARAMS: /mode #channel +y #channel2
      +j     - Join throttle.  Limits number of joins to the channel per time.
               PARAMS: /mode #channel +j count:time
      +k     - Key.  Requires users to issue /join #channel KEY to join.

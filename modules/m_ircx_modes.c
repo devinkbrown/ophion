@@ -29,9 +29,9 @@
  * When +h is set, +p and +s are cleared.  When +p or +s is set, +h is cleared.
  * This mutual exclusivity follows the IRCX draft.
  *
- * Note: +f overrides the charybdis forwarding mode, +z overrides opmoderate,
- * and +r overrides charybdis REGONLY (use +a AUTHONLY instead).
- * The original modes are saved and restored when this module is unloaded.
+ * Note: +f and +z are free slots in the base mode table (forwarding moved
+ * to +y, opmoderate moved to +M).  +r overrides charybdis REGONLY (use
+ * +a AUTHONLY instead); the original +r is saved and restored on unload.
  */
 
 #include "stdinc.h"
@@ -63,15 +63,13 @@ static unsigned int MODE_AUTHONLY;	/* +a */
 static unsigned int MODE_CLONEABLE;	/* +d */
 static unsigned int MODE_CLONE;	/* +E (IRCX +e, remapped to avoid ban exception conflict) */
 
-/* Overridden mode bits for +f, +r, and +z */
-static unsigned int MODE_NOFORMAT;	/* +f (replaces forwarding) */
+/* Mode bits for +f, +r, and +z */
+static unsigned int MODE_NOFORMAT;	/* +f NOFORMAT */
 static unsigned int MODE_REGISTERED;	/* +r (replaces regonly) */
-static unsigned int MODE_IRCX_SERVICE;	/* +z (replaces opmoderate) */
+static unsigned int MODE_IRCX_SERVICE;	/* +z SERVICE */
 
-/* Saved original chmode_table entries for overridden modes */
-static struct ChannelMode saved_mode_f;
+/* Saved original chmode_table entry for +r (only mode that overrides a base entry) */
 static struct ChannelMode saved_mode_r;
-static struct ChannelMode saved_mode_z;
 static struct ChannelMode saved_mode_p;	/* +p PRIVATE: clears +h when set */
 static struct ChannelMode saved_mode_s;	/* +s SECRET: clears +h when set */
 
@@ -309,19 +307,28 @@ ircx_modes_init(void)
 		return -1;
 
 	/*
-	 * Override conflicting modes.  Save originals for clean unload.
+	 * +f and +z are free slots in the base table (forwarding is +y,
+	 * opmoderate is +M).  Just assign directly.
 	 */
 
-	/* +f: NOFORMAT (replaces charybdis forwarding) */
-	saved_mode_f = chmode_table[(unsigned char)'f'];
+	/* +f: NOFORMAT */
 	MODE_NOFORMAT = find_free_mode_bit();
 	if (MODE_NOFORMAT == 0)
 		return -1;
 	chmode_table[(unsigned char)'f'].set_func = chm_simple;
 	chmode_table[(unsigned char)'f'].mode_type = MODE_NOFORMAT;
 
-	/* +r: REGISTERED (replaces charybdis REGONLY; use +a for auth-only).
+	/* +z: SERVICE (oper-only) */
+	MODE_IRCX_SERVICE = find_free_mode_bit();
+	if (MODE_IRCX_SERVICE == 0)
+		return -1;
+	chmode_table[(unsigned char)'z'].set_func = chm_ircx_service;
+	chmode_table[(unsigned char)'z'].mode_type = MODE_IRCX_SERVICE;
+
+	/*
+	 * +r: REGISTERED (replaces charybdis REGONLY; use +a for auth-only).
 	 * Oper/service-only. Implies persistence (+P behavior).
+	 * Save original for clean unload.
 	 */
 	saved_mode_r = chmode_table[(unsigned char)'r'];
 	MODE_REGISTERED = find_free_mode_bit();
@@ -329,14 +336,6 @@ ircx_modes_init(void)
 		return -1;
 	chmode_table[(unsigned char)'r'].set_func = chm_ircx_registered;
 	chmode_table[(unsigned char)'r'].mode_type = MODE_REGISTERED;
-
-	/* +z: SERVICE (replaces charybdis opmoderate) */
-	saved_mode_z = chmode_table[(unsigned char)'z'];
-	MODE_IRCX_SERVICE = find_free_mode_bit();
-	if (MODE_IRCX_SERVICE == 0)
-		return -1;
-	chmode_table[(unsigned char)'z'].set_func = chm_ircx_service;
-	chmode_table[(unsigned char)'z'].mode_type = MODE_IRCX_SERVICE;
 
 	/*
 	 * +p and +s: bidirectional mutual exclusivity with +h (HIDDEN).
@@ -363,10 +362,14 @@ ircx_modes_deinit(void)
 	cflag_orphan('d');
 	cflag_orphan('E');
 
-	/* Restore original +f, +r, +z, +p, and +s handlers */
-	chmode_table[(unsigned char)'f'] = saved_mode_f;
+	/* Clear +f and +z (free slots, no original to restore) */
+	chmode_table[(unsigned char)'f'].set_func = chm_nosuch;
+	chmode_table[(unsigned char)'f'].mode_type = 0;
+	chmode_table[(unsigned char)'z'].set_func = chm_nosuch;
+	chmode_table[(unsigned char)'z'].mode_type = 0;
+
+	/* Restore original +r, +p, and +s handlers */
 	chmode_table[(unsigned char)'r'] = saved_mode_r;
-	chmode_table[(unsigned char)'z'] = saved_mode_z;
 	chmode_table[(unsigned char)'p'] = saved_mode_p;
 	chmode_table[(unsigned char)'s'] = saved_mode_s;
 

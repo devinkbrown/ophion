@@ -14,7 +14,7 @@ ip_cloaking.c  - Cloak (spoof) the host for users that have umode +h.
 m_adminwall.c  - Sends a message to all admins network-wide (umode +a)
                  Syntax: ADMINWALL :<message>
 
-m_findforwards.c - Find channels that forward (+f) to a given channel.
+m_findforwards.c - Find channels that forward (+y) to a given channel.
                    Syntax: FINDFORWARDS <channel>
 
 m_identify.c - Identifies to NickServ or ChanServ

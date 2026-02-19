@@ -13,10 +13,10 @@ IRCX Channel Modes (m_ircx_modes module)
   +a  AUTHONLY   - Only authenticated (services-identified) users may join
   +d  CLONEABLE  - Channel creates numbered clones when full
   +E  CLONE      - Marks channel as a clone of a +d channel (IRCX +e remapped)
-  +f  NOFORMAT   - Raw text only, clients should not format (overrides forwarding)
+  +f  NOFORMAT   - Raw text only, clients should not format
   +h  HIDDEN     - Not in LIST/LISTX but queryable by name
   +u  KNOCK      - Enables KNOCK notifications to channel hosts/owners
-  +z  SERVICE    - Service monitoring channel, oper-only (overrides opmoderate)
+  +z  SERVICE    - Service monitoring channel, oper-only
 
 IRCX Visibility Model (mutually exclusive)
   PUBLIC   - No mode flag (default). Visible in LIST, all data queryable.
@@ -100,7 +100,7 @@ IRCX Module List
   m_ircx_create           - CREATE command
   m_ircx_event            - EVENT command (CHANNEL/MEMBER/USER/SERVER/OPERSPY)
   m_ircx_listx            - LISTX command
-  m_ircx_modes            - All IRCX channel modes (+u/+h/+a/+d/+E/+f/+z)
+  m_ircx_modes            - All IRCX channel modes (+u/+h/+a/+d/+E/+f/+r/+z)
   m_ircx_oper             - GAG mode (+z) and OPFORCE command
   m_ircx_oper_autoowner   - Auto-owner opers on channel join (oper:autoowner)
   m_ircx_prop             - PROP command core

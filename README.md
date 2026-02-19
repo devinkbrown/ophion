@@ -26,12 +26,12 @@ provided as loadable modules and can be enabled/disabled independently.
 | `+a` | AUTHONLY | 8.1.15 | Only authenticated (services-identified) users may join |
 | `+d` | CLONEABLE | 8.1.16 | Channel creates numbered clones when full |
 | `+E` | CLONE | 8.1.17 | Marks channel as a clone of a CLONEABLE channel (IRCX `+e` remapped to avoid ban exception conflict) |
-| `+f` | NOFORMAT | 8.1.10 | Raw text only, clients should not apply formatting (overrides charybdis forwarding mode) |
+| `+f` | NOFORMAT | 8.1.10 | Raw text only, clients should not apply formatting |
 | `+h` | HIDDEN | 8.1.3 | Not in LIST/LISTX but queryable if channel name is known |
 | `+u` | KNOCK | 8.1.9 | Enables KNOCK notifications to channel hosts/owners |
 | `+w` | NOWHISPER | - | Disables the WHISPER command in the channel |
 | `+x` | AUDITORIUM | 8.1.12 | Only operators visible; JOIN/PART/QUIT hidden for non-ops |
-| `+z` | SERVICE | 8.1.14 | Indicates a service is monitoring the channel (oper-only, overrides charybdis opmoderate) |
+| `+z` | SERVICE | 8.1.14 | Indicates a service is monitoring the channel (oper-only) |
 
 #### Channel Visibility Model
 

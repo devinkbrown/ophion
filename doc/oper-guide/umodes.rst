@@ -72,7 +72,7 @@ This indicates global operator status.
 
 This umode prevents you from being affected by channel forwarding. If
 enabled on a channel, channel forwarding sends you to another channel if
-you could not join. See channel mode ``+f`` for more information.
+you could not join. See channel mode ``+y`` for more information.
 
 ``+R``, reject messages from unauthenticated users
 --------------------------------------------------

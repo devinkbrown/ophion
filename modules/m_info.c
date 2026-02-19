@@ -619,7 +619,7 @@ static struct InfoStruct info_table[] = {
 		"use_forward",
 		OUTPUT_BOOLEAN_YN,
 		&ConfigChannel.use_forward,
-		"Enable chanmode +f (channel forwarding)",
+		"Enable chanmode +y (channel forwarding)",
 	},
 	{
 		"use_knock",

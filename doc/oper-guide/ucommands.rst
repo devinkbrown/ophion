@@ -76,7 +76,7 @@ FINDFORWARDS
 .. note:: This command is only available if the ``m_findforwards.so``
           extension is loaded.
 
-Displays which channels forward to the given channel (via cmode +f). If
+Displays which channels forward to the given channel (via cmode +y). If
 there are very many channels the list will be truncated.
 
 You must be a channel operator on the channel or an IRC operator to use

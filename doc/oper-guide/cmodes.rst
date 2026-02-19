@@ -69,28 +69,15 @@ in. For example::
 
 Only channel operators can see ``+e`` changes or request the list.
 
-``+f``, no format / NOFORMAT (IRCX)
-------------------------------------
+``+f``, NOFORMAT (IRCX)
+-----------------------
 
-.. note:: When the ``m_ircx_modes`` module is loaded, ``+f`` is
-          repurposed as the IRCX NOFORMAT mode. The original channel
-          forwarding mode is saved and restored if the module
-          is unloaded.
-
-**IRCX NOFORMAT mode (with m_ircx_modes loaded):**
+.. note:: This mode is provided by the ``m_ircx_modes`` module.
 
 Per IRCX draft section 8.1.10, when ``+f`` is set, messages in this
 channel contain raw text only. IRC clients should not apply formatting
 (colors, bold, underline, etc.) to messages in this channel. This is
 useful for channels dedicated to code, logs, or data transfer.
-
-**Legacy forwarding mode (without m_ircx_modes):**
-
-This mode takes one parameter, the name of a channel (``+f
-#channel``). If the channel also has the ``+i`` cmode set, and
-somebody attempts to join without either being explicitly invited, or
-having an invex (``+I``), then they will instead join the channel
-named in the mode parameter.
 
 ``+F``, allow anybody to forward to this
 ----------------------------------------
@@ -157,6 +144,13 @@ join (by racing for the last slot on each server).
 Channels with this mode will be allowed larger banlists (by default, 500
 instead of 50 entries for ``+b``, ``+q``, ``+e`` and ``+I`` together). Only network
 operators with resv privilege may set this mode.
+
+``+M``, opmoderate
+------------------
+
+When ``+M`` is set, the effects of ``+m``, ``+b`` and ``+q`` are relaxed. For each
+message, if that message would normally be blocked by one of these
+modes, it is instead sent to all channel operators.
 
 ``+m``, moderated
 -----------------
@@ -232,7 +226,7 @@ attempt to forward to this channel will be ignored, and the user will be
 handled as if the attempt was never made (by sending them the relevant
 error message).
 
-This does not affect the ability to set ``+f``.
+This does not affect the ability to set ``+y``.
 
 ``+r``, block unidentified
 --------------------------
@@ -272,26 +266,24 @@ clients voiced users are marked with a plus sign.
 The privilege is lost if the user leaves the channel or server in any
 way.
 
+``+y``, channel forwarding
+--------------------------
+
+This mode takes one parameter, the name of a channel (``+y
+#channel``). If the channel also has the ``+i`` cmode set, and
+somebody attempts to join without either being explicitly invited, or
+having an invex (``+I``), then they will instead join the channel
+named in the mode parameter.
+
 ``+z``, SERVICE (IRCX)
 -----------------------
 
-.. note:: When the ``m_ircx_modes`` module is loaded, ``+z`` is
-          repurposed as the IRCX SERVICE mode. The original
-          opmoderate/reduced moderation mode is saved and restored if
-          the module is unloaded.
-
-**IRCX SERVICE mode (with m_ircx_modes loaded):**
+.. note:: This mode is provided by the ``m_ircx_modes`` module.
 
 Per IRCX draft section 8.1.14, indicates that a service (bot, monitor,
 or automated agent) is monitoring this channel. This mode can only be
 set by IRC operators (sysops). It is informational -- it tells users
 that a service is present and may be logging or responding to activity.
-
-**Legacy opmoderate mode (without m_ircx_modes):**
-
-When ``+z`` is set, the effects of ``+m``, ``+b`` and ``+q`` are relaxed. For each
-message, if that message would normally be blocked by one of these
-modes, it is instead sent to all channel operators.
 
 IRCX channel modes
 ~~~~~~~~~~~~~~~~~~
