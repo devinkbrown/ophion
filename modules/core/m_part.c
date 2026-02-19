@@ -134,9 +134,9 @@ part_one_client(struct Client *client_p, struct Client *source_p, char *name, co
 	 *  only allow /part reasons in -m chans
 	 */
 
-	/* Auditorium mode (+u): non-ops only visible to ops */
+	/* Auditorium mode (+x): non-ops only visible to ops */
 	int audience = ALL_MEMBERS;
-	if (chmode_flags['u'] && (chptr->mode.mode & chmode_flags['u']) &&
+	if (chmode_flags['x'] && (chptr->mode.mode & chmode_flags['x']) &&
 	    !is_chanop_voiced(msptr))
 		audience = ONLY_CHANOPS;
 

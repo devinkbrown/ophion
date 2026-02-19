@@ -46,6 +46,7 @@
 #include "msg.h"
 #include "parse.h"
 #include "modules.h"
+#include "chmode.h"
 #include "inline/stringops.h"
 #include "s_assert.h"
 #include "logger.h"
@@ -437,6 +438,12 @@ static void safelist_one_channel(struct Client *source_p, struct Channel *chptr,
 	int visible;
 
 	visible = !SecretChannel(chptr) || IsMember(source_p, chptr);
+
+	/* IRCX HIDDEN (+h): channel not listed via LIST, but queryable by name */
+	if (visible && chmode_flags['h'] && (chptr->mode.mode & chmode_flags['h'])
+	    && !IsMember(source_p, chptr))
+		visible = 0;
+
 	if (!visible && !params->operspy)
 		return;
 

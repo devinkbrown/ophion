@@ -30,6 +30,7 @@
 #include "stdinc.h"
 #include "capability.h"
 #include "client.h"
+#include "match.h"
 #include "msg.h"
 #include "parse.h"
 #include "modules.h"
@@ -79,6 +80,11 @@ ircx_base_init(void)
 	ircx_client_caps = 0;
 	ircx_client_caps |= capability_get(cli_capindex, "ophion.dev/prop-notify", NULL);
 
+	/* enable %# (registered/persistent) channel prefix per IRCX spec */
+	extern unsigned int CharAttrs[];
+	CharAttrs[(unsigned char)'%'] |= CHANPFX_C;
+	chantypes_update();
+
 	return 0;
 }
 
@@ -86,6 +92,11 @@ static void
 ircx_base_deinit(void)
 {
 	delete_isupport("IRCX");
+
+	/* remove %# channel prefix */
+	extern unsigned int CharAttrs[];
+	CharAttrs[(unsigned char)'%'] &= ~CHANPFX_C;
+	chantypes_update();
 }
 
 static void
@@ -99,6 +110,9 @@ m_ircx(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 	 */
 	if (MyClient(source_p) && ircx_client_caps)
 		source_p->localClient->caps |= ircx_client_caps;
+
+	/* mark client as IRCX-aware (enables UTF-8 nicks, %# channels, etc.) */
+	SetIRCX(source_p);
 
 	sendto_one_numeric(client_p, RPL_IRCX, form_str(RPL_IRCX));
 }

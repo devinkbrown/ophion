@@ -910,12 +910,13 @@ remove_client_from_list(struct Client *client_p)
 
 /* clean_nick()
  *
- * input	- nickname to check, flag for nick from local client
+ * input	- nickname to check, flag for nick from local client,
+ *		  flag to allow UTF-8 (high bytes 0x80-0xFF) in nicks
  * output	- 0 if erroneous, else 1
  * side effects -
  */
 int
-clean_nick(const char *nick, int loc_client)
+clean_nick(const char *nick, int loc_client, int allow_utf8)
 {
 	int len = 0;
 
@@ -930,7 +931,12 @@ clean_nick(const char *nick, int loc_client)
 	{
 		len++;
 		if(!IsNickChar(*nick))
+		{
+			/* allow high bytes (UTF-8) when IRCX mode permits */
+			if(allow_utf8 && ((unsigned char)*nick >= 0x80))
+				continue;
 			return 0;
+		}
 	}
 
 	/* nicklen is +1 */
@@ -1350,12 +1356,12 @@ exit_generic_client(struct Client *client_p, struct Client *source_p, struct Cli
 		rb_dlinkFindDestroy(source_p, &oper_list);
 
 	/*
-	 * Auditorium mode (+u) QUIT filtering: if the user is in any
-	 * channel with +u set and is not an op/voiced there, only ops
+	 * Auditorium mode (+x) QUIT filtering: if the user is in any
+	 * channel with +x set and is not an op/voiced there, only ops
 	 * in that channel should see the QUIT.  We handle this by
 	 * doing per-channel delivery when auditorium mode is active.
 	 */
-	if (chmode_flags['u'])
+	if (chmode_flags['x'])
 	{
 		bool has_auditorium = false;
 		rb_dlink_node *aptr;
@@ -1365,7 +1371,7 @@ exit_generic_client(struct Client *client_p, struct Client *source_p, struct Cli
 			struct membership *amsp = aptr->data;
 			struct Channel *achptr = amsp->chptr;
 
-			if ((achptr->mode.mode & chmode_flags['u']) && !is_chanop_voiced(amsp))
+			if ((achptr->mode.mode & chmode_flags['x']) && !is_chanop_voiced(amsp))
 			{
 				has_auditorium = true;
 				break;
@@ -1384,7 +1390,7 @@ exit_generic_client(struct Client *client_p, struct Client *source_p, struct Cli
 			{
 				struct membership *mscptr = cptr->data;
 				struct Channel *chptr = mscptr->chptr;
-				int auditorium_filtered = (chptr->mode.mode & chmode_flags['u']) &&
+				int auditorium_filtered = (chptr->mode.mode & chmode_flags['x']) &&
 							  !is_chanop_voiced(mscptr);
 
 				RB_DLINK_FOREACH_SAFE(uptr, unext, chptr->locmembers.head)

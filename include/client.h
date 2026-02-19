@@ -417,7 +417,15 @@ struct ListClient
 #define FLAGS_EXEMPTSPAMBOT	0x02000000
 #define FLAGS_EXEMPTSHIDE	0x04000000
 #define FLAGS_EXEMPTJUPE	0x08000000
+#define FLAGS_IRCX		0x10000000	/* client has sent IRCX command */
+#define FLAGS_GAGGED		0x20000000	/* client is gagged by oper (+g) */
 
+#define IsIRCX(x)		((x)->flags & FLAGS_IRCX)
+#define SetIRCX(x)		((x)->flags |= FLAGS_IRCX)
+#define ClearIRCX(x)		((x)->flags &= ~FLAGS_IRCX)
+#define IsGagged(x)		((x)->flags & FLAGS_GAGGED)
+#define SetGagged(x)		((x)->flags |= FLAGS_GAGGED)
+#define ClearGagged(x)		((x)->flags &= ~FLAGS_GAGGED)
 
 /* flags for local clients, this needs stuff moved from above to here at some point */
 #define LFLAGS_SSL		0x00000001
@@ -588,7 +596,7 @@ extern void error_exit_client(struct Client *, int);
 extern void count_local_client_memory(size_t * count, size_t * memory);
 extern void count_remote_client_memory(size_t * count, size_t * memory);
 
-extern int clean_nick(const char *, int loc_client);
+extern int clean_nick(const char *, int loc_client, int allow_utf8);
 
 extern struct Client *find_chasing(struct Client *, const char *, int *);
 extern struct Client *find_person(const char *);

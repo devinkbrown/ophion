@@ -28,16 +28,18 @@
  */
 
 /*
- * IRCX Auditorium mode (+u)
+ * IRCX Auditorium mode (+x)
  *
  * When enabled on a channel, normal (non-op) members cannot see each
  * other.  JOIN/PART notifications for non-ops are suppressed for other
  * non-ops, and NAMES only shows operators to regular members.
  *
- * The mode flag is dynamically allocated via cflag_add('u') so the core
- * channel functions use chmode_flags['u'] to detect auditorium channels.
- * When the module is not loaded, chmode_flags['u'] == 0 and no auditorium
+ * The mode flag is dynamically allocated via cflag_add('x') so the core
+ * channel functions use chmode_flags['x'] to detect auditorium channels.
+ * When the module is not loaded, chmode_flags['x'] == 0 and no auditorium
  * filtering occurs.
+ *
+ * Note: +u is reserved for IRCX NOKNOCK mode per draft-pfenning-irc-extensions-04.
  */
 
 #include "stdinc.h"
@@ -47,14 +49,14 @@
 #include "chmode.h"
 
 static const char ircx_auditorium_desc[] =
-	"Provides IRCX auditorium channel mode (+u) that hides non-ops from each other";
+	"Provides IRCX auditorium channel mode (+x) that hides non-ops from each other";
 
 static unsigned int MODE_AUDITORIUM;
 
 static int
 modinit(void)
 {
-	MODE_AUDITORIUM = cflag_add('u', chm_simple);
+	MODE_AUDITORIUM = cflag_add('x', chm_simple);
 	if (MODE_AUDITORIUM == 0)
 		return -1;
 
@@ -64,7 +66,7 @@ modinit(void)
 static void
 moddeinit(void)
 {
-	cflag_orphan('u');
+	cflag_orphan('x');
 }
 
 DECLARE_MODULE_AV2(ircx_auditorium, modinit, moddeinit, NULL, NULL, NULL, NULL, NULL, ircx_auditorium_desc);

@@ -56,6 +56,7 @@
 #include "s_newconf.h"
 #include "inline/stringops.h"
 #include "rb_radixtree.h"
+#include "chmode.h"
 
 static const char ircx_listx_desc[] = "Provides IRCX LISTX command for extended channel listing";
 
@@ -114,6 +115,12 @@ m_listx(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		chptr = ptr->data;
 
 		visible = !SecretChannel(chptr) || IsMember(source_p, chptr);
+
+		/* IRCX HIDDEN (+h): not listed via LISTX, but queryable by name */
+		if (visible && chmode_flags['h'] && (chptr->mode.mode & chmode_flags['h'])
+		    && !IsMember(source_p, chptr))
+			visible = 0;
+
 		if (!visible)
 			continue;
 

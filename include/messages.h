@@ -252,8 +252,16 @@
 #define NUMERIC_STR_816      ":%s 816 %s :Truncated channel list"
 #define NUMERIC_STR_817      ":%s 817 %s :End of channel list"
 
+#define NUMERIC_STR_808      "%s %s :Event added"
+#define NUMERIC_STR_809      "%s %s :Event subscription"
+#define NUMERIC_STR_810      ":End of event list"
+
 #define NUMERIC_STR_818      "%s %s :%s"
 #define NUMERIC_STR_819      "%s :End of property list"
+
+#define NUMERIC_STR_821      "%s :Event already subscribed"
+#define NUMERIC_STR_822      "%s :Not subscribed to event"
+#define NUMERIC_STR_823      "%s :No such event"
 
 #define NUMERIC_STR_900      ":%s 900 %s %s!%s@%s %s :You are now logged in as %s"
 #define NUMERIC_STR_901      ":%s 901 %s %s!%s@%s :You are now logged out"

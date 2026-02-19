@@ -41,6 +41,7 @@
 #include "send.h"
 #include "supported.h"
 #include "hash.h"
+#include "match.h"
 #include "channel_access.h"
 
 static const char ircx_access_desc[] = "Provides IRCX ACCESS command";
@@ -246,6 +247,14 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 	unsigned int level_match = ae_level_from_name(level);
 	const rb_dlink_node *iter;
 
+	/*
+	 * If the level argument is not a known level name, treat it
+	 * as a wildcard mask filter for the LIST output.
+	 */
+	const char *mask_filter = NULL;
+	if (level != NULL && level_match == 0)
+		mask_filter = level;
+
 	if (!can_read_from_access_list(chptr, source_p, level_match))
 	{
 		sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
@@ -265,6 +274,10 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 			if (level_match && (ae->flags & level_match) != level_match)
 				continue;
 
+			/* apply wildcard mask filter if given */
+			if (mask_filter && !match(mask_filter, ae->mask))
+				continue;
+
 			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
 				chptr->chname, ae_level_name(ae->flags), ae->mask, (long) 0, ae->who, "");
 		}
@@ -277,6 +290,9 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 		{
 			const struct Ban *ban = iter->data;
 
+			if (mask_filter && !match(mask_filter, ban->banstr))
+				continue;
+
 			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
 				chptr->chname, "DENY", ban->banstr, (long) ban->when, ban->who, "");
 		}
@@ -288,6 +304,9 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 		RB_DLINK_FOREACH(iter, chptr->invexlist.head)
 		{
 			const struct Ban *ban = iter->data;
+
+			if (mask_filter && !match(mask_filter, ban->banstr))
+				continue;
 
 			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
 				chptr->chname, "GRANT", ban->banstr, (long) ban->when, ban->who, "");
@@ -549,7 +568,8 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 static void
 apply_access_entries(struct Channel *chptr, struct Client *client_p)
 {
-	struct AccessEntry *ae = channel_access_match(chptr, client_p);
+	/* use best_match to get the highest-privilege matching entry */
+	struct AccessEntry *ae = channel_access_best_match(chptr, client_p);
 	if (ae == NULL)
 		return;
 

@@ -134,7 +134,7 @@ me_svslogin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 	if(!MyClient(target_p) && !IsUnknown(target_p))
 		return;
 
-	if(clean_nick(parv[2], 0))
+	if(clean_nick(parv[2], 0, 1))
 	{
 		rb_strlcpy(nick, parv[2], NICKLEN + 1);
 		valid |= NICK_VALID;
@@ -173,7 +173,7 @@ me_svslogin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 		rb_strlcpy(login, parv[5], NICKLEN + 1);
 
 	/* Login (mostly) follows nick rules. */
-	if(*login && !clean_nick(login, 0))
+	if(*login && !clean_nick(login, 0, 0))
 		return;
 
 	if((exist_p = find_person(nick)) && target_p != exist_p)
@@ -250,7 +250,7 @@ ms_signon(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 	int newts, sameuser;
 	char login[NICKLEN+1];
 
-	if(!clean_nick(parv[1], 0))
+	if(!clean_nick(parv[1], 0, 1))
 	{
 		ServerStats.is_kill++;
 		sendto_realops_snomask(SNO_DEBUG, L_ALL,
@@ -292,7 +292,7 @@ ms_signon(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 		login[0] = '\0';
 	else if(*parv[5] != '*')
 	{
-		if (clean_nick(parv[5], 0))
+		if (clean_nick(parv[5], 0, 1))
 			rb_strlcpy(login, parv[5], NICKLEN + 1);
 		else
 			return;

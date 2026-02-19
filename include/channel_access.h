@@ -40,5 +40,7 @@ extern struct AccessEntry *channel_access_find(struct Channel *chptr, const char
 extern void channel_access_delete(struct Channel *chptr, const char *mask);
 extern void channel_access_clear(struct Channel *chptr);
 extern struct AccessEntry *channel_access_match(struct Channel *chptr, struct Client *client_p);
+extern struct AccessEntry *channel_access_best_match(struct Channel *chptr, struct Client *client_p);
+extern int channel_access_delete_wildcard(struct Channel *chptr, const char *pattern);
 
 #endif

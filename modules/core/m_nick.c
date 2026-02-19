@@ -138,8 +138,8 @@ mr_nick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 	/* copy the nick and terminate it */
 	rb_strlcpy(nick, parv[1], ConfigFileEntry.nicklen);
 
-	/* check the nickname is ok */
-	if(!clean_nick(nick, 1))
+	/* check the nickname is ok (allow UTF-8 for IRCX clients) */
+	if(!clean_nick(nick, 1, IsIRCX(source_p)))
 	{
 		sendto_one(source_p, form_str(ERR_ERRONEUSNICKNAME),
 			   me.name, EmptyString(source_p->name) ? "*" : source_p->name, parv[1]);
@@ -191,8 +191,8 @@ m_nick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 	/* terminate nick to NICKLEN, we dont want clean_nick() to error! */
 	rb_strlcpy(nick, parv[1], ConfigFileEntry.nicklen);
 
-	/* check the nickname is ok */
-	if(!clean_nick(nick, 1))
+	/* check the nickname is ok (allow UTF-8 for IRCX clients) */
+	if(!clean_nick(nick, 1, IsIRCX(source_p)))
 	{
 		sendto_one(source_p, form_str(ERR_ERRONEUSNICKNAME), me.name, source_p->name, nick);
 		return;
@@ -251,8 +251,8 @@ mc_nick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 	struct Client *target_p;
 	time_t newts = 0;
 
-	/* if nicks erroneous, or too long, kill */
-	if(!clean_nick(parv[1], 0))
+	/* if nicks erroneous, or too long, kill (always allow UTF-8 from remote) */
+	if(!clean_nick(parv[1], 0, 1))
 	{
 		bad_nickname(client_p, parv[1]);
 		return;
@@ -337,8 +337,8 @@ ms_uid(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		return;
 	}
 
-	/* if nicks erroneous, or too long, kill */
-	if(!clean_nick(parv[1], 0))
+	/* if nicks erroneous, or too long, kill (always allow UTF-8 from remote) */
+	if(!clean_nick(parv[1], 0, 1))
 	{
 		bad_nickname(client_p, parv[1]);
 		return;
@@ -426,8 +426,8 @@ ms_euid(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		return;
 	}
 
-	/* if nicks erroneous, or too long, kill */
-	if(!clean_nick(parv[1], 0))
+	/* if nicks erroneous, or too long, kill (always allow UTF-8 from remote) */
+	if(!clean_nick(parv[1], 0, 1))
 	{
 		bad_nickname(client_p, parv[1]);
 		return;

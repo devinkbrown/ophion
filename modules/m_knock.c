@@ -36,6 +36,7 @@
 #include "s_serv.h"
 #include "supported.h"
 #include "s_newconf.h"
+#include "chmode.h"
 
 static const char knock_desc[] = "Provides the KNOCK command to ask for an invite to an invite-only channel";
 
@@ -124,6 +125,14 @@ m_knock(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 	{
 		sendto_one_numeric(source_p, ERR_CANNOTSENDTOCHAN,
 				   form_str(ERR_CANNOTSENDTOCHAN), name);
+		return;
+	}
+
+	/* IRCX +u (NOKNOCK): channel has disabled knock notifications */
+	if(chmode_flags['u'] && (chptr->mode.mode & chmode_flags['u']))
+	{
+		sendto_one(source_p, form_str(ERR_KNOCKDISABLED),
+			   me.name, source_p->name);
 		return;
 	}
 

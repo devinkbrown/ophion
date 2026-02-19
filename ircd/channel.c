@@ -129,12 +129,12 @@ send_channel_join(struct Channel *chptr, struct Client *client_p)
 		return;
 
 	/*
-	 * Auditorium mode (+u): only ops see JOIN from non-ops.
+	 * Auditorium mode (+x): only ops see JOIN from non-ops.
 	 * The joining user always sees their own JOIN.
 	 */
 	int audience = ALL_MEMBERS;
 	struct membership *msptr = find_channel_membership(chptr, client_p);
-	if (chmode_flags['u'] && (chptr->mode.mode & chmode_flags['u']) &&
+	if (chmode_flags['x'] && (chptr->mode.mode & chmode_flags['x']) &&
 	    msptr != NULL && !is_chanop_voiced(msptr))
 		audience = ONLY_CHANOPS;
 
@@ -491,12 +491,12 @@ channel_member_names(struct Channel *chptr, struct Client *client_p, int show_eo
 		t = lbuf + cur_len;
 
 		/*
-		 * Auditorium mode (+u): non-ops only see ops and
+		 * Auditorium mode (+x): non-ops only see ops and
 		 * themselves in the NAMES list.
 		 */
 		int auditorium = 0;
 		struct membership *my_msptr = NULL;
-		if (chmode_flags['u'] && (chptr->mode.mode & chmode_flags['u']))
+		if (chmode_flags['x'] && (chptr->mode.mode & chmode_flags['x']))
 		{
 			my_msptr = find_channel_membership(chptr, client_p);
 			if (my_msptr != NULL && !is_chanop_voiced(my_msptr))
