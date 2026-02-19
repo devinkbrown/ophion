@@ -171,7 +171,6 @@ m_invite(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	 * for +l/+j just check if the mode is set, this varies over time
 	 */
 	if(chptr->mode.mode & MODE_INVITEONLY ||
-			(chptr->mode.mode & MODE_REGONLY && EmptyString(target_p->user->suser)) ||
 			chptr->mode.limit || chptr->mode.join_num)
 		store_invite = 1;
 
