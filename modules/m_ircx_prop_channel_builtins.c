@@ -243,6 +243,12 @@ h_prop_change(void *vdata)
 	{
 		const char *topic_val = data->value ? data->value : "";
 		set_channel_topic(chptr, topic_val, prefix, rb_current_time());
+
+		/* notify local channel members of the topic change */
+		sendto_channel_local((struct Client *)data->client, ALL_MEMBERS, chptr,
+			":%s TOPIC %s :%s",
+			prefix, chptr->chname,
+			chptr->topic ? chptr->topic : "");
 		return;
 	}
 
