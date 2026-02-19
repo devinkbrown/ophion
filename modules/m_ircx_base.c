@@ -45,6 +45,10 @@ static const char ircx_base_desc[] = "Provides core IRCX capabilities";
 
 static unsigned int CAP_IRCX;
 static unsigned int ircx_client_caps;	/* cached client caps to auto-enable */
+
+/* IRCX draft ISUPPORT limits: codepage/language selection not implemented */
+static int ircx_maxcodepage = 0;
+static int ircx_maxlanguage = 0;
 static int ircx_base_init(void);
 static void ircx_base_deinit(void);
 
@@ -73,6 +77,8 @@ static int
 ircx_base_init(void)
 {
 	add_isupport("IRCX", isupport_string, "");
+	add_isupport("MAXCODEPAGE", isupport_intptr, &ircx_maxcodepage);
+	add_isupport("MAXLANGUAGE", isupport_intptr, &ircx_maxlanguage);
 
 	capability_require(serv_capindex, "IRCX");
 
@@ -92,6 +98,8 @@ static void
 ircx_base_deinit(void)
 {
 	delete_isupport("IRCX");
+	delete_isupport("MAXCODEPAGE");
+	delete_isupport("MAXLANGUAGE");
 
 	/* remove %# channel prefix */
 	extern unsigned int CharAttrs[];

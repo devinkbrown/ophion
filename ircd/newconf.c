@@ -2822,6 +2822,8 @@ static struct ConfEntry conf_channel_table[] =
 	{ "strip_topic_colors",	CF_YESNO, NULL, 0, &ConfigChannel.strip_topic_colors	},
 	{ "opmod_send_statusmsg", CF_YESNO, NULL, 0, &ConfigChannel.opmod_send_statusmsg	},
 	{ "max_prop",		CF_INT,   NULL, 0, &ConfigChannel.max_prop		},
+	{ "max_access",		CF_INT,   NULL, 0, &ConfigChannel.max_access		},
+	{ "max_listx",		CF_INT,   NULL, 0, &ConfigChannel.max_listx		},
 	{ "\0", 		0, 	  NULL, 0, NULL }
 };
 

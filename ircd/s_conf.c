@@ -810,6 +810,8 @@ set_default_conf(void)
 	ConfigChannel.autochanmodes = MODE_TOPICLIMIT | MODE_NOPRIVMSGS;
 
 	ConfigChannel.max_prop = 25;
+	ConfigChannel.max_access = 25;
+	ConfigChannel.max_listx = 500;
 
 	ConfigServerHide.flatten_links = 0;
 	ConfigServerHide.links_delay = 300;

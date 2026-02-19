@@ -63,6 +63,7 @@ static const char ircx_comic_desc[] =
 
 /* Maximum length for DATA command payloads */
 #define MAX_DATA_PAYLOAD  512
+static int max_data_payload = MAX_DATA_PAYLOAD;	/* for ISUPPORT MAXDATA */
 
 /* DATA command rate limit: max commands per window */
 #define DATA_RATE_MAX     10
@@ -542,6 +543,7 @@ ircx_comic_init(void)
 		return -1;
 
 	add_isupport("COMICCHAT", isupport_string, "DATA");
+	add_isupport("MAXDATA", isupport_intptr, &max_data_payload);
 
 	return 0;
 }
@@ -551,6 +553,7 @@ ircx_comic_deinit(void)
 {
 	cflag_orphan('C');
 	delete_isupport("COMICCHAT");
+	delete_isupport("MAXDATA");
 }
 
 DECLARE_MODULE_AV2(ircx_comic, ircx_comic_init, ircx_comic_deinit,

@@ -102,7 +102,7 @@ DECLARE_MODULE_AV2(ircx_access, ircx_access_init, ircx_access_deinit, ircx_acces
 static int
 ircx_access_init(void)
 {
-	add_isupport("MAXACCESS", isupport_intptr, &ConfigChannel.max_bans);
+	add_isupport("MAXACCESS", isupport_intptr, &ConfigChannel.max_access);
 	return 0;
 }
 
@@ -560,7 +560,7 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 	}
 
 	/* only enforce ACL limit on non-upsert condition */
-	if (rb_dlink_list_length(&chptr->access_list) + 1 > ConfigChannel.max_bans &&
+	if (rb_dlink_list_length(&chptr->access_list) + 1 > (unsigned long)ConfigChannel.max_access &&
 	    channel_access_find(chptr, mask) == NULL)
 	{
 		sendto_one_numeric(source_p, ERR_ACCESS_TOOMANY, form_str(ERR_ACCESS_TOOMANY),

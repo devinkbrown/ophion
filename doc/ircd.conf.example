@@ -401,6 +401,8 @@ channel {
 	strip_topic_colors = no;
 	opmod_send_statusmsg = no;
 	max_prop = 25;
+	max_access = 25;
+	max_listx = 500;
 };
 
 serverhide {
