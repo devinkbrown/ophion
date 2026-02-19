@@ -247,6 +247,11 @@
 #define NUMERIC_STR_803      "%s :Start of access entries"
 #define NUMERIC_STR_804      "%s %s %s %ld %s :%s"
 #define NUMERIC_STR_805      "%s :End of access entries"
+#define NUMERIC_STR_811      ":%s 811 %s :Start of channel list"
+#define NUMERIC_STR_812      ":%s 812 %s %s %s %lu %lu :%s"
+#define NUMERIC_STR_816      ":%s 816 %s :Truncated channel list"
+#define NUMERIC_STR_817      ":%s 817 %s :End of channel list"
+
 #define NUMERIC_STR_818      "%s %s :%s"
 #define NUMERIC_STR_819      "%s :End of property list"
 

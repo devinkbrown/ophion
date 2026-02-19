@@ -39,6 +39,7 @@
 #include "inline/stringops.h"
 #include "hook.h"
 #include "s_newconf.h"
+#include "chmode.h"
 
 static const char part_desc[] = "Provides the PART command to leave a channel";
 
@@ -132,6 +133,13 @@ part_one_client(struct Client *client_p, struct Client *source_p, char *name, co
 	 *  Remove user from the old channel (if any)
 	 *  only allow /part reasons in -m chans
 	 */
+
+	/* Auditorium mode (+u): non-ops only visible to ops */
+	int audience = ALL_MEMBERS;
+	if (chmode_flags['u'] && (chptr->mode.mode & chmode_flags['u']) &&
+	    !is_chanop_voiced(msptr))
+		audience = ONLY_CHANOPS;
+
 	if(!EmptyString(reason) &&
 		(!MyConnect(source_p) ||
 		 (can_send_part(source_p, chptr, msptr) && do_message_hook(source_p, chptr, &reason))
@@ -141,7 +149,7 @@ part_one_client(struct Client *client_p, struct Client *source_p, char *name, co
 
 		sendto_server(client_p, chptr, CAP_TS6, NOCAPS,
 			      ":%s PART %s :%s", use_id(source_p), chptr->chname, reason);
-		sendto_channel_local(source_p, ALL_MEMBERS, chptr, ":%s!%s@%s PART %s :%s",
+		sendto_channel_local(source_p, audience, chptr, ":%s!%s@%s PART %s :%s",
 				     source_p->name, source_p->username,
 				     source_p->host, chptr->chname, reason);
 	}
@@ -149,7 +157,7 @@ part_one_client(struct Client *client_p, struct Client *source_p, char *name, co
 	{
 		sendto_server(client_p, chptr, CAP_TS6, NOCAPS,
 			      ":%s PART %s", use_id(source_p), chptr->chname);
-		sendto_channel_local(source_p, ALL_MEMBERS, chptr, ":%s!%s@%s PART %s",
+		sendto_channel_local(source_p, audience, chptr, ":%s!%s@%s PART %s",
 				     source_p->name, source_p->username,
 				     source_p->host, chptr->chname);
 	}
