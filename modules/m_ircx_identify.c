@@ -88,7 +88,7 @@ m_identify(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	if (prop == NULL)
 		prop = propertyset_find(&chptr->prop_list, "ADMINKEY");
 
-	if (prop != NULL && !strcmp(prop->value, key))
+	if (prop != NULL && !rb_strcasecmp(prop->value, key))
 	{
 		if (is_admin(msptr))
 		{
@@ -112,7 +112,7 @@ m_identify(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	if (prop == NULL)
 		prop = propertyset_find(&chptr->prop_list, "OPKEY");
 
-	if (prop != NULL && !strcmp(prop->value, key))
+	if (prop != NULL && !rb_strcasecmp(prop->value, key))
 	{
 		if (is_chanop(msptr))
 		{
@@ -132,7 +132,7 @@ m_identify(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	}
 
 	/* Check MEMBERKEY / +k channel key -> +v */
-	if (*chptr->mode.key && !strcmp(chptr->mode.key, key))
+	if (*chptr->mode.key && !rb_strcasecmp(chptr->mode.key, key))
 	{
 		if (is_voiced(msptr))
 		{

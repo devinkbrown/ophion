@@ -3,7 +3,9 @@
  *
  * IRCX channel modes per draft-pfenning-irc-extensions-04.
  *
- * This module implements all channel modes defined in the IRCX draft:
+ * This module implements the core IRCX channel modes.  Additional modes
+ * are provided by other modules: +w (m_ircx_whisper), +x (m_ircx_auditorium),
+ * +C (m_ircx_comic).  Modes registered here:
  *
  *   +u  KNOCK      - Enables KNOCK notifications to channel hosts/owners
  *   +h  HIDDEN     - Channel not listed via LIST/LISTX but queryable by name
@@ -50,8 +52,9 @@
 #include "supported.h"
 
 static const char ircx_modes_desc[] =
-	"Provides all IRCX channel modes: +u (knock), +h (hidden), +a (authonly), "
-	"+d (cloneable), +E (clone), +r (registered), +f (noformat), +z (service)";
+	"Provides IRCX channel modes: +u (knock), +h (hidden), +a (authonly), "
+	"+d (cloneable), +E (clone), +r (registered), +f (noformat), +z (service). "
+	"See also: m_ircx_whisper (+w), m_ircx_auditorium (+x), m_ircx_comic (+C)";
 
 /* Allocated mode bits */
 static unsigned int MODE_KNOCK;	/* +u */
@@ -69,6 +72,8 @@ static unsigned int MODE_IRCX_SERVICE;	/* +z (replaces opmoderate) */
 static struct ChannelMode saved_mode_f;
 static struct ChannelMode saved_mode_r;
 static struct ChannelMode saved_mode_z;
+static struct ChannelMode saved_mode_p;	/* +p PRIVATE: clears +h when set */
+static struct ChannelMode saved_mode_s;	/* +s SECRET: clears +h when set */
 
 /* Forward declarations */
 static void chm_hidden_ircx(struct Client *source_p, struct Channel *chptr,
@@ -80,6 +85,14 @@ static void chm_ircx_service(struct Client *source_p, struct Channel *chptr,
 	const char **parv, int *errors, int dir, char c, long mode_type);
 
 static void chm_ircx_registered(struct Client *source_p, struct Channel *chptr,
+	int alevel, int parc, int *parn,
+	const char **parv, int *errors, int dir, char c, long mode_type);
+
+static void chm_ircx_private(struct Client *source_p, struct Channel *chptr,
+	int alevel, int parc, int *parn,
+	const char **parv, int *errors, int dir, char c, long mode_type);
+
+static void chm_ircx_secret(struct Client *source_p, struct Channel *chptr,
 	int alevel, int parc, int *parn,
 	const char **parv, int *errors, int dir, char c, long mode_type);
 
@@ -214,6 +227,41 @@ h_ircx_modes_can_join(void *vdata)
 }
 
 /*
+ * chm_ircx_private - PRIVATE mode handler (+p)
+ *
+ * Delegates to the saved core handler, then clears +h (HIDDEN) when +p is
+ * being added.  This enforces the IRCX bidirectional mutual exclusivity
+ * between PRIVATE, HIDDEN, and SECRET.
+ */
+static void
+chm_ircx_private(struct Client *source_p, struct Channel *chptr,
+	int alevel, int parc, int *parn,
+	const char **parv, int *errors, int dir, char c, long mode_type)
+{
+	saved_mode_p.set_func(source_p, chptr, alevel, parc, parn, parv, errors, dir, c, mode_type);
+
+	if (dir == MODE_ADD && MODE_HIDDEN_IRCX)
+		chptr->mode.mode &= ~MODE_HIDDEN_IRCX;
+}
+
+/*
+ * chm_ircx_secret - SECRET mode handler (+s)
+ *
+ * Delegates to the saved core handler, then clears +h (HIDDEN) when +s is
+ * being added.
+ */
+static void
+chm_ircx_secret(struct Client *source_p, struct Channel *chptr,
+	int alevel, int parc, int *parn,
+	const char **parv, int *errors, int dir, char c, long mode_type)
+{
+	saved_mode_s.set_func(source_p, chptr, alevel, parc, parn, parv, errors, dir, c, mode_type);
+
+	if (dir == MODE_ADD && MODE_HIDDEN_IRCX)
+		chptr->mode.mode &= ~MODE_HIDDEN_IRCX;
+}
+
+/*
  * CLONEABLE (+d) behavior is implemented in core/m_join.c check_cloneable().
  * When a +d channel is full, the join path automatically creates/finds
  * numbered clone channels (#channel1, #channel2, etc.) with +E set.
@@ -290,6 +338,16 @@ ircx_modes_init(void)
 	chmode_table[(unsigned char)'z'].set_func = chm_ircx_service;
 	chmode_table[(unsigned char)'z'].mode_type = MODE_IRCX_SERVICE;
 
+	/*
+	 * +p and +s: bidirectional mutual exclusivity with +h (HIDDEN).
+	 * Wrap the core handlers so that setting +p or +s clears +h.
+	 */
+	saved_mode_p = chmode_table[(unsigned char)'p'];
+	chmode_table[(unsigned char)'p'].set_func = chm_ircx_private;
+
+	saved_mode_s = chmode_table[(unsigned char)'s'];
+	chmode_table[(unsigned char)'s'].set_func = chm_ircx_secret;
+
 	construct_cflags_strings();
 
 	return 0;
@@ -305,10 +363,12 @@ ircx_modes_deinit(void)
 	cflag_orphan('d');
 	cflag_orphan('E');
 
-	/* Restore original +f, +r, and +z handlers */
+	/* Restore original +f, +r, +z, +p, and +s handlers */
 	chmode_table[(unsigned char)'f'] = saved_mode_f;
 	chmode_table[(unsigned char)'r'] = saved_mode_r;
 	chmode_table[(unsigned char)'z'] = saved_mode_z;
+	chmode_table[(unsigned char)'p'] = saved_mode_p;
+	chmode_table[(unsigned char)'s'] = saved_mode_s;
 
 	construct_cflags_strings();
 }
