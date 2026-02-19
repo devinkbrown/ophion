@@ -87,8 +87,8 @@ resize_pollarray(int fd)
 		pollfd_list.pollfds =
 			rb_realloc(pollfd_list.pollfds,
 				   pollfd_list.allocated * (sizeof(struct pollfd)));
-		memset(&pollfd_list.pollfds[old_value + 1], 0, sizeof(struct pollfd) * 1024);
-		for(x = old_value + 1; x < pollfd_list.allocated; x++)
+		memset(&pollfd_list.pollfds[old_value], 0, sizeof(struct pollfd) * 1024);
+		for(x = old_value; x < pollfd_list.allocated; x++)
 		{
 			pollfd_list.pollfds[x].fd = -1;
 		}
@@ -178,9 +178,9 @@ rb_select_poll(long delay)
 	if(num < 0)
 	{
 		if(!rb_ignore_errno(errno))
-			return RB_OK;
-		else
 			return RB_ERROR;
+		else
+			return RB_OK;
 	}
 	if(num == 0)
 		return RB_OK;
