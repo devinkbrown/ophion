@@ -72,6 +72,7 @@ Core capabilities (ircd/s_serv.c):
   labeled-response    Associates server responses with the triggering command.
   standard-replies    Standardised FAIL/WARN/NOTE reply format.
   draft/typing        Advisory typing indicator (relayed via TAGMSG).
+  draft/read-marker   Read position synchronisation (m_read_marker).
 
 Module capabilities:
 
@@ -83,3 +84,4 @@ Module capabilities:
   msgid                  Unique message identifiers (m_chathistory).
   draft/chathistory      Message history retrieval (m_chathistory).
   draft/event-playback   Event playback in history batches (m_chathistory).
+  draft/multiline        Multi-line message batches (m_multiline).

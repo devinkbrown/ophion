@@ -1,0 +1,16 @@
+MARKREAD <target> [timestamp=<ts>]
+
+Queries or sets the read-marker position for a channel or
+private conversation. Requires the draft/read-marker capability.
+
+Without a timestamp, queries the stored marker:
+  MARKREAD #channel
+
+With a timestamp, updates the marker:
+  MARKREAD #channel timestamp=2026-02-19T12:00:00.000Z
+
+Timestamps are monotonically increasing; stale updates are
+ignored and the server replies with the newer stored value.
+
+On channel JOIN the server automatically sends a MARKREAD.
+Markers are stored in-memory and lost on disconnect.

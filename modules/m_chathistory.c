@@ -333,8 +333,17 @@ ring_append(struct history_ring *ring, const char *nick, const char *user,
 static void
 format_timestamp(char *buf, size_t buflen, time_t ts, int msec)
 {
-	if (strftime(buf, buflen, "%Y-%m-%dT%H:%M:%S.", gmtime(&ts)) == 0)
+	struct tm *tm;
+
+	buf[0] = '\0';
+	tm = gmtime(&ts);
+	if (tm == NULL)
 		return;
+	if (strftime(buf, buflen, "%Y-%m-%dT%H:%M:%S.", tm) == 0)
+	{
+		buf[0] = '\0';
+		return;
+	}
 	rb_snprintf_append(buf, buflen, "%03dZ", msec);
 }
 
@@ -372,7 +381,10 @@ parse_timestamp_ref(const char *ref, time_t *ts_out, int *msec_out)
 
 	/* Adjust for UTC: mktime interprets as local, so compute offset */
 	struct tm *gm = gmtime(&local);
-	struct tm gm_copy = *gm;
+	struct tm gm_copy;
+	if (gm == NULL)
+		return false;
+	gm_copy = *gm;
 	time_t utc_as_local = mktime(&gm_copy);
 	*ts_out = local + (local - utc_as_local);
 

@@ -132,9 +132,14 @@ get_stored_timestamp(struct marker_state *ms, const char *target)
 static void
 set_stored_timestamp(struct marker_state *ms, const char *target, const char *ts)
 {
-	char *old = rb_dictionary_delete(ms->targets, target);
-	if (old != NULL)
-		rb_free(old);
+	rb_dictionary_element *elem = rb_dictionary_find(ms->targets, target);
+	if (elem != NULL)
+	{
+		void *old_key = (void *)elem->key;
+		void *old_data = rb_dictionary_delete(ms->targets, target);
+		rb_free(old_key);
+		rb_free(old_data);
+	}
 
 	/* rb_dictionary stores the key pointer, so we must dup it */
 	rb_dictionary_add(ms->targets, rb_strdup(target), rb_strdup(ts));

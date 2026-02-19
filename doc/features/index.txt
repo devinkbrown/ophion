@@ -21,6 +21,8 @@ chathistory.txt		- IRCv3 chathistory capability and CHATHISTORY command
 invite-notify.txt	- IRCv3 invite-notify capability
 labeled-response.txt	- IRCv3 labeled-response capability
 message-tags.txt	- IRCv3 message-tags capability and TAGMSG command
+multiline.txt		- IRCv3 draft/multiline capability
+read-marker.txt		- IRCv3 draft/read-marker capability and MARKREAD command
 setname.txt		- IRCv3 setname capability and SETNAME command
 standard-replies.txt	- IRCv3 standard-replies (FAIL/WARN/NOTE)
 typing.txt		- IRCv3 draft/typing capability

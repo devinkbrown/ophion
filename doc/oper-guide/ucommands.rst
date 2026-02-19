@@ -282,6 +282,30 @@ maximum limit per request is 100.
 The server advertises ``CHATHISTORY=100`` and ``MSGREFTYPES=timestamp``
 in ISUPPORT (005).
 
+MARKREAD
+--------
+
+::
+
+   MARKREAD <target> [timestamp=<ISO 8601>]
+
+.. note:: This command requires the ``draft/read-marker`` client
+          capability and is provided by the ``m_read_marker`` module.
+
+Queries or sets the read-marker position for a channel or private
+conversation, allowing clients to synchronise the last-read position
+across multiple sessions.
+
+Without a timestamp parameter, the server replies with the stored
+marker (or ``*`` if none is stored). With a timestamp, the server
+updates the marker. Timestamps are monotonically increasing; stale
+updates are ignored and the server replies with the newer stored value.
+
+On channel JOIN the server automatically sends a MARKREAD to clients
+that have negotiated the capability.
+
+Markers are stored in-memory per-connection and cleared on disconnect.
+
 IRCX user commands
 ~~~~~~~~~~~~~~~~~~
 
