@@ -72,7 +72,7 @@ This indicates global operator status.
 
 This umode prevents you from being affected by channel forwarding. If
 enabled on a channel, channel forwarding sends you to another channel if
-you could not join. See channel mode ``+f`` for more information.
+you could not join. See channel mode ``+y`` for more information.
 
 ``+R``, reject messages from unauthenticated users
 --------------------------------------------------
@@ -108,7 +108,7 @@ sent for hostname changes by services clients; server notices about
 kills are sent to snomask ``+k`` instead of ``+s``.
 
 The exact effects of this umode are variable; no user or oper on an
-actual charybdis server can set it.
+Ophion server can set it.
 
 ``+w``, receive wallops
 -----------------------
@@ -125,9 +125,9 @@ packages).
 --------------------------------------
 
 .. note:: When the ``m_ircx_oper`` module is loaded, user mode ``+z``
-          is repurposed as the IRCX GAG mode. The original charybdis
-          operwall reception mode is affected; opers needing operwall
-          should use the ``OPERWALL`` command directly.
+          is repurposed as the IRCX GAG mode. The original operwall
+          reception mode is affected; opers needing operwall should
+          use the ``OPERWALL`` command directly.
 
 **IRCX GAG mode (with m_ircx_oper loaded):**
 

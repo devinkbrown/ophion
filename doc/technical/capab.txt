@@ -27,8 +27,22 @@ CLUSTER     - supports remote XLINE, UNXLINE, RESV, UNRESV and LOCOPS
 EUID        - supports EUID, non-ENCAP CHGHOST and NICKDELAY
 ZIP         - supports ziplinks
 ENC         - supports encryption (cryptlinks)
+AUTOSID     - supports automatic SID assignment via SVSSID
 
 The KLN, UNKLN and CLUSTER capabilities do not apply to klines, xlines
 and resvs sent over ENCAP.
 
 Disabling ban/invite exceptions in ircd.conf does not remove the EX/IE capabs.
+
+AUTOSID capability
+------------------
+
+Ophion servers that generate their SID automatically (no `sid =` in
+serverinfo{}) advertise AUTOSID during the CAPAB exchange.
+
+When a hub detects a SID collision from an AUTOSID-capable server, it
+sends `SVSSID :<new_sid>` to assign an available SID before closing the
+link.  The leaf adopts the new SID and reconnects automatically.
+
+Servers with an explicit `sid =` in serverinfo{} do not advertise
+AUTOSID and will not accept SVSSID.

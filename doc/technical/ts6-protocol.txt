@@ -103,16 +103,16 @@ type D
 type A
 +q (quiet)
 type C
-+f (forward: channel name <= 30 chars)
++y (forward: channel name <= 30 chars)
 +j (join throttle: N:T with integer N and T)
 type D
-+F (free target for +f)
++F (free target for +y)
 +L (large ban list)
 +P (permanent: does not disappear when empty)
 +Q (ignore forwards to this)
 +c (strip colours)
 +g (allow any member to /invite)
-+z (send messages blocked by +m to chanops)
++M (send messages blocked by +m to chanops)
 
 Nick TS rules:
 A server receiving a command that requires nick TS rules must check for a

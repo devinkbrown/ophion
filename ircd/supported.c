@@ -241,7 +241,7 @@ isupport_chanmodes(const void *ptr)
 	snprintf(result, sizeof result, "%s%sbq,k,%slj,%s",
 			ConfigChannel.use_except ? "e" : "",
 			ConfigChannel.use_invex ? "I" : "",
-			ConfigChannel.use_forward ? "f" : "",
+			ConfigChannel.use_forward ? "y" : "",
 			cflagsbuf);
 	return result;
 }

@@ -1191,7 +1191,7 @@ channel_modes(struct Channel *chptr, struct Client *client_p)
 	if(*chptr->mode.forward &&
 			(ConfigChannel.use_forward || !IsClient(client_p)))
 	{
-		*mbuf++ = 'f';
+		*mbuf++ = 'y';
 
 		if(pbuf > buf2 || !IsClient(client_p) || IsMember(client_p, chptr))
 			pbuf += sprintf(pbuf, " %s", chptr->mode.forward);

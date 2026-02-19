@@ -1537,7 +1537,7 @@ struct ChannelMode chmode_table[256] =
   {chm_nosuch,	0 },			/* J */
   {chm_nosuch,	0 },			/* K */
   {chm_staff,	MODE_EXLIMIT },		/* L */
-  {chm_nosuch,	0 },			/* M */
+  {chm_simple,	MODE_OPMODERATE },	/* M */
   {chm_nosuch,	0 },			/* N */
   {chm_nosuch,	0 },			/* O */
   {chm_staff,	MODE_PERMANENT },	/* P */
@@ -1562,7 +1562,7 @@ struct ChannelMode chmode_table[256] =
   {chm_nosuch,	0 },			/* c */
   {chm_nosuch,	0 },			/* d */
   {chm_ban,	CHFL_EXCEPTION },	/* e */
-  {chm_forward,	0 },			/* f */
+  {chm_nosuch,	0 },			/* f */
   {chm_simple,	MODE_FREEINVITE },	/* g */
   {chm_nosuch,	0 },			/* h */
   {chm_simple,	MODE_INVITEONLY },	/* i */
@@ -1581,8 +1581,8 @@ struct ChannelMode chmode_table[256] =
   {chm_voice,	0 },			/* v */
   {chm_nosuch,	0 },			/* w */
   {chm_nosuch,	0 },			/* x */
-  {chm_nosuch,	0 },			/* y */
-  {chm_simple,	MODE_OPMODERATE },	/* z */
+  {chm_forward,	0 },			/* y */
+  {chm_nosuch,	0 },			/* z */
 
   {chm_nosuch,  0 },			/* 0x7b */
   {chm_nosuch,  0 },			/* 0x7c */

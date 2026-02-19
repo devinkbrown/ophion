@@ -388,11 +388,11 @@ This command will not perform DNS lookups; for best results you must
 testline a host and its IP form.
 
 The given username should begin with a tilde (~) if identd is not in
-use. As of charybdis 2.1.1, ``no_tilde`` and username truncation will be
-taken into account like in the normal client access check.
+use. The ``no_tilde`` and username truncation settings will be taken into
+account like in the normal client access check.
 
-As of charybdis 2.2.0, a channel name can be specified and the RESV will
-be returned, if there is one.
+A channel name can be specified and the RESV will be returned, if there
+is one.
 
 TESTMASK
 --------
