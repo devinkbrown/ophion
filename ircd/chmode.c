@@ -1055,6 +1055,24 @@ chm_admin(struct Client *source_p, struct Channel *chptr,
 			return;
 		}
 
+		/*
+		 * Oper mode protection: when oper_kick_protection is enabled, a
+		 * non-operator client cannot remove channel-admin (+q) from an IRC
+		 * operator or server admin.
+		 */
+		if(MyClient(source_p) && ConfigFileEntry.oper_kick_protection &&
+		   (IsOper(targ_p) || IsAdmin(targ_p)) &&
+		   !(IsOper(source_p) || IsAdmin(source_p)))
+		{
+			sendto_one_numeric(source_p, ERR_ISCHANSERVICE,
+				"%s %s :IRC operators cannot have +q removed by non-operators.",
+				targ_p->name, chptr->chname);
+			sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+				"%s attempted to remove +q from oper %s in %s (blocked)",
+				source_p->name, targ_p->name, chptr->chname);
+			return;
+		}
+
 		mode_changes[mode_count].letter = c;
 		mode_changes[mode_count].dir = MODE_DEL;
 		mode_changes[mode_count].mems = ALL_MEMBERS;
@@ -1131,6 +1149,25 @@ chm_op(struct Client *source_p, struct Channel *chptr,
 			return;
 		}
 
+		/*
+		 * Oper mode protection: when oper_kick_protection is enabled, a
+		 * non-operator client cannot remove channel-op (+o) from an IRC
+		 * operator or server admin.  IRC operators can still deop other
+		 * operators (e.g. as part of conflict resolution).
+		 */
+		if(MyClient(source_p) && ConfigFileEntry.oper_kick_protection &&
+		   (IsOper(targ_p) || IsAdmin(targ_p)) &&
+		   !(IsOper(source_p) || IsAdmin(source_p)))
+		{
+			sendto_one_numeric(source_p, ERR_ISCHANSERVICE,
+				"%s %s :IRC operators cannot be de-opped by non-operators.",
+				targ_p->name, chptr->chname);
+			sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+				"%s attempted to remove +o from oper %s in %s (blocked)",
+				source_p->name, targ_p->name, chptr->chname);
+			return;
+		}
+
 		mode_changes[mode_count].letter = c;
 		mode_changes[mode_count].dir = MODE_DEL;
 		mode_changes[mode_count].mems = ALL_MEMBERS;
@@ -1197,6 +1234,23 @@ chm_voice(struct Client *source_p, struct Channel *chptr,
 	}
 	else
 	{
+		/*
+		 * Oper mode protection: non-operators cannot devoice an IRC
+		 * operator or admin.  Mirrors the -o protection above.
+		 */
+		if(MyClient(source_p) && ConfigFileEntry.oper_kick_protection &&
+		   (IsOper(targ_p) || IsAdmin(targ_p)) &&
+		   !(IsOper(source_p) || IsAdmin(source_p)))
+		{
+			sendto_one_numeric(source_p, ERR_ISCHANSERVICE,
+				"%s %s :IRC operators cannot be de-voiced by non-operators.",
+				targ_p->name, chptr->chname);
+			sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+				"%s attempted to remove +v from oper %s in %s (blocked)",
+				source_p->name, targ_p->name, chptr->chname);
+			return;
+		}
+
 		mode_changes[mode_count].letter = 'v';
 		mode_changes[mode_count].dir = MODE_DEL;
 		mode_changes[mode_count].mems = ALL_MEMBERS;

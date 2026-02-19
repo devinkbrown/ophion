@@ -555,6 +555,53 @@ The general block specifies a variety of options, many of which were in
 ``config.h`` in older daemons. The options are documented in
 ``reference.conf``.
 
+**IRC operator protection options**
+
+Two Ophion-specific options in the ``general {}`` block control oper
+protection:
+
+oper\_kick\_protection
+    A boolean (yes/no, default: no). When enabled, O-lined users (IRC
+    operators and server admins) receive full channel protection:
+
+    - They **cannot be kicked** from any channel by non-operator sources,
+      including ChanServ's AKICK and RESTRICTED enforcement.  Ophion
+      enforces this at the protocol level in ``m_kick.c`` so the kick is
+      silently dropped before it takes effect.
+
+    - Non-operators **cannot remove +q or +o** from an IRC operator or
+      server admin via MODE commands, regardless of their own channel
+      status.
+
+    - IRC operators and admins **can always send** to any channel,
+      overriding ``+m`` (moderated) and ``+n`` (no external messages)
+      restrictions.
+
+    These protections are enforced inside ``modules/m_ircx_oper_godmode.c``
+    (hooks ``can_kick`` and ``can_send``) and ``ircd/chmode.c``
+    (``chm_op``, ``chm_voice``, ``chm_admin`` MODE_DEL).
+
+    Because protection is enforced at the IRCd protocol level, Atheme
+    services automatically respect it — ChanServ KICK and MODE commands
+    against opers are rejected by Ophion before they take effect.  No
+    special Atheme configuration is required.
+
+oper\_auto\_op
+    A boolean (yes/no, default: no). When enabled, any O-lined user
+    joining a channel is automatically granted ``+q`` (channel-admin
+    status, prefix ``~``) on join.  The mode is applied by the local
+    server and propagated to the rest of the network via ``TMODE``.
+
+    This flag is processed inside ``modules/m_ircx_oper_godmode.c``
+    via the ``channel_join`` hook.
+
+    Users with god mode (``+G``) also receive ``+q`` on channel join
+    regardless of this flag, since god mode operators should always
+    have elevated channel status.
+
+    Both flags work independently; you may enable either, both, or
+    neither.
+
 channel {} block
 ----------------
 

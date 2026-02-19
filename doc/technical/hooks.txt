@@ -117,6 +117,30 @@ The following hooks are called during various events related to clients.
 Channel Hooks
 -------------
 
+"can_kick"               - Called before deciding whether to allow a KICK
+                            command from a local client (MyClient).  Hook
+                            handlers may also be registered at HOOK_HIGHEST
+                            to run after all lower-priority handlers.
+                            Passes hook_data_channel_approval:
+                            hdata->client  = source of the kick
+                            hdata->chptr   = channel being kicked from
+                            hdata->msptr   = membership of the kicker
+                            hdata->target  = user being kicked
+                            hdata->approved = 1 to allow, 0 to deny
+                            Note: for server-sourced kicks (e.g. ChanServ),
+                            the check is done directly in m_kick.c via
+                            ConfigFileEntry.oper_kick_protection.
+
+"channel_join"           - Called after a local user joins a channel and
+                            has received /names.  Fired from m_join.c.
+                            Passes hook_data_channel_activity:
+                            hdata->client = user that joined
+                            hdata->chptr  = channel joined
+                            hdata->key    = channel key used (may be NULL)
+                            Used by modules/m_ircx_oper_godmode.c to
+                            auto-promote IRC operators to +q when
+                            oper_auto_op = yes.
+
 "can_invite"             - Called before deciding whether to allow the
                             /invite command
                             hdata->chptr = channel being invited to

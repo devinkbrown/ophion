@@ -34,24 +34,29 @@
 #include "propertyset.h"
 
 static const char godmode_desc[] =
-	"Adds user mode +G (god mode): operator override for all channel operations";
+	"Adds user mode +G (god mode): operator override for all channel operations; "
+	"also provides automatic oper protection (kick immunity, auto-+q on join, and "
+	"moderation bypass) for all O-lined users when enabled via ircd.conf";
 
 static void h_godmode_umode_changed(void *data);
 static void h_godmode_channel_access(void *data);
 static void h_godmode_can_join(void *data);
 static void h_godmode_can_kick(void *data);
 static void h_godmode_can_send(void *data);
+static void h_godmode_channel_join(void *data);
 static void h_godmode_prop_chan_write(void *data);
 static void h_godmode_prop_match(void *data);
 
 mapi_hfn_list_av1 godmode_hfnlist[] = {
-	{ "umode_changed", (hookfn) h_godmode_umode_changed },
-	{ "get_channel_access", (hookfn) h_godmode_channel_access, HOOK_HIGHEST },
-	{ "can_join", (hookfn) h_godmode_can_join, HOOK_HIGHEST },
-	{ "can_kick", (hookfn) h_godmode_can_kick, HOOK_HIGHEST },
-	{ "can_send", (hookfn) h_godmode_can_send, HOOK_HIGHEST },
-	{ "prop_chan_write", (hookfn) h_godmode_prop_chan_write, HOOK_HIGHEST },
-	{ "prop_match", (hookfn) h_godmode_prop_match, HOOK_HIGHEST },
+	{ "umode_changed",       (hookfn) h_godmode_umode_changed                   },
+	{ "get_channel_access",  (hookfn) h_godmode_channel_access, HOOK_HIGHEST     },
+	{ "can_join",            (hookfn) h_godmode_can_join,       HOOK_HIGHEST     },
+	/* HOOK_HIGHEST so oper protection fires AFTER lower-priority hooks. */
+	{ "can_kick",            (hookfn) h_godmode_can_kick,       HOOK_HIGHEST     },
+	{ "can_send",            (hookfn) h_godmode_can_send,       HOOK_HIGHEST     },
+	{ "channel_join",        (hookfn) h_godmode_channel_join                     },
+	{ "prop_chan_write",     (hookfn) h_godmode_prop_chan_write, HOOK_HIGHEST     },
+	{ "prop_match",          (hookfn) h_godmode_prop_match,     HOOK_HIGHEST     },
 	{ NULL, NULL }
 };
 
@@ -140,13 +145,47 @@ h_godmode_can_join(void *vdata)
 }
 
 /*
- * can_kick hook: allow god mode users to kick anyone.
+ * can_kick hook — two responsibilities:
+ *
+ * 1. Oper kick protection (config flag):
+ *    When oper_kick_protection is enabled in ircd.conf, IRC operators and
+ *    admins (O-lined users) cannot be kicked from channels by non-opers.
+ *    The kick is denied with a notice to the kicker, and the attempt is
+ *    logged to the oper snomask.  An IRC oper CAN still kick another IRC
+ *    oper (or god mode bypasses this).
+ *
+ * 2. God mode (explicit +G umode):
+ *    God mode users can kick anyone, including other opers, ignoring the
+ *    oper_kick_protection flag.  This is logged for audit purposes.
+ *
+ * Note: this hook fires only for local clients (MyClient check is in
+ * m_kick.c).  Server-sourced kicks (e.g. from ChanServ) are blocked
+ * by a direct check added to m_kick.c.
  */
 static void
 h_godmode_can_kick(void *vdata)
 {
 	hook_data_channel_approval *data = (hook_data_channel_approval *)vdata;
 
+	/*
+	 * Oper kick protection: a non-oper cannot kick an IRC operator or
+	 * admin.  God mode overrides this (handled below).
+	 */
+	if (ConfigFileEntry.oper_kick_protection &&
+	    (IsOper(data->target) || IsAdmin(data->target)) &&
+	    !(IsOper(data->client) || IsAdmin(data->client)))
+	{
+		sendto_one_numeric(data->client, ERR_ISCHANSERVICE,
+			"%s %s :IRC operators cannot be kicked from channels.",
+			data->target->name, data->chptr->chname);
+		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+			"%s attempted to kick oper %s from %s (blocked: oper_kick_protection)",
+			data->client->name, data->target->name, data->chptr->chname);
+		data->approved = 0;
+		return;
+	}
+
+	/* God mode: allow the god mode user to kick anyone. */
 	if (!IsGodMode(data->client))
 		return;
 
@@ -158,7 +197,16 @@ h_godmode_can_kick(void *vdata)
 }
 
 /*
- * can_send hook: allow god mode users to send to any channel.
+ * can_send hook — two responsibilities:
+ *
+ * 1. Oper moderation bypass (config flag):
+ *    When oper_kick_protection is enabled, all IRC opers and admins can
+ *    send to any channel, overriding +m (moderated) and +n (no external
+ *    messages) restrictions.  This gives opers "full protection in white"
+ *    — they can always speak in any channel they are in or monitoring.
+ *
+ * 2. God mode (explicit +G umode):
+ *    God mode users can always send to any channel (existing behaviour).
  */
 static void
 h_godmode_can_send(void *vdata)
@@ -171,10 +219,71 @@ h_godmode_can_send(void *vdata)
 	if (data->approved == CAN_SEND_NONOP || data->approved == CAN_SEND_OPV)
 		return;
 
-	if (!IsGodMode(data->client))
+	/* God mode: unrestricted send. */
+	if (IsGodMode(data->client))
+	{
+		data->approved = CAN_SEND_OPV;
+		return;
+	}
+
+	/*
+	 * Oper moderation bypass: when oper_kick_protection is set, all
+	 * O-lined users can override channel send restrictions (+m, +n, etc.).
+	 */
+	if (ConfigFileEntry.oper_kick_protection &&
+	    (IsOper(data->client) || IsAdmin(data->client)))
+	{
+		data->approved = CAN_SEND_OPV;
+	}
+}
+
+/*
+ * channel_join hook — auto-promote IRC operators on channel join.
+ *
+ * When oper_auto_op is enabled in ircd.conf, any O-lined user (IsOper or
+ * IsAdmin) joining a channel is automatically granted channel-admin status
+ * (+q / CHFL_ADMIN).  This applies only to local clients; remote opers'
+ * status is propagated when their home server applies the same rule.
+ *
+ * Explicit god mode (+G) also triggers the auto-promotion regardless of the
+ * config flag, since god mode operators should always have elevated status.
+ */
+static void
+h_godmode_channel_join(void *vdata)
+{
+	hook_data_channel_activity *data = vdata;
+	struct Channel *chptr = data->chptr;
+	struct Client *source_p = data->client;
+	struct membership *msptr;
+
+	if (!MyClient(source_p))
 		return;
 
-	data->approved = CAN_SEND_OPV;
+	/* Only proceed if oper_auto_op is set or the user has god mode. */
+	if (!ConfigFileEntry.oper_auto_op && !IsGodMode(source_p))
+		return;
+
+	/* Must be an O-lined user (god mode always implies oper). */
+	if (!(IsOper(source_p) || IsAdmin(source_p)))
+		return;
+
+	msptr = find_channel_membership(chptr, source_p);
+	if (msptr == NULL)
+		return;
+
+	if (is_admin(msptr))
+		return; /* already has +q */
+
+	/* All IRC operators receive +q (channel admin status) on join. */
+	msptr->flags |= CHFL_ADMIN;
+
+	sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+		":%s MODE %s +q %s",
+		me.name, chptr->chname, source_p->name);
+	sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
+		":%s TMODE %ld %s +q %s",
+		me.id, (long)chptr->channelts,
+		chptr->chname, use_id(source_p));
 }
 
 /*
