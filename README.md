@@ -1,15 +1,15 @@
 # Ophion
 
-Ophion is a chat service for communities and teams, combining:
+Ophion is an IRC server for communities and teams, forked from
+charybdis and extended with:
 
- * a websocket-first IRC server forked from charybdis,
- * implementing IRCv3.2 and some parts of the IRCv3 living standard,
- * and some relevant patent unencumbered parts of IRCX,
- * combined with a new, written from scratch IRCv3 identity service element,
- * and various web services to enhance the IRC environment (and discovery glue for them) and
- * best experienced with an Ophion-enabled web client.
-
-Not all of these components yet exist.  Please be patient.
+ * IRCv3.2 and portions of the IRCv3 living standard,
+ * the patent-unencumbered parts of the IRCX protocol
+   (draft-pfenning-irc-extensions-04),
+ * automatic SID generation and SVSSID collision negotiation for
+   zero-config server linking,
+ * reverse-DNS toggle (`rdns_lookups = yes|no`) for fast deployments,
+ * and websocket transport support.
 
 Come chat with us at irc.ophion.dev #ophion.
 
@@ -117,6 +117,47 @@ All IRCX functionality is provided by loadable modules in `modules/`:
 | m_ircx_prop_opkey | OPKEY channel property |
 | m_ircx_prop_user_profile | User profile properties |
 | m_ircx_whisper | WHISPER command and +w mode |
+
+## Server Linking
+
+Ophion supports TS6 server linking with automatic SID generation:
+
+ * If no `sid =` is set in `serverinfo{}`, a SID is deterministically
+   derived from the server name using FNV-1a (12,960 possible values).
+ * The `AUTOSID` capability is advertised during the CAPAB exchange.
+ * When a connecting server's auto-generated SID collides with one
+   already on the network, the hub sends `SVSSID :<new_sid>` to assign
+   an available SID before disconnecting.  The leaf adopts the new SID
+   and reconnects automatically.
+ * Explicit `sid = "XYZ";` in `serverinfo{}` always takes precedence.
+
+### Minimal link configuration
+
+```
+/* hub */
+class "servers" { ping_time = 30; max_number = 20; sendq = 2097152; };
+connect "leaf.example.com" {
+    host = "10.0.0.2";
+    send_password = "linkpass";
+    accept_password = "linkpass";
+    port = 6667;
+    class = "servers";
+};
+
+/* leaf */
+connect "hub.example.com" {
+    host = "10.0.0.1";
+    send_password = "linkpass";
+    accept_password = "linkpass";
+    port = 6667;
+    class = "servers";
+};
+```
+
+### Configuration
+
+ * `rdns_lookups = yes|no` in `general{}` — disable reverse DNS
+   lookups for faster connections (defaults to `yes`).
 
 ## Building
 
