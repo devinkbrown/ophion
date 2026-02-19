@@ -146,8 +146,29 @@ rb_setselect_epoll(rb_fde_t *F, unsigned int type, PF * handler, void *client_da
 
 	if(epoll_ctl(ep_info->ep, op, F->fd, &ep_event) != 0)
 	{
-		rb_lib_log("rb_setselect_epoll(): epoll_ctl failed: %s", strerror(errno));
-		abort();
+		if(op == EPOLL_CTL_ADD && errno == EEXIST)
+		{
+			/* Already registered (state out of sync); try MOD instead */
+			op = EPOLL_CTL_MOD;
+			if(epoll_ctl(ep_info->ep, op, F->fd, &ep_event) != 0)
+				rb_lib_log("rb_setselect_epoll(): epoll_ctl MOD retry failed: %s",
+					   strerror(errno));
+		}
+		else if((op == EPOLL_CTL_MOD || op == EPOLL_CTL_DEL) && errno == ENOENT)
+		{
+			/* Not registered (state out of sync); ignore DEL, re-ADD for MOD */
+			if(op == EPOLL_CTL_MOD)
+			{
+				op = EPOLL_CTL_ADD;
+				if(epoll_ctl(ep_info->ep, op, F->fd, &ep_event) != 0)
+					rb_lib_log("rb_setselect_epoll(): epoll_ctl ADD retry failed: %s",
+						   strerror(errno));
+			}
+		}
+		else
+		{
+			rb_lib_log("rb_setselect_epoll(): epoll_ctl failed: %s", strerror(errno));
+		}
 	}
 
 
