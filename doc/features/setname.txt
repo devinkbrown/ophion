@@ -1,0 +1,37 @@
+IRCv3 setname capability
+------------------------
+
+Specification: https://ircv3.net/specs/extensions/setname
+
+The setname capability allows clients to change their realname (GECOS
+field) after connection registration.  The client must negotiate the
+setname capability before using the SETNAME command.
+
+Capability name: setname
+Module: m_setname
+
+SETNAME command
+~~~~~~~~~~~~~~~
+
+  SETNAME :<new realname>
+
+Changes the sender's realname.  The new value must not exceed REALLEN
+characters.  On success, the change is:
+
+1. Echoed back to the sender:
+   :nick!user@host SETNAME :new realname
+
+2. Broadcast to users sharing a channel who have the setname capability:
+   :nick!user@host SETNAME :new realname
+
+3. Propagated to other servers via ENCAP:
+   :<uid> ENCAP * SETNAME :new realname
+
+Errors
+~~~~~~
+
+If the realname is too long:
+  :server FAIL SETNAME INVALID_REALNAME :Realname is too long
+
+If the client has not negotiated the setname capability:
+  :server 421 nick SETNAME :Unknown command

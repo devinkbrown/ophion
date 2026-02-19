@@ -46,3 +46,40 @@ link.  The leaf adopts the new SID and reconnects automatically.
 
 Servers with an explicit `sid =` in serverinfo{} do not advertise
 AUTOSID and will not accept SVSSID.
+
+IRCv3 client capabilities
+--------------------------
+
+The following client capabilities are advertised to connecting clients
+via CAP LS.  Capabilities registered in the core (ircd/s_serv.c) are
+always available; those registered by modules require the module to be
+loaded.
+
+Core capabilities (ircd/s_serv.c):
+
+  multi-prefix        Shows all prefix modes in NAMES and WHO replies.
+  account-notify      Notifies clients when a shared user's account changes.
+  extended-join       Includes account and realname in JOIN messages.
+  away-notify         Notifies clients when a shared user's away status changes.
+  userhost-in-names   Includes user@host in NAMES replies.
+  cap-notify          Notifies clients when available capabilities change.
+  chghost             Notifies clients when a shared user's host changes.
+  echo-message        Echoes sent PRIVMSG/NOTICE back to the sending client.
+  invite-notify       Notifies channel members when someone is INVITEd.
+  message-tags        Enables IRCv3 message tags and the TAGMSG command.
+  batch               Groups related messages with BATCH start/end markers.
+  setname             Allows clients to change their realname via SETNAME.
+  labeled-response    Associates server responses with the triggering command.
+  standard-replies    Standardised FAIL/WARN/NOTE reply format.
+  draft/typing        Advisory typing indicator (relayed via TAGMSG).
+
+Module capabilities:
+
+  sasl                   SASL authentication (m_sasl_core).
+  tls                    STARTTLS connection upgrade (m_starttls).
+  server-time            Adds server timestamp tag to messages (cap_server_time).
+  account-tag            Adds account name tag to messages (cap_account_tag).
+  sts                    Strict Transport Security policy (cap_sts).
+  msgid                  Unique message identifiers (m_chathistory).
+  draft/chathistory      Message history retrieval (m_chathistory).
+  draft/event-playback   Event playback in history batches (m_chathistory).

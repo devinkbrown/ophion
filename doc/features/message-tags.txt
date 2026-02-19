@@ -1,0 +1,40 @@
+IRCv3 message-tags capability
+-----------------------------
+
+Specification: https://ircv3.net/specs/extensions/message-tags
+
+The message-tags capability enables clients to send and receive
+arbitrary key-value metadata attached to IRC messages using the IRCv3
+message tags format.
+
+When negotiated, the client may receive message tags on any server-sent
+message.  The client may also use the TAGMSG command to send a message
+that carries only tags and no text body.
+
+Capability name: message-tags
+Module: cap_message_tags
+
+TAGMSG command
+~~~~~~~~~~~~~~
+
+  TAGMSG <target>
+
+Sends a message consisting solely of tags (no text body) to the given
+target.  The target may be a channel or a nickname.
+
+TAGMSG respects all standard channel permissions:
+- The sender must be able to send to the channel (can_send() check).
+- Channels with +n (no external messages) require membership.
+- Channels with +m (moderated) require voice or operator status.
+- Normal flood control and target-change limits apply.
+
+Only clients that have negotiated the message-tags capability will
+receive TAGMSG messages.
+
+Example:
+
+  C: @+draft/typing=active TAGMSG #channel
+  S: @+draft/typing=active :nick!user@host TAGMSG #channel
+
+Common uses include typing indicators (+draft/typing) and message
+reactions (+draft/react).

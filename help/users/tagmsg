@@ -1,0 +1,12 @@
+TAGMSG <target>
+
+Sends a message carrying only tags (no text body) to the
+specified channel or user. Requires the message-tags
+capability to be negotiated.
+
+TAGMSG respects standard channel permissions: you must
+be able to send to the channel, and normal flood control
+applies. Only recipients with message-tags negotiated
+will see the message.
+
+Common uses include typing indicators (+draft/typing).

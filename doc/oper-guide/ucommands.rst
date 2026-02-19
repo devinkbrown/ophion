@@ -187,6 +187,101 @@ a 733 numeric.
 Shows status for all nicks on your monitor list, using 730 and 731
 numerics.
 
+IRCv3 commands
+~~~~~~~~~~~~~~
+
+The following commands are provided by IRCv3 modules. They require
+the corresponding client capability to be negotiated before use.
+
+TAGMSG
+------
+
+::
+
+   TAGMSG <target>
+
+.. note:: This command requires the ``message-tags`` client capability
+          and is provided by the ``cap_message_tags`` module.
+
+Sends a message to the target (channel or user) that carries only
+message tags and no text body. This is used by features like typing
+indicators (``+draft/typing``) that need to send metadata without
+a visible message.
+
+TAGMSG respects all normal channel permissions: you must be able to
+send to the channel (checked via ``can_send()``), and the usual
+flood control and target-change limits apply.
+
+Channel operators and voiced users can send TAGMSG to channels with
+``+n`` (no external messages) or ``+m`` (moderated) as they would with
+PRIVMSG.
+
+SETNAME
+-------
+
+::
+
+   SETNAME :<new realname>
+
+.. note:: This command requires the ``setname`` client capability
+          and is provided by the ``m_setname`` module.
+
+Changes the client's realname (GECOS) field. The new realname must
+not exceed ``REALLEN`` characters.
+
+The change is broadcast to all users sharing a channel with the
+sender who have negotiated the ``setname`` capability. The change is
+also propagated to other servers via ENCAP.
+
+If the realname is too long, the server replies with a ``FAIL``
+standard reply::
+
+   :server FAIL SETNAME INVALID_REALNAME :Realname is too long
+
+CHATHISTORY
+-----------
+
+::
+
+   CHATHISTORY <subcommand> <target> <reference> <limit>
+
+.. note:: This command requires the ``draft/chathistory`` client
+          capability and is provided by the ``m_chathistory`` module.
+
+Retrieves message history for a channel or private message
+conversation. Results are delivered inside a ``batch`` of type
+``chathistory``.
+
+**Subcommands:**
+
+``LATEST <target> * <limit>``
+    Retrieves the most recent messages for the target.
+
+``LATEST <target> timestamp=<ts> <limit>``
+    Retrieves messages newer than the given timestamp.
+
+``BEFORE <target> timestamp=<ts> <limit>``
+    Retrieves messages older than the given timestamp.
+
+``AFTER <target> timestamp=<ts> <limit>``
+    Retrieves messages newer than the given timestamp.
+
+``AROUND <target> timestamp=<ts> <limit>``
+    Retrieves messages centered around the given timestamp.
+
+``BETWEEN <target> timestamp=<ts1> timestamp=<ts2> <limit>``
+    Retrieves messages between two timestamps.
+
+``TARGETS timestamp=<ts1> timestamp=<ts2> <limit>``
+    Lists targets (channels/users) with recent history.
+
+Timestamps use the ISO 8601 format ``YYYY-MM-DDTHH:MM:SS.sssZ``.
+The server stores up to 100 messages per target in memory. The
+maximum limit per request is 100.
+
+The server advertises ``CHATHISTORY=100`` and ``MSGREFTYPES=timestamp``
+in ISUPPORT (005).
+
 IRCX user commands
 ~~~~~~~~~~~~~~~~~~
 

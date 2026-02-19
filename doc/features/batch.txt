@@ -1,0 +1,31 @@
+IRCv3 batch capability
+----------------------
+
+Specification: https://ircv3.net/specs/extensions/batch
+
+The batch capability allows the server to group multiple related
+messages together using BATCH start and end markers.  Clients that
+negotiate this capability understand that messages between matching
+BATCH markers form a logical unit.
+
+Capability name: batch
+Module: cap_batch
+
+How it works
+~~~~~~~~~~~~
+
+The server sends a BATCH message with a +reference-tag and batch type
+to start a batch, then the enclosed messages, then a BATCH message
+with -reference-tag to end it.  Each enclosed message carries a
+batch tag referencing the batch.
+
+  :server BATCH +id type [params...]
+  @batch=id :nick!user@host PRIVMSG #channel :message 1
+  @batch=id :nick!user@host PRIVMSG #channel :message 2
+  :server BATCH -id
+
+Clients are not permitted to send BATCH commands to the server; any
+such messages are silently discarded.
+
+Batch types used by Ophion:
+- chathistory: used by the CHATHISTORY command to deliver history results.

@@ -1,0 +1,81 @@
+IRCv3 chathistory capability
+----------------------------
+
+Specification: https://ircv3.net/specs/extensions/chathistory
+
+The chathistory capability allows clients to retrieve message history
+for channels and private conversations.
+
+Capabilities:
+  draft/chathistory      Main capability, enables the CHATHISTORY command.
+  draft/event-playback   Events (JOIN, PART, etc.) included in history.
+  msgid                  Unique message identifiers on PRIVMSG/NOTICE.
+
+Module: m_chathistory
+
+ISUPPORT tokens:
+  CHATHISTORY=100        Maximum messages per request.
+  MSGREFTYPES=timestamp  Supported reference types (timestamp only).
+
+Storage
+~~~~~~~
+
+Messages are stored in memory using per-target ring buffers, with a
+maximum of 100 entries per target.  Channel history is keyed by the
+lowercased channel name.  Private message history is keyed by a
+sorted pair of lowercased nicknames (e.g. "alice:bob").
+
+History is lost on server restart.  This is an in-memory implementation
+suitable for small to medium deployments.
+
+CHATHISTORY command
+~~~~~~~~~~~~~~~~~~~
+
+All subcommands require the draft/chathistory capability to be
+negotiated.
+
+  CHATHISTORY LATEST <target> * <limit>
+  CHATHISTORY LATEST <target> timestamp=<ts> <limit>
+
+    Retrieves the most recent messages for the target, optionally
+    starting from a given timestamp.
+
+  CHATHISTORY BEFORE <target> timestamp=<ts> <limit>
+
+    Retrieves messages older than the given timestamp.
+
+  CHATHISTORY AFTER <target> timestamp=<ts> <limit>
+
+    Retrieves messages newer than the given timestamp.
+
+  CHATHISTORY AROUND <target> timestamp=<ts> <limit>
+
+    Retrieves messages centered around the given timestamp (half
+    before, half after).
+
+  CHATHISTORY BETWEEN <target> timestamp=<ts1> timestamp=<ts2> <limit>
+
+    Retrieves messages between two timestamps.
+
+  CHATHISTORY TARGETS timestamp=<ts1> timestamp=<ts2> <limit>
+
+    Lists targets with history activity between the two timestamps.
+    Only returns targets the requesting client has interacted with.
+
+Timestamps use ISO 8601 format: YYYY-MM-DDTHH:MM:SS.sssZ
+
+Results are delivered inside a BATCH of type chathistory:
+
+  :server BATCH +ref chathistory <target>
+  @batch=ref;msgid=xxx;time=... :nick!user@host PRIVMSG <target> :text
+  :server BATCH -ref
+
+Message IDs (msgid)
+~~~~~~~~~~~~~~~~~~~
+
+When the msgid capability is negotiated, PRIVMSG and NOTICE messages
+receive a unique msgid tag.  Message IDs are generated using the
+format: <timestamp_hex>-<counter_hex>
+
+The msgid is injected via the h_outbound_msgbuf hook during message
+dispatch.
