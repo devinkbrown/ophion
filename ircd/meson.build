@@ -11,6 +11,7 @@ ircd_version_c = custom_target(
 ircd_lib = shared_library('ircd',
   'account.c',
   'authproc.c',
+  'discordproc.c',
   'bandbi.c',
   'cache.c',
   'capability.c',

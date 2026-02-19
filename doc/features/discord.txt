@@ -1,0 +1,176 @@
+Discord Bridge
+==============
+
+Overview
+--------
+Ophion includes a native Discord bridge that connects one Discord guild
+(server) to one or more IRC channels.  The bridge is implemented as a
+helper daemon (`discordd`) that speaks the Discord Gateway WebSocket
+API on one side and the ircd's internal line protocol on the other —
+the same architecture used by authd, ssld, and wsockd.
+
+Feature summary
+---------------
+* Bidirectional message relay between IRC channels and Discord channels.
+* Each Discord user appears in IRC as a phantom client
+  ("Username!discord@discord.invalid"), giving per-user identity.
+* Typing indicators are forwarded in both directions (IRC → Discord and
+  Discord → TYPING_START events → could be extended to draft/typing).
+* Message edits and deletes are reported to IRC as NOTICE events
+  (future enhancement hook in place).
+* Session resumption: the daemon reconnects automatically after a
+  network disruption using the Discord Gateway resume mechanism.
+* The bridge can be disabled at any time without recompiling; just set
+  `enabled = no;` in the config and REHASH.
+
+Requirements
+------------
+* A Discord application with a bot token.  Create one at:
+    https://discord.com/developers/applications
+* The bot must be invited to the target guild with at minimum the
+  following permissions: View Channels, Read Message History,
+  Send Messages.
+* The bot application must enable the following Privileged Gateway
+  Intents in the Developer Portal:
+    - Message Content Intent   (required to read message text)
+* OpenSSL 3.0 or later (already required by Ophion's TLS stack).
+
+Build
+-----
+discordd is built automatically when Ophion is compiled.  No extra
+build flags are required beyond the standard OpenSSL dependency.
+
+    meson setup build
+    ninja -C build
+
+
+Configuration
+-------------
+Add a `discord {}` block to ircd.conf:
+
+    discord {
+        /*
+         * enabled — master on/off switch.
+         * Set to `no` to disable the bridge without removing the block.
+         * Default: no.
+         */
+        enabled = yes;
+
+        /*
+         * token — Discord bot token.
+         * Obtain this from your application's "Bot" page in the
+         * Discord Developer Portal.  Always prefix with "Bot ".
+         */
+        token = "Bot YOUR_BOT_TOKEN_HERE";
+
+        /*
+         * guild_id — snowflake ID of the Discord server (guild).
+         * Right-click the server icon in the Discord client and choose
+         * "Copy Server ID" (Developer Mode must be enabled in settings).
+         */
+        guild_id = "123456789012345678";
+
+        /*
+         * channel_map — one or more IRC↔Discord channel mappings.
+         * Format: "#irc-channel-name=discord_channel_snowflake"
+         *
+         * To get a Discord channel's ID: right-click the channel in
+         * the Discord client and choose "Copy Channel ID".
+         */
+        channel_map = "#general=987654321098765432";
+        channel_map = "#dev=111222333444555666";
+        channel_map = "#announcements=222333444555666777";
+    };
+
+Enabling/disabling the bridge
+------------------------------
+The bridge starts automatically when ircd loads if `enabled = yes;` is
+set.  To disable it at runtime:
+
+  1. Edit ircd.conf and change (or add) `enabled = no;`.
+  2. Send REHASH to the ircd (/REHASH as an IRC operator, or
+     `kill -HUP <ircd-pid>`).
+
+The discordd helper process is stopped immediately; all phantom Discord
+users are quit from IRC channels with the reason "Discord bridge
+shutdown".
+
+To re-enable, set `enabled = yes;` and REHASH again.
+
+How messages appear in IRC
+---------------------------
+Discord → IRC:
+  Messages appear as ordinary PRIVMSG from a phantom nick:
+
+      <Alice> Hello from Discord!
+      <Bob_Discord> Check out this link: https://example.com
+
+  The phantom nick is derived from the Discord user's display name with
+  spaces replaced by underscores and non-IRC characters stripped.  The
+  user@host is always `discord@discord.invalid`.
+
+IRC → Discord:
+  Messages are posted to the mapped Discord channel as bold nick prefix:
+
+      **Alice**: Hello from IRC!
+
+  Only PRIVMSG to a bridged channel is forwarded.  NOTICEs, CTCP, and
+  messages from other phantom clients (echo prevention) are not relayed.
+
+Operator SNOMASK notices
+------------------------
+The bridge sends notices to opers with the standard G (General)
+snomask.  Key notices include:
+
+    -ophion.example.com- Discord bridge: connected to guild "My Server"
+    -ophion.example.com- Discord bridge [WARN]: REST error: HTTP/1.1 403 Forbidden
+    -ophion.example.com- Discord bridge [CRIT]: TLS handshake failed
+
+Troubleshooting
+---------------
+Problem: No phantom users appear / no messages bridged.
+
+  * Verify the bot token is correct and prefixed with "Bot ".
+  * Confirm the bot is in the guild and has Read Messages permission.
+  * Confirm the Message Content Privileged Intent is enabled in the
+    Developer Portal.
+  * Check oper notices for errors (SNO_GENERAL / snomask +g).
+
+Problem: Messages from IRC are not appearing in Discord.
+
+  * Confirm the bot has Send Messages permission in the target channel.
+  * Check oper notices for REST errors.
+
+Problem: Bridge reconnects repeatedly.
+
+  * Discord may be rate-limiting the bot.  Check oper notices for
+    "Heartbeat ACK timeout" or "invalid session" messages.
+  * Ensure only one Ophion instance is running with this bot token.
+
+Security notes
+--------------
+* The bot token grants full API access as the bot user.  Treat it like
+  a password: do not commit it to version control.
+* ircd.conf should be readable only by the ircd user (mode 0600).
+* The `discord.invalid` host used by phantom clients cannot collide
+  with real user hostnames under normal IRCd configuration.
+
+Wire protocol (internal reference)
+------------------------------------
+ircd ↔ discordd communicate via anonymous pipe pair (IFD/OFD).
+
+ircd → discordd:
+  C <token> <guild_id>                  Configure/reconfigure
+  B <discord_channel_id> <irc_channel>  Add channel mapping
+  M <channel_id> <nick_pct> :<text_pct> Send message to Discord
+  T <channel_id>                        Send typing indicator
+
+discordd → ircd:
+  G <guild_name_pct>                              Gateway READY
+  P <chan_id> <user_id> <nick> <msgid> :<text>    New message
+  Y <chan_id> <user_id> <nick>                     Typing start
+  D <chan_id> <msgid>                              Message deleted
+  E <chan_id> <msgid> :<text_pct>                  Message edited
+  W <level> :<message_pct>                         Log (D/I/W/C)
+
+Fields with spaces or special characters are percent-encoded (%20, etc).

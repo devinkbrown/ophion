@@ -65,6 +65,7 @@
 #include "bandbi.h"
 #include "authproc.h"
 #include "operhash.h"
+#include "discordproc.h"
 
 static void
 ircd_die_cb(const char *str) __attribute__((noreturn));
@@ -827,6 +828,8 @@ charybdis_main(int argc, char * const argv[])
 	init_bandb();
 	init_ssld();
 	init_wsockd();
+	init_discordproc();	/* Initialise Discord bridge subsystem. */
+	start_discord_bridge();	/* Start discordd if discord{} block is configured. */
 
 	rehash_bans();
 

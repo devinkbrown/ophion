@@ -167,6 +167,14 @@ m_tagmsg(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 					":%s!%s@%s TAGMSG %s",
 					source_p->name, source_p->username, source_p->host,
 					chptr->chname);
+
+				/* Notify other subsystems (e.g. Discord bridge) */
+				hook_data_channel_activity hdata = {
+					.client = source_p,
+					.chptr  = chptr,
+					.key    = NULL,
+				};
+				call_hook(h_tagmsg_channel, &hdata);
 			}
 		}
 		else
