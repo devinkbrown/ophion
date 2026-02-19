@@ -555,6 +555,8 @@ hook_gag_burst_finished(void *vdata)
  * OPFORCE OP <channel>            - force-op self on channel
  * OPFORCE KICK <channel> <nick> [reason]  - force-kick user
  * OPFORCE MODE <channel> <modes>  - force set modes
+ * OPFORCE CLOSE <channel> [reason] - mass-kick and destroy channel
+ *   If oper has +K (anonkill), kicks show as from "SYSTEM"
  */
 static void
 m_opforce(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
@@ -727,7 +729,76 @@ m_opforce(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 		return;
 	}
 
-	sendto_one_notice(source_p, ":Usage: OPFORCE {JOIN|OP|KICK|MODE} <channel> [args]");
+	if (!rb_strcasecmp(parv[1], "CLOSE"))
+	{
+		/* OPFORCE CLOSE <channel> [reason]
+		 * Mass-kick all users from a channel and destroy it.
+		 * Respects +K (anonymous kill mode): if the oper has +K set,
+		 * the kick source shows as "SYSTEM" instead of the oper's name.
+		 */
+		if (parc < 3)
+		{
+			sendto_one(source_p, form_str(ERR_NEEDMOREPARAMS),
+				me.name, source_p->name, "OPFORCE CLOSE");
+			return;
+		}
+
+		chptr = find_channel(parv[2]);
+		if (chptr == NULL)
+		{
+			sendto_one_numeric(source_p, ERR_NOSUCHCHANNEL,
+				form_str(ERR_NOSUCHCHANNEL), parv[2]);
+			return;
+		}
+
+		const char *reason = (parc >= 4 && !EmptyString(parv[3])) ?
+			parv[3] : "Channel closed by server administrator";
+
+		/* determine kick source: anonymous if oper has +K */
+		const char *kickfrom;
+		const char *kickfrom_id;
+		bool anonymous = false;
+
+		if (user_modes['K'] && (source_p->umodes & user_modes['K']))
+		{
+			kickfrom = me.name;
+			kickfrom_id = me.id;
+			anonymous = true;
+		}
+		else
+		{
+			kickfrom = me.name;
+			kickfrom_id = me.id;
+		}
+
+		/* kick all members */
+		rb_dlink_node *ptr, *next_ptr;
+		RB_DLINK_FOREACH_SAFE(ptr, next_ptr, chptr->members.head)
+		{
+			struct membership *msptr = ptr->data;
+			struct Client *target_p = msptr->client_p;
+
+			sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+				":%s KICK %s %s :Kicked by %s: %s",
+				kickfrom, chptr->chname, target_p->name,
+				anonymous ? "SYSTEM" : source_p->name, reason);
+			sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
+				":%s KICK %s %s :Kicked by %s: %s",
+				kickfrom_id, chptr->chname, use_id(target_p),
+				anonymous ? "SYSTEM" : source_p->name, reason);
+			remove_user_from_channel(msptr);
+		}
+
+		sendto_wallops_flags(UMODE_WALLOP, &me,
+			"OPFORCE: %s closed channel %s (%s)%s",
+			get_oper_name(source_p), parv[2], reason,
+			anonymous ? " [anonymous]" : "");
+
+		sendto_one_notice(source_p, ":Channel %s has been closed", parv[2]);
+		return;
+	}
+
+	sendto_one_notice(source_p, ":Usage: OPFORCE {JOIN|OP|KICK|MODE|CLOSE} <channel> [args]");
 }
 
 struct Message gag_msgtab = {

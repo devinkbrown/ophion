@@ -389,7 +389,15 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 			continue;
 		}
 		else if(chptr != chptr2)
+		{
 			sendto_one_numeric(source_p, ERR_LINKCHANNEL, form_str(ERR_LINKCHANNEL), name, chptr2->chname);
+
+			/* If redirected to a brand-new channel (e.g., CLONEABLE clone),
+			 * make the user the founder so SJOIN is sent to remote servers.
+			 */
+			if(rb_dlink_list_length(&chptr2->members) == 0)
+				flags = CHFL_ADMIN;
+		}
 
 		chptr = chptr2;
 

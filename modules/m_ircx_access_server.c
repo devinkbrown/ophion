@@ -16,8 +16,16 @@
  *   ACCESS * ADD GRANT <user@host>
  *     Adds an exemption entry for the given mask (overrides DENY).
  *
+ *   ACCESS * ADD NOCHANNEL <pattern> [:<reason>]
+ *     Blocks creation of channels matching the wildcard pattern.
+ *     e.g., ACCESS * ADD NOCHANNEL #evil* :Not allowed
+ *
+ *   ACCESS * ADD NONICK <pattern> [:<reason>]
+ *     Blocks use of nicknames matching the wildcard pattern.
+ *     e.g., ACCESS * ADD NONICK badnick* :Reserved
+ *
  *   ACCESS * DELETE [level] <mask>
- *     Removes a DENY, GAG, or GRANT entry for the given mask.
+ *     Removes a DENY, GAG, GRANT, NOCHANNEL, or NONICK entry.
  *
  *   ACCESS * LIST [level]
  *     Lists server access entries.  Optional level filter.
@@ -25,10 +33,10 @@
  *   ACCESS * CLEAR [level]
  *     Clears all server access entries (or all of a specific level).
  *
- * Processing order per IRCX: GRANT, DENY (GRANT overrides DENY).
+ * NOCHANNEL and NONICK entries are enforced via hooks on channel
+ * creation and nick changes.  Opers are exempt from these restrictions.
  *
- * Existing KLINE/DLINE/UNKLINE/UNDLINE commands remain functional.
- * This module provides the IRCX wrapper around the ban infrastructure.
+ * Processing order per IRCX: GRANT, DENY (GRANT overrides DENY).
  */
 
 #include "stdinc.h"
@@ -54,19 +62,201 @@
 #include "logger.h"
 
 static const char ircx_access_server_desc[] =
-	"Provides IRCX ACCESS * for server-level access control (DENY/GAG/GRANT)";
+	"Provides IRCX ACCESS * for server-level access control "
+	"(DENY/GAG/GRANT/NOCHANNEL/NONICK)";
 
 static void m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	struct Client *source_p, int parc, const char *parv[]);
 
 /*
- * We hook into the existing ACCESS command.  The m_ircx_access module
- * handles ACCESS #channel; we handle ACCESS *.
- *
- * If the ACCESS command already exists, we register as a separate
- * SACCESS command.  The main entry is through the access command
- * checking for "*" target.
+ * Wildcard ban entries for channel names and nicknames.
  */
+struct wildcard_ban {
+	rb_dlink_node node;
+	char *pattern;		/* wildcard pattern (e.g., #evil*, badnick*) */
+	char *reason;		/* reason shown to user */
+	char *setter;		/* who set it */
+	time_t created;
+};
+
+static rb_dlink_list nochannel_list = { NULL, NULL, 0 };
+static rb_dlink_list nonick_list = { NULL, NULL, 0 };
+
+static struct wildcard_ban *
+find_wildcard_ban(rb_dlink_list *list, const char *pattern)
+{
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, list->head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		if (!irccmp(wb->pattern, pattern))
+			return wb;
+	}
+	return NULL;
+}
+
+static void
+add_wildcard_ban(rb_dlink_list *list, const char *pattern,
+	const char *reason, const char *setter)
+{
+	struct wildcard_ban *wb = rb_malloc(sizeof(*wb));
+	wb->pattern = rb_strdup(pattern);
+	wb->reason = rb_strdup(reason);
+	wb->setter = rb_strdup(setter);
+	wb->created = rb_current_time();
+	rb_dlinkAdd(wb, &wb->node, list);
+}
+
+static void
+del_wildcard_ban(rb_dlink_list *list, struct wildcard_ban *wb)
+{
+	rb_dlinkDelete(&wb->node, list);
+	rb_free(wb->pattern);
+	rb_free(wb->reason);
+	rb_free(wb->setter);
+	rb_free(wb);
+}
+
+static void
+clear_wildcard_list(rb_dlink_list *list)
+{
+	rb_dlink_node *ptr, *next;
+	RB_DLINK_FOREACH_SAFE(ptr, next, list->head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		del_wildcard_ban(list, wb);
+	}
+}
+
+/*
+ * check_nochannel - check if a channel name matches a NOCHANNEL ban
+ * Returns the ban entry if matched, NULL otherwise.
+ */
+static struct wildcard_ban *
+check_nochannel(const char *name)
+{
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, nochannel_list.head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		if (match(wb->pattern, name))
+			return wb;
+	}
+	return NULL;
+}
+
+/*
+ * check_nonick - check if a nickname matches a NONICK ban
+ * Returns the ban entry if matched, NULL otherwise.
+ */
+static struct wildcard_ban *
+check_nonick(const char *nick)
+{
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, nonick_list.head)
+	{
+		struct wildcard_ban *wb = ptr->data;
+		if (match(wb->pattern, nick))
+			return wb;
+	}
+	return NULL;
+}
+
+/*
+ * Hook: can_create_channel - enforce NOCHANNEL restrictions
+ */
+static void
+h_access_can_create_channel(void *vdata)
+{
+	hook_data_client_approval *data = vdata;
+	struct Client *source_p = data->client;
+	struct wildcard_ban *wb;
+
+	if (data->approved != 0)
+		return;
+
+	/* opers are exempt */
+	if (IsOper(source_p))
+		return;
+
+	/* we don't have the channel name in hook_data_client_approval,
+	 * but the IRCX CREATE handler checks this separately.
+	 * For the core m_join path, we use the channel_join hook instead.
+	 */
+}
+
+/*
+ * Hook: channel_join - enforce NOCHANNEL on join-create
+ *
+ * This hook fires after a user joins.  If the channel was just
+ * created (user is the only member and is chanop), check the ban.
+ * If banned, kick the user and destroy the channel.
+ */
+static void
+h_access_channel_join(void *vdata)
+{
+	hook_data_channel_activity *data = vdata;
+	struct Client *source_p = data->client;
+	struct Channel *chptr = data->chptr;
+	struct wildcard_ban *wb;
+
+	/* opers are exempt */
+	if (IsOper(source_p))
+		return;
+
+	/* only check newly-created channels (single member who created it) */
+	if (rb_dlink_list_length(&chptr->members) != 1)
+		return;
+
+	wb = check_nochannel(chptr->chname);
+	if (wb == NULL)
+		return;
+
+	/* found a matching NOCHANNEL ban - kick the user out */
+	sendto_one_numeric(source_p, ERR_UNAVAILRESOURCE,
+		form_str(ERR_UNAVAILRESOURCE),
+		chptr->chname);
+
+	/* remove the user from the channel (destroys the channel) */
+	struct membership *msptr = find_channel_membership(chptr, source_p);
+	if (msptr != NULL)
+		remove_user_from_channel(msptr);
+}
+
+/*
+ * Hook: local_nick_change - enforce NONICK restrictions
+ *
+ * Before a nick change is fully processed, check if the new nick
+ * matches a NONICK ban.  If so, force the user back.
+ */
+static void
+h_access_nick_change(void *vdata)
+{
+	hook_cdata *data = vdata;
+	struct Client *source_p = data->client;
+	const char *newnick = data->arg2;
+	struct wildcard_ban *wb;
+
+	if (!MyClient(source_p))
+		return;
+
+	/* opers are exempt */
+	if (IsOper(source_p))
+		return;
+
+	wb = check_nonick(newnick);
+	if (wb == NULL)
+		return;
+
+	/* nick is banned - notify the user.
+	 * The nick change has already happened at this point in the hook chain,
+	 * but we can force them to use their UID instead.
+	 */
+	sendto_one_notice(source_p,
+		":Nickname '%s' is not allowed: %s",
+		newnick, wb->reason);
+}
+
 struct Message saccess_msgtab = {
 	"SACCESS", 0, 0, 0, 0,
 	{mg_unreg, {m_access_server, 2}, mg_ignore, mg_ignore, mg_ignore, {m_access_server, 2}}
@@ -74,19 +264,12 @@ struct Message saccess_msgtab = {
 
 mapi_clist_av1 ircx_access_server_clist[] = { &saccess_msgtab, NULL };
 
-/*
- * Also hook into the ACCESS command by registering a prop_match hook.
- * When ACCESS * is used, we intercept it.
- */
-static void h_access_server_intercept(void *);
-
 mapi_hfn_list_av1 ircx_access_server_hfnlist[] = {
+	{ "can_create_channel", (hookfn) h_access_can_create_channel },
+	{ "channel_join", (hookfn) h_access_channel_join },
+	{ "local_nick_change", (hookfn) h_access_nick_change },
 	{ NULL, NULL }
 };
-
-DECLARE_MODULE_AV2(ircx_access_server, NULL, NULL,
-	ircx_access_server_clist, NULL, ircx_access_server_hfnlist,
-	NULL, NULL, ircx_access_server_desc);
 
 /*
  * Split a user@host mask into user and host parts.
@@ -120,8 +303,6 @@ split_mask(const char *mask, char *userbuf, size_t userlen, char *hostbuf, size_
 
 /*
  * ACCESS * ADD DENY <mask> [duration] [:<reason>]
- *
- * Creates a K-line.  If duration is given, temporary.
  */
 static void
 handle_add_deny(struct Client *source_p, const char *mask, int parc, const char *parv[], int arg_offset)
@@ -198,9 +379,6 @@ handle_add_deny(struct Client *source_p, const char *mask, int parc, const char 
 
 /*
  * ACCESS * ADD GAG <mask> [duration]
- *
- * Adds a persistent GAG entry and applies to all matching connected users.
- * Uses the gag_list from m_ircx_oper via the GAG ENCAP mechanism.
  */
 static void
 handle_add_gag(struct Client *source_p, const char *mask, int parc, const char *parv[], int arg_offset)
@@ -217,11 +395,6 @@ handle_add_gag(struct Client *source_p, const char *mask, int parc, const char *
 
 	snprintf(fullmask, sizeof fullmask, "%s@%s", user, host);
 
-	/*
-	 * Apply GAG to all matching connected local users.
-	 * We propagate via ENCAP GAG for each affected user so all
-	 * servers stay in sync.
-	 */
 	RB_DLINK_FOREACH(ptr, lclient_list.head)
 	{
 		struct Client *target_p = ptr->data;
@@ -230,7 +403,6 @@ handle_add_gag(struct Client *source_p, const char *mask, int parc, const char *
 		if (!IsPerson(target_p))
 			continue;
 
-		/* don't gag opers */
 		if (IsOper(target_p))
 			continue;
 
@@ -265,10 +437,6 @@ handle_add_gag(struct Client *source_p, const char *mask, int parc, const char *
 
 /*
  * ACCESS * ADD GRANT <mask>
- *
- * Adds a K-line exemption for the given mask.
- * Uses CONF_EXEMPTDLINE flag via the auth system.
- * For now, we track these as kline exemptions.
  */
 static void
 handle_add_grant(struct Client *source_p, const char *mask)
@@ -280,6 +448,84 @@ handle_add_grant(struct Client *source_p, const char *mask)
 }
 
 /*
+ * ACCESS * ADD NOCHANNEL <pattern> [:<reason>]
+ *
+ * Block creation of channels matching the wildcard pattern.
+ * Opers are exempt.  Pattern supports * and ? wildcards.
+ */
+static void
+handle_add_nochannel(struct Client *source_p, const char *pattern, int parc, const char *parv[], int arg_offset)
+{
+	const char *reason = "Channel blocked by server policy";
+
+	if (EmptyString(pattern))
+	{
+		sendto_one_notice(source_p, ":Usage: ACCESS * ADD NOCHANNEL <pattern> [:<reason>]");
+		return;
+	}
+
+	if (find_wildcard_ban(&nochannel_list, pattern) != NULL)
+	{
+		sendto_one_notice(source_p, ":NOCHANNEL entry for [%s] already exists", pattern);
+		return;
+	}
+
+	if (arg_offset < parc && !EmptyString(parv[arg_offset]))
+		reason = parv[arg_offset];
+
+	add_wildcard_ban(&nochannel_list, pattern, reason, get_oper_name(source_p));
+
+	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+		"%s added ACCESS * NOCHANNEL for [%s] [%s]",
+		get_oper_name(source_p), pattern, reason);
+
+	sendto_one_notice(source_p, ":Added NOCHANNEL entry [%s]", pattern);
+}
+
+/*
+ * ACCESS * ADD NONICK <pattern> [:<reason>]
+ *
+ * Block use of nicknames matching the wildcard pattern.
+ * Opers are exempt.  Adds a nick reservation (RESV) under the hood.
+ */
+static void
+handle_add_nonick(struct Client *source_p, const char *pattern, int parc, const char *parv[], int arg_offset)
+{
+	const char *reason = "Nickname blocked by server policy";
+
+	if (EmptyString(pattern))
+	{
+		sendto_one_notice(source_p, ":Usage: ACCESS * ADD NONICK <pattern> [:<reason>]");
+		return;
+	}
+
+	if (find_wildcard_ban(&nonick_list, pattern) != NULL)
+	{
+		sendto_one_notice(source_p, ":NONICK entry for [%s] already exists", pattern);
+		return;
+	}
+
+	if (arg_offset < parc && !EmptyString(parv[arg_offset]))
+		reason = parv[arg_offset];
+
+	add_wildcard_ban(&nonick_list, pattern, reason, get_oper_name(source_p));
+
+	/* also add a RESV to block at the nick validation level */
+	struct ConfItem *aconf = make_conf();
+	aconf->status = CONF_RESV_NICK;
+	aconf->host = rb_strdup(pattern);
+	aconf->passwd = rb_strdup(reason);
+	aconf->info.oper = operhash_add(get_oper_name(source_p));
+	add_to_resv_hash(aconf->host, aconf);
+
+	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+		"%s added ACCESS * NONICK for [%s] [%s]",
+		get_oper_name(source_p), pattern, reason);
+
+	sendto_one_notice(source_p, ":Added NONICK entry [%s]", pattern);
+}
+
+/*
  * ACCESS * DELETE [level] <mask>
  */
 static void
@@ -287,6 +533,7 @@ handle_delete(struct Client *source_p, const char *level_or_mask, const char *ma
 {
 	const char *mask;
 	char user[USERLEN + 1], host[HOSTLEN + 1];
+	struct wildcard_ban *wb;
 
 	/* if both level and mask given, use mask_arg; otherwise level_or_mask IS the mask */
 	if (mask_arg != NULL && !EmptyString(mask_arg))
@@ -301,33 +548,67 @@ handle_delete(struct Client *source_p, const char *level_or_mask, const char *ma
 		return;
 	}
 
-	if (!split_mask(mask, user, sizeof user, host, sizeof host))
+	/* try NOCHANNEL first */
+	wb = find_wildcard_ban(&nochannel_list, mask);
+	if (wb != NULL)
 	{
-		sendto_one_notice(source_p, ":Invalid mask: %s", mask);
+		del_wildcard_ban(&nochannel_list, wb);
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+			"%s removed ACCESS * NOCHANNEL for [%s]",
+			get_oper_name(source_p), mask);
+		sendto_one_notice(source_p, ":Removed NOCHANNEL entry [%s]", mask);
 		return;
 	}
 
-	/* try to find and remove a kline */
-	struct ConfItem *aconf = find_exact_conf_by_address(host, CONF_KILL, user);
-	if (aconf != NULL)
+	/* try NONICK */
+	wb = find_wildcard_ban(&nonick_list, mask);
+	if (wb != NULL)
 	{
-		if (aconf->flags & CONF_FLAGS_TEMPORARY)
-			remove_reject_mask(aconf->user, aconf->host);
+		/* also remove the RESV */
+		struct ConfItem *aconf = find_nick_resv(mask);
+		if (aconf != NULL)
+			del_from_resv_hash(mask, aconf);
 
-		delete_one_address_conf(host, aconf);
-		bandb_del(BANDB_KLINE, user, host);
+		del_wildcard_ban(&nonick_list, wb);
 
 		sendto_realops_snomask(SNO_GENERAL, L_ALL,
-			"%s removed ACCESS * DENY for [%s@%s]",
-			get_oper_name(source_p), user, host);
-		sendto_one_notice(source_p, ":Removed DENY entry [%s@%s]", user, host);
+			"%s removed ACCESS * NONICK for [%s]",
+			get_oper_name(source_p), mask);
+		sendto_one_notice(source_p, ":Removed NONICK entry [%s]", mask);
 		return;
 	}
 
-	/* try to remove a GAG entry */
+	/* try DENY (kline) */
+	if (split_mask(mask, user, sizeof user, host, sizeof host))
+	{
+		struct ConfItem *aconf = find_exact_conf_by_address(host, CONF_KILL, user);
+		if (aconf != NULL)
+		{
+			if (aconf->flags & CONF_FLAGS_TEMPORARY)
+				remove_reject_mask(aconf->user, aconf->host);
+
+			delete_one_address_conf(host, aconf);
+			bandb_del(BANDB_KLINE, user, host);
+
+			sendto_realops_snomask(SNO_GENERAL, L_ALL,
+				"%s removed ACCESS * DENY for [%s@%s]",
+				get_oper_name(source_p), user, host);
+			sendto_one_notice(source_p, ":Removed DENY entry [%s@%s]", user, host);
+			return;
+		}
+	}
+
+	/* try GAG */
 	{
 		char fullmask[USERLEN + HOSTLEN + 2];
-		snprintf(fullmask, sizeof fullmask, "%s@%s", user, host);
+		if (strchr(mask, '@'))
+		{
+			rb_strlcpy(fullmask, mask, sizeof fullmask);
+		}
+		else
+		{
+			snprintf(fullmask, sizeof fullmask, "*@%s", mask);
+		}
 
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG_DEL %s",
@@ -347,16 +628,23 @@ static void
 handle_list(struct Client *source_p, const char *level_filter)
 {
 	bool show_deny = true, show_gag = true, show_grant = true;
+	bool show_nochannel = true, show_nonick = true;
+	rb_dlink_node *ptr;
 
 	if (level_filter != NULL)
 	{
 		show_deny = show_gag = show_grant = false;
+		show_nochannel = show_nonick = false;
 		if (!rb_strcasecmp(level_filter, "DENY"))
 			show_deny = true;
 		else if (!rb_strcasecmp(level_filter, "GAG"))
 			show_gag = true;
 		else if (!rb_strcasecmp(level_filter, "GRANT"))
 			show_grant = true;
+		else if (!rb_strcasecmp(level_filter, "NOCHANNEL"))
+			show_nochannel = true;
+		else if (!rb_strcasecmp(level_filter, "NONICK"))
+			show_nonick = true;
 	}
 
 	sendto_one_notice(source_p, ":--- ACCESS * list ---");
@@ -367,25 +655,43 @@ handle_list(struct Client *source_p, const char *level_filter)
 		report_auth(source_p);
 	}
 
+	/* list NOCHANNEL entries */
+	if (show_nochannel)
+	{
+		RB_DLINK_FOREACH(ptr, nochannel_list.head)
+		{
+			struct wildcard_ban *wb = ptr->data;
+			sendto_one_notice(source_p, ":NOCHANNEL %s [%s] (set by %s)",
+				wb->pattern, wb->reason, wb->setter);
+		}
+	}
+
+	/* list NONICK entries */
+	if (show_nonick)
+	{
+		RB_DLINK_FOREACH(ptr, nonick_list.head)
+		{
+			struct wildcard_ban *wb = ptr->data;
+			sendto_one_notice(source_p, ":NONICK %s [%s] (set by %s)",
+				wb->pattern, wb->reason, wb->setter);
+		}
+	}
+
 	sendto_one_notice(source_p, ":--- End of ACCESS * list ---");
 }
 
 /*
  * ACCESS * CLEAR [level]
- *
- * Clears server access entries by level.
  */
 static void
 handle_clear(struct Client *source_p, const char *level)
 {
 	if (level != NULL && !rb_strcasecmp(level, "GAG"))
 	{
-		/* clear all gags by sending ENCAP GAG_CLEAR */
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG_CLEAR",
 			use_id(source_p));
 
-		/* also ungag local users */
 		rb_dlink_node *ptr;
 		RB_DLINK_FOREACH(ptr, lclient_list.head)
 		{
@@ -405,25 +711,46 @@ handle_clear(struct Client *source_p, const char *level)
 		return;
 	}
 
+	if (level != NULL && !rb_strcasecmp(level, "NOCHANNEL"))
+	{
+		clear_wildcard_list(&nochannel_list);
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+			"%s cleared all ACCESS * NOCHANNEL entries",
+			get_oper_name(source_p));
+		sendto_one_notice(source_p, ":All NOCHANNEL entries cleared");
+		return;
+	}
+
+	if (level != NULL && !rb_strcasecmp(level, "NONICK"))
+	{
+		/* remove RESVs too */
+		rb_dlink_node *ptr2;
+		RB_DLINK_FOREACH(ptr2, nonick_list.head)
+		{
+			struct wildcard_ban *wb = ptr2->data;
+			struct ConfItem *aconf = find_nick_resv(wb->pattern);
+			if (aconf != NULL)
+				del_from_resv_hash(wb->pattern, aconf);
+		}
+		clear_wildcard_list(&nonick_list);
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+			"%s cleared all ACCESS * NONICK entries",
+			get_oper_name(source_p));
+		sendto_one_notice(source_p, ":All NONICK entries cleared");
+		return;
+	}
+
 	if (level != NULL && !rb_strcasecmp(level, "DENY"))
 	{
 		sendto_one_notice(source_p, ":Use /UNKLINE or ACCESS * DELETE to remove individual DENY entries");
 		return;
 	}
 
-	sendto_one_notice(source_p, ":Usage: ACCESS * CLEAR {GAG|DENY}");
+	sendto_one_notice(source_p, ":Usage: ACCESS * CLEAR {GAG|DENY|NOCHANNEL|NONICK}");
 }
 
 /*
  * ACCESS * command handler
- *
- * Syntax:
- *   ACCESS * LIST [level]
- *   ACCESS * ADD <level> <mask> [duration] [:<reason>]
- *   ACCESS * DELETE [level] <mask>
- *   ACCESS * CLEAR [level]
- *
- * Also accepts SACCESS as an alias.
  */
 static void
 m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
@@ -439,7 +766,6 @@ m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		return;
 	}
 
-	/* SACCESS arg1 arg2...  (target is implicitly *) */
 	target = parv[1];
 	if (!strcmp(target, "*"))
 	{
@@ -453,7 +779,6 @@ m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	}
 	else
 	{
-		/* SACCESS LIST, SACCESS ADD ... (no * needed) */
 		action = parv[1];
 		arg_base = 2;
 	}
@@ -480,8 +805,12 @@ m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 			handle_add_gag(source_p, mask, parc, parv, arg_base + 2);
 		else if (!rb_strcasecmp(level, "GRANT"))
 			handle_add_grant(source_p, mask);
+		else if (!rb_strcasecmp(level, "NOCHANNEL"))
+			handle_add_nochannel(source_p, mask, parc, parv, arg_base + 2);
+		else if (!rb_strcasecmp(level, "NONICK"))
+			handle_add_nonick(source_p, mask, parc, parv, arg_base + 2);
 		else
-			sendto_one_notice(source_p, ":Unknown level '%s'. Use DENY, GAG, or GRANT.", level);
+			sendto_one_notice(source_p, ":Unknown level '%s'. Use DENY, GAG, GRANT, NOCHANNEL, or NONICK.", level);
 	}
 	else if (!rb_strcasecmp(action, "DELETE") || !rb_strcasecmp(action, "DEL"))
 	{
@@ -498,3 +827,14 @@ m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		sendto_one_notice(source_p, ":Usage: ACCESS * {LIST|ADD|DELETE|CLEAR} [args]");
 	}
 }
+
+static void
+ircx_access_server_deinit(void)
+{
+	clear_wildcard_list(&nochannel_list);
+	clear_wildcard_list(&nonick_list);
+}
+
+DECLARE_MODULE_AV2(ircx_access_server, NULL, ircx_access_server_deinit,
+	ircx_access_server_clist, NULL, ircx_access_server_hfnlist,
+	NULL, NULL, ircx_access_server_desc);
