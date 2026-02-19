@@ -250,8 +250,36 @@ rb_select_kqueue(long delay)
 		if(kqout[i].flags & EV_ERROR)
 		{
 			errno = kqout[i].data;
-			/* XXX error == bad! -- adrian */
-			continue;	/* XXX! */
+			/* EBADF is normal for already-closed fds -- jilles */
+			if(errno == EBADF)
+				continue;
+			F = kqout[i].udata;
+			if(F == NULL)
+				continue;
+			/*
+			 * A changelist entry (typically EV_ADD) failed.
+			 * The fd is not monitored, but the handler was already
+			 * set by rb_setselect_kqueue.  Call it so the connection
+			 * gets cleaned up rather than hanging indefinitely.
+			 */
+			switch(kqout[i].filter)
+			{
+			case EVFILT_READ:
+				if((hdl = F->read_handler) != NULL)
+				{
+					F->read_handler = NULL;
+					hdl(F, F->read_data);
+				}
+				break;
+			case EVFILT_WRITE:
+				if((hdl = F->write_handler) != NULL)
+				{
+					F->write_handler = NULL;
+					hdl(F, F->write_data);
+				}
+				break;
+			}
+			continue;
 		}
 
 		switch (kqout[i].filter)
