@@ -183,7 +183,7 @@ ascii2prefix(int family, const char *string)
 		memcpy(save, string, cp - string);
 		save[cp - string] = '\0';
 		string = save;
-		if(bitlen <= 0 || bitlen > maxbitlen)
+		if(bitlen < 0 || bitlen > maxbitlen)
 			bitlen = maxbitlen;
 	}
 	else
@@ -807,25 +807,27 @@ rb_patricia_remove(rb_patricia_tree_t *patricia, rb_patricia_node_t *node)
 			prefix_toa(node->prefix), node->prefix->bitlen);
 #endif /* PATRICIA_DEBUG */
 		parent = node->parent;
+		/* Determine parent relationship before freeing node to avoid
+		 * use-after-free comparisons (parent->r == node etc.) */
+		int node_was_right = (parent != NULL && parent->r == node);
+
 		Deref_Prefix(node->prefix);
 		rb_free(node);
 		patricia->num_active_node--;
 
 		if(parent == NULL)
 		{
-			assert(patricia->head == node);
 			patricia->head = NULL;
 			return;
 		}
 
-		if(parent->r == node)
+		if(node_was_right)
 		{
 			parent->r = NULL;
 			child = parent->l;
 		}
 		else
 		{
-			assert(parent->l == node);
 			parent->l = NULL;
 			child = parent->r;
 		}
@@ -870,24 +872,26 @@ rb_patricia_remove(rb_patricia_tree_t *patricia, rb_patricia_node_t *node)
 	parent = node->parent;
 	child->parent = parent;
 
+	/* Determine parent relationship before freeing node to avoid
+	 * use-after-free comparisons (parent->r == node etc.) */
+	int node_was_right = (parent != NULL && parent->r == node);
+
 	Deref_Prefix(node->prefix);
 	rb_free(node);
 	patricia->num_active_node--;
 
 	if(parent == NULL)
 	{
-		assert(patricia->head == node);
 		patricia->head = child;
 		return;
 	}
 
-	if(parent->r == node)
+	if(node_was_right)
 	{
 		parent->r = child;
 	}
 	else
 	{
-		assert(parent->l == node);
 		parent->l = child;
 	}
 }
