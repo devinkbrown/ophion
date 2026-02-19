@@ -8,9 +8,13 @@
  *   +u  KNOCK      - Enables KNOCK notifications to channel hosts/owners
  *   +h  HIDDEN     - Channel not listed via LIST/LISTX but queryable by name
  *   +a  AUTHONLY   - Only authenticated (PASS/AUTH'd) users may join
+ *                    (replaces charybdis +r REGONLY which is now +r REGISTERED)
  *   +d  CLONEABLE  - Channel creates numbered clones when full
  *   +E  CLONE      - Marks channel as a clone of a CLONEABLE channel
  *                     (IRCX +e, remapped to +E to avoid ban exception conflict)
+ *   +r  REGISTERED - Channel is registered with services (oper/service-only)
+ *                    (overrides charybdis REGONLY; use +a for auth-only joins)
+ *                    Implies persistence (+P behavior)
  *   +f  NOFORMAT   - Raw text, clients should not format messages
  *   +z  SERVICE    - Indicates a service is monitoring the channel
  *
@@ -23,7 +27,8 @@
  * When +h is set, +p and +s are cleared.  When +p or +s is set, +h is cleared.
  * This mutual exclusivity follows the IRCX draft.
  *
- * Note: +f overrides the charybdis forwarding mode and +z overrides opmoderate.
+ * Note: +f overrides the charybdis forwarding mode, +z overrides opmoderate,
+ * and +r overrides charybdis REGONLY (use +a AUTHONLY instead).
  * The original modes are saved and restored when this module is unloaded.
  */
 
@@ -46,7 +51,7 @@
 
 static const char ircx_modes_desc[] =
 	"Provides all IRCX channel modes: +u (knock), +h (hidden), +a (authonly), "
-	"+d (cloneable), +E (clone), +f (noformat), +z (service)";
+	"+d (cloneable), +E (clone), +r (registered), +f (noformat), +z (service)";
 
 /* Allocated mode bits */
 static unsigned int MODE_KNOCK;	/* +u */
@@ -55,12 +60,14 @@ static unsigned int MODE_AUTHONLY;	/* +a */
 static unsigned int MODE_CLONEABLE;	/* +d */
 static unsigned int MODE_CLONE;	/* +E (IRCX +e, remapped to avoid ban exception conflict) */
 
-/* Overridden mode bits for +f and +z */
+/* Overridden mode bits for +f, +r, and +z */
 static unsigned int MODE_NOFORMAT;	/* +f (replaces forwarding) */
+static unsigned int MODE_REGISTERED;	/* +r (replaces regonly) */
 static unsigned int MODE_IRCX_SERVICE;	/* +z (replaces opmoderate) */
 
-/* Saved original chmode_table entries for +f and +z */
+/* Saved original chmode_table entries for overridden modes */
 static struct ChannelMode saved_mode_f;
+static struct ChannelMode saved_mode_r;
 static struct ChannelMode saved_mode_z;
 
 /* Forward declarations */
@@ -69,6 +76,10 @@ static void chm_hidden_ircx(struct Client *source_p, struct Channel *chptr,
 	const char **parv, int *errors, int dir, char c, long mode_type);
 
 static void chm_ircx_service(struct Client *source_p, struct Channel *chptr,
+	int alevel, int parc, int *parn,
+	const char **parv, int *errors, int dir, char c, long mode_type);
+
+static void chm_ircx_registered(struct Client *source_p, struct Channel *chptr,
 	int alevel, int parc, int *parn,
 	const char **parv, int *errors, int dir, char c, long mode_type);
 
@@ -144,6 +155,39 @@ chm_ircx_service(struct Client *source_p, struct Channel *chptr,
 }
 
 /*
+ * chm_ircx_registered - REGISTERED channel mode handler (+r)
+ *
+ * Per IRCX spec: REGISTERED indicates a channel is registered with services.
+ * Only IRC operators or services can set/unset this mode.
+ * When +r is set, the channel persists when empty (implies +P behavior).
+ *
+ * This overrides charybdis +r (REGONLY / only-registered-users-can-join).
+ * That functionality is now provided by +a (AUTHONLY) in IRCX.
+ */
+static void
+chm_ircx_registered(struct Client *source_p, struct Channel *chptr,
+	int alevel, int parc, int *parn,
+	const char **parv, int *errors, int dir, char c, long mode_type)
+{
+	if (MyClient(source_p) && !IsOper(source_p))
+	{
+		if (!(*errors & 0x80000000))
+		{
+			sendto_one_numeric(source_p, ERR_NOPRIVILEGES,
+				form_str(ERR_NOPRIVILEGES));
+			*errors |= 0x80000000;
+		}
+		return;
+	}
+
+	chm_simple(source_p, chptr, alevel, parc, parn, parv, errors, dir, c, mode_type);
+
+	/* +r implies persistence: set MODE_PERMANENT when adding */
+	if (dir == MODE_ADD)
+		chptr->mode.mode |= MODE_PERMANENT;
+}
+
+/*
  * Hook: can_join - enforce AUTHONLY (+a) restriction
  */
 static void
@@ -170,25 +214,13 @@ h_ircx_modes_can_join(void *vdata)
 }
 
 /*
- * Hook: channel_join - handle CLONEABLE (+d) channel overflow
- *
- * When a user tries to join a full +d channel, create/redirect to
- * a numbered clone channel (e.g., #chat -> #chat1, #chat2, etc.)
+ * CLONEABLE (+d) behavior is implemented in core/m_join.c check_cloneable().
+ * When a +d channel is full, the join path automatically creates/finds
+ * numbered clone channels (#channel1, #channel2, etc.) with +E set.
  */
-static void
-h_ircx_modes_channel_join(void *vdata)
-{
-	/* Clone channel creation is handled at join time via can_join hook.
-	 * The actual clone creation and redirect is complex and would
-	 * require deep integration with the join path.  For now, the +d
-	 * mode flag is registered so it can be set and queried, and
-	 * clone behavior can be implemented by services or extended later.
-	 */
-}
 
 mapi_hfn_list_av1 ircx_modes_hfnlist[] = {
 	{ "can_join", (hookfn) h_ircx_modes_can_join },
-	{ "channel_join", (hookfn) h_ircx_modes_channel_join },
 	{ NULL, NULL }
 };
 
@@ -240,6 +272,16 @@ ircx_modes_init(void)
 	chmode_table[(unsigned char)'f'].set_func = chm_simple;
 	chmode_table[(unsigned char)'f'].mode_type = MODE_NOFORMAT;
 
+	/* +r: REGISTERED (replaces charybdis REGONLY; use +a for auth-only).
+	 * Oper/service-only. Implies persistence (+P behavior).
+	 */
+	saved_mode_r = chmode_table[(unsigned char)'r'];
+	MODE_REGISTERED = find_free_mode_bit();
+	if (MODE_REGISTERED == 0)
+		return -1;
+	chmode_table[(unsigned char)'r'].set_func = chm_ircx_registered;
+	chmode_table[(unsigned char)'r'].mode_type = MODE_REGISTERED;
+
 	/* +z: SERVICE (replaces charybdis opmoderate) */
 	saved_mode_z = chmode_table[(unsigned char)'z'];
 	MODE_IRCX_SERVICE = find_free_mode_bit();
@@ -263,8 +305,9 @@ ircx_modes_deinit(void)
 	cflag_orphan('d');
 	cflag_orphan('E');
 
-	/* Restore original +f and +z handlers */
+	/* Restore original +f, +r, and +z handlers */
 	chmode_table[(unsigned char)'f'] = saved_mode_f;
+	chmode_table[(unsigned char)'r'] = saved_mode_r;
 	chmode_table[(unsigned char)'z'] = saved_mode_z;
 
 	construct_cflags_strings();
