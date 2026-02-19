@@ -1,0 +1,73 @@
+draft/multiline capability
+==========================
+
+Module: m_multiline
+
+The draft/multiline extension allows clients to send messages spanning
+multiple protocol lines, grouped inside a BATCH of type draft/multiline.
+
+Spec: https://ircv3.net/specs/extensions/multiline
+
+Capability
+----------
+
+Clients negotiate the "draft/multiline" capability during CAP.  The
+capability value advertises server limits:
+
+  draft/multiline=max-bytes=40000,max-lines=100
+
+Client usage
+------------
+
+  BATCH +<ref> draft/multiline <target>
+  @batch=<ref> PRIVMSG <target> :first line
+  @batch=<ref> PRIVMSG <target> :second line
+  @batch=<ref>;draft/multiline-concat PRIVMSG <target> :appended to previous
+  BATCH -<ref>
+
+- <ref> is a client-chosen batch reference tag.
+- All lines within the batch must target the same channel or nick.
+- All lines must use the same command (PRIVMSG or NOTICE, not mixed).
+- The draft/multiline-concat tag causes the line's text to be appended
+  to the preceding line without a line break.
+- Blank lines (empty text) are permitted but must not carry the
+  concat tag.
+
+Server relay
+------------
+
+- Multiline-capable recipients receive the full BATCH with @batch=
+  tags on each line and the concat tag preserved.
+- Non-multiline recipients receive individual fallback messages with
+  concat lines merged and blank lines dropped.
+- Remote servers receive the fallback form (individual messages).
+
+Echo-message
+------------
+
+If the sender has negotiated echo-message:
+- Multiline+batch capable senders receive an echo wrapped in a new
+  BATCH (with a fresh server-assigned batch ID).
+- Other senders receive the fallback form as individual echoed lines.
+
+Limits
+------
+
+  max-bytes   40000   Total bytes of message text across all lines.
+  max-lines   100     Maximum number of lines in a single batch.
+
+Only one multiline batch may be open per client at a time.
+
+Error replies
+-------------
+
+  FAIL BATCH MULTILINE_INVALID :Batch already open
+  FAIL BATCH MULTILINE_INVALID :Missing target
+  FAIL BATCH MULTILINE_INVALID :Invalid mixed commands
+  FAIL BATCH MULTILINE_INVALID :Missing parameters
+  FAIL BATCH MULTILINE_INVALID :Invalid concatenated blank
+  FAIL BATCH MULTILINE_INVALID :Empty batch
+  FAIL BATCH MULTILINE_INVALID :Invalid blank-only batch
+  FAIL BATCH MULTILINE_INVALID_TARGET <expected> <got>
+  FAIL BATCH MULTILINE_MAX_LINES <limit>
+  FAIL BATCH MULTILINE_MAX_BYTES <limit>

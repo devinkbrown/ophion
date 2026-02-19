@@ -45,6 +45,8 @@ disabled independently.
 | `userhost-in-names` | core | Includes full user@host in NAMES replies |
 | `draft/chathistory` | m_chathistory | Message history retrieval |
 | `draft/event-playback` | m_chathistory | Event playback within history batches |
+| `draft/multiline` | m_multiline | Multi-line message batches |
+| `draft/read-marker` | m_read_marker | Read position synchronisation across sessions |
 | `draft/typing` | core | Typing indicator notifications |
 
 ### IRCv3 Commands
@@ -54,6 +56,7 @@ disabled independently.
 | `TAGMSG` | cap_message_tags | Send a message with tags but no text body |
 | `SETNAME` | m_setname | Change your realname (GECOS) |
 | `CHATHISTORY` | m_chathistory | Retrieve message history for a target |
+| `MARKREAD` | m_read_marker | Get/set the read-marker position for a target |
 
 ### CHATHISTORY Subcommands
 
@@ -70,6 +73,41 @@ supports the following subcommands:
 
 Messages are delivered inside a `batch` of type `chathistory`. The server
 advertises `CHATHISTORY=100` and `MSGREFTYPES=timestamp` in ISUPPORT.
+
+### MARKREAD Command
+
+The `MARKREAD` command (requires `draft/read-marker` capability) synchronises
+the last-read position of a channel or DM across multiple sessions.
+
+- `MARKREAD <target>` -- query the stored read marker
+- `MARKREAD <target> timestamp=<ts>` -- update the read marker
+
+Timestamps are monotonically increasing; stale updates are silently ignored
+and the server replies with the newer stored value. On channel JOIN, the
+server automatically sends a MARKREAD for the channel. Markers are stored
+in-memory per-connection and cleared on disconnect.
+
+### Multiline Messages (draft/multiline)
+
+The `draft/multiline` capability (module m_multiline) allows clients to send
+messages spanning multiple protocol lines, grouped inside a BATCH:
+
+```
+BATCH +ref draft/multiline <target>
+@batch=ref PRIVMSG <target> :line 1
+@batch=ref PRIVMSG <target> :line 2
+@batch=ref;draft/multiline-concat PRIVMSG <target> :continued
+BATCH -ref
+```
+
+- Lines with the `draft/multiline-concat` tag are appended to the previous
+  line without a line break.
+- Multiline-capable recipients receive the full BATCH; non-multiline
+  clients receive merged fallback lines.
+- Limits: `max-bytes=40000`, `max-lines=100` (advertised in the capability
+  value).
+- Supports both PRIVMSG and NOTICE (but not mixed within a single batch).
+- Echo-message is fully supported for both multiline and fallback paths.
 
 ### ISUPPORT Tokens
 

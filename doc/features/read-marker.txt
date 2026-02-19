@@ -1,0 +1,49 @@
+draft/read-marker capability and MARKREAD command
+==================================================
+
+Module: m_read_marker
+
+The draft/read-marker extension allows clients to synchronise the
+last-read position of a channel or private-message conversation
+across multiple sessions.
+
+Spec: https://ircv3.net/specs/extensions/read-marker
+
+Capability
+----------
+
+Clients negotiate the "draft/read-marker" capability during CAP.
+
+MARKREAD command
+----------------
+
+  MARKREAD <target>
+    Query the stored read-marker timestamp for <target>.
+    The server replies:
+      :<server> MARKREAD <target> <timestamp>
+    or if no marker is stored:
+      :<server> MARKREAD <target> *
+
+  MARKREAD <target> timestamp=<ISO 8601>
+    Set the read-marker timestamp for <target>.
+    Timestamps are monotonically increasing: if the supplied timestamp
+    is older than or equal to the stored value, the server replies with
+    the existing (newer) stored value and discards the update.
+
+Automatic behaviour
+-------------------
+
+On channel JOIN, the server sends a MARKREAD for the channel to
+clients that have negotiated draft/read-marker.
+
+Storage
+-------
+
+Markers are stored in-memory per-connection.  They are lost when the
+client disconnects or the server restarts.
+
+Error replies
+-------------
+
+  FAIL MARKREAD NEED_MORE_PARAMS :Missing parameters
+  FAIL MARKREAD INVALID_PARAMS <target> :Invalid parameters

@@ -264,7 +264,8 @@ static int
 build_fallback_lines(struct ml_batch *batch, char **out, int max)
 {
 	int n = 0;
-	char buf[MULTILINE_MAX_BYTES + 512];
+	size_t buflen = MULTILINE_MAX_BYTES + 512;
+	char *buf = rb_malloc(buflen);
 	size_t pos = 0;
 	int i;
 
@@ -285,7 +286,7 @@ build_fallback_lines(struct ml_batch *batch, char **out, int max)
 		}
 
 		/* Append text to buffer */
-		if (pos + len < sizeof(buf) - 1)
+		if (pos + len < buflen - 1)
 		{
 			memcpy(buf + pos, text, len);
 			pos += len;
@@ -299,6 +300,7 @@ build_fallback_lines(struct ml_batch *batch, char **out, int max)
 		out[n++] = rb_strdup(buf);
 	}
 
+	rb_free(buf);
 	return n;
 }
 
