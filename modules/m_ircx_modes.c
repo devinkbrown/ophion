@@ -29,9 +29,9 @@
  * When +h is set, +p and +s are cleared.  When +p or +s is set, +h is cleared.
  * This mutual exclusivity follows the IRCX draft.
  *
- * Note: +f and +z are free slots in the base mode table (forwarding moved
- * to +y, opmoderate moved to +M).  +r overrides charybdis REGONLY (use
- * +a AUTHONLY instead); the original +r is saved and restored on unload.
+ * Note: +f, +r, and +z are free slots in the base mode table (forwarding
+ * moved to +y, REGONLY removed, opmoderate moved to +M).  Use +a AUTHONLY
+ * for auth-only joins instead of the old +r REGONLY.
  */
 
 #include "stdinc.h"
@@ -65,11 +65,10 @@ static unsigned int MODE_CLONE;	/* +E (IRCX +e, remapped to avoid ban exception 
 
 /* Mode bits for +f, +r, and +z */
 static unsigned int MODE_NOFORMAT;	/* +f NOFORMAT */
-static unsigned int MODE_REGISTERED;	/* +r (replaces regonly) */
+static unsigned int MODE_REGISTERED;	/* +r REGISTERED */
 static unsigned int MODE_IRCX_SERVICE;	/* +z SERVICE */
 
-/* Saved original chmode_table entry for +r (only mode that overrides a base entry) */
-static struct ChannelMode saved_mode_r;
+/* Saved original chmode_table entries for wrapped modes */
 static struct ChannelMode saved_mode_p;	/* +p PRIVATE: clears +h when set */
 static struct ChannelMode saved_mode_s;	/* +s SECRET: clears +h when set */
 
@@ -325,12 +324,7 @@ ircx_modes_init(void)
 	chmode_table[(unsigned char)'z'].set_func = chm_ircx_service;
 	chmode_table[(unsigned char)'z'].mode_type = MODE_IRCX_SERVICE;
 
-	/*
-	 * +r: REGISTERED (replaces charybdis REGONLY; use +a for auth-only).
-	 * Oper/service-only. Implies persistence (+P behavior).
-	 * Save original for clean unload.
-	 */
-	saved_mode_r = chmode_table[(unsigned char)'r'];
+	/* +r: REGISTERED (oper/service-only, implies +P persistence) */
 	MODE_REGISTERED = find_free_mode_bit();
 	if (MODE_REGISTERED == 0)
 		return -1;
@@ -362,14 +356,15 @@ ircx_modes_deinit(void)
 	cflag_orphan('d');
 	cflag_orphan('E');
 
-	/* Clear +f and +z (free slots, no original to restore) */
+	/* Clear +f, +r, and +z (all free slots in base table) */
 	chmode_table[(unsigned char)'f'].set_func = chm_nosuch;
 	chmode_table[(unsigned char)'f'].mode_type = 0;
+	chmode_table[(unsigned char)'r'].set_func = chm_nosuch;
+	chmode_table[(unsigned char)'r'].mode_type = 0;
 	chmode_table[(unsigned char)'z'].set_func = chm_nosuch;
 	chmode_table[(unsigned char)'z'].mode_type = 0;
 
-	/* Restore original +r, +p, and +s handlers */
-	chmode_table[(unsigned char)'r'] = saved_mode_r;
+	/* Restore original +p and +s handlers */
 	chmode_table[(unsigned char)'p'] = saved_mode_p;
 	chmode_table[(unsigned char)'s'] = saved_mode_s;
 
