@@ -66,6 +66,7 @@ struct ServerStatistics
 	unsigned int is_sbad;	/* failed sasl authentications */
 	unsigned int is_tgch;	/* messages blocked due to target change */
 	unsigned int is_rl;     /* commands blocked due to ratelimit */
+	unsigned long long is_sendq_eagain; /* sendq flushes that hit EAGAIN */
 };
 
 extern struct ServerStatistics ServerStats;

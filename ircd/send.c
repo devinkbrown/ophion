@@ -173,6 +173,8 @@ send_queued(struct Client *to)
 			dead_link(to, 0);
 			return;
 		}
+		/* retlen < 0 && rb_ignore_errno: EAGAIN/EWOULDBLOCK — kernel TCP send buffer full */
+		ServerStats.is_sendq_eagain++;
 	}
 
 	if(rb_linebuf_len(&to->localClient->buf_sendq))

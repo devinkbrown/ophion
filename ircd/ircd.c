@@ -111,6 +111,34 @@ bool ircd_zlib_ok = true;
 int testing_conf = 0;
 time_t startup_time;
 
+/* Event loop lag tracking (CLOCK_MONOTONIC, millisecond resolution) */
+unsigned long loop_lag_max_ms = 0;
+unsigned long long loop_lag_total_ms = 0;
+unsigned long loop_lag_count = 0;
+static struct timespec loop_lag_last;
+
+static void
+check_loop_lag(void *unused)
+{
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	if(loop_lag_last.tv_sec != 0)
+	{
+		long elapsed_ms = (now.tv_sec - loop_lag_last.tv_sec) * 1000L
+		                + (now.tv_nsec - loop_lag_last.tv_nsec) / 1000000L;
+		long lag_ms = elapsed_ms - 1000L;
+		if(lag_ms > 0)
+		{
+			if((unsigned long)lag_ms > loop_lag_max_ms)
+				loop_lag_max_ms = (unsigned long)lag_ms;
+			loop_lag_total_ms += (unsigned long long)lag_ms;
+		}
+		loop_lag_count++;
+	}
+	loop_lag_last = now;
+}
+
 int default_server_capabs;
 
 int splitmode;
@@ -852,6 +880,7 @@ charybdis_main(int argc, char * const argv[])
 	rb_event_addonce("try_connections_startup", try_connections, NULL, 2);
 	rb_event_add("check_rehash", check_rehash, NULL, 3);
 	rb_event_addish("reseed_srand", seed_random, NULL, 300); /* reseed every 10 minutes */
+	rb_event_add("check_loop_lag", check_loop_lag, NULL, 1);
 
 	if(splitmode)
 		check_splitmode_ev = rb_event_add("check_splitmode", check_splitmode, NULL, 5);

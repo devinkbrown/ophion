@@ -81,6 +81,11 @@ extern int default_server_capabs;
 
 extern time_t startup_time;
 
+/* Event loop lag tracking — updated every second by check_loop_lag() */
+extern unsigned long loop_lag_max_ms;
+extern unsigned long long loop_lag_total_ms;
+extern unsigned long loop_lag_count;
+
 extern int splitmode;
 extern int splitchecking;
 extern int split_users;
