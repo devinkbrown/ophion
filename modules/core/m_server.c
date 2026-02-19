@@ -68,32 +68,44 @@ mapi_clist_av1 server_clist[] = { &server_msgtab, &sid_msgtab, &svssid_msgtab, N
 DECLARE_MODULE_AV2(server, NULL, NULL, server_clist, NULL, NULL, NULL, NULL, server_desc);
 
 /*
- * find_available_sid - scan for the first SID not currently registered
- * in the ID hash.  Iterates all 10×36×36 = 12,960 valid TS6 SID values.
+ * find_available_sid - find a SID not currently registered in the ID hash.
+ * Scans all 10×36×36 = 12,960 valid TS6 SID values starting from a
+ * random offset to avoid deterministic assignment patterns when multiple
+ * collisions are resolved in sequence.
+ *
  * Returns true and fills sid[4] on success; returns false if the space is
- * exhausted (impossible in any real deployment).
+ * exhausted.  Warns opers when fewer than 100 SIDs remain.
  */
 static bool
 find_available_sid(char sid[4])
 {
 	static const char chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-	int i, j, k;
+	const int total = 10 * 36 * 36;	/* 12,960 */
+	int start = (int)(rb_current_time() % total);
+	int n, checked = 0;
 
-	for(i = 0; i < 10; i++)
+	for(n = start; checked < total; n = (n + 1) % total, checked++)
 	{
-		for(j = 0; j < 36; j++)
+		sid[0] = chars[n / (36 * 36)];
+		sid[1] = chars[(n / 36) % 36];
+		sid[2] = chars[n % 36];
+		sid[3] = '\0';
+		if(!find_id(sid))
 		{
-			for(k = 0; k < 36; k++)
+			if(checked > total - 100)
 			{
-				sid[0] = chars[i];
-				sid[1] = chars[j];
-				sid[2] = chars[k];
-				sid[3] = '\0';
-				if(!find_id(sid))
-					return true;
+				sendto_realops_snomask(SNO_GENERAL, L_ALL,
+					"WARNING: SID space nearly exhausted "
+					"(%d of %d in use)",
+					checked, total);
 			}
+			return true;
 		}
 	}
+
+	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+		"CRITICAL: all %d SID values are in use — "
+		"cannot assign SID to new server", total);
 	return false;
 }
 
