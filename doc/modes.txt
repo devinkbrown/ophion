@@ -67,16 +67,25 @@ ACCESS Hierarchy Overrides
   This allows channel access lists to serve as a complete authorization
   system.  Users with GRANT entries are already handled via +I (invex).
 
-Oper Auto-Owner (m_ircx_oper_autoowner module)
-------------------------------------------------
+Oper God Mode and Auto-Promote (m_ircx_oper_godmode module)
+-------------------------------------------------------------
 
-  When loaded, opers with the "oper:autoowner" privilege are automatically
-  granted channel owner (+q) status when they join any channel.
+  When loaded, this module provides the +G (god mode) umode and the
+  oper_auto_op / oper_kick_protection general{} config flags.
 
-  Configure in privset{} blocks:
-    privset "admin" {
-        privs = oper:admin, oper:autoowner;
-    };
+  Opers receive automatic channel promotion on join according to their
+  privset:
+
+    oper:auto_op      - joins with +o (chanop); access ceiling CHFL_CHANOP
+    oper:auto_admin   - joins with +q (admin); full CHFL_ADMIN access
+    (neither)         - joins with +q by default when oper_auto_op = yes
+
+  IRC server admins (oper:admin) always get +q with no ceiling.
+
+  +W (whois notifications) is provided by extensions/sno_whois.so and
+  fires only when a non-operator performs a WHOIS on the oper.
+
+  See doc/oper-guide/oprivs.rst for full privilege documentation.
 
 MEMBERKEY / +k Integration
 ----------------------------
@@ -102,7 +111,7 @@ IRCX Module List
   m_ircx_listx            - LISTX command
   m_ircx_modes            - All IRCX channel modes (+u/+h/+a/+d/+E/+f/+r/+z)
   m_ircx_oper             - GAG mode (+z) and OPFORCE command
-  m_ircx_oper_autoowner   - Auto-owner opers on channel join (oper:autoowner)
+  m_ircx_oper_godmode     - God mode (+G), oper auto-promote, kick/ban protection
   m_ircx_prop             - PROP command core
   m_ircx_prop_adminkey    - ADMINKEY channel property
   m_ircx_prop_channel_builtins - OID/NAME/CREATION/TOPIC/MEMBERCOUNT/MEMBERKEY
