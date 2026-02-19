@@ -57,12 +57,14 @@ static void hook_gag_privmsg_channel(void *vdata);
 static void hook_gag_privmsg_user(void *vdata);
 static void hook_gag_umode_changed(void *vdata);
 static void hook_gag_new_local_user(void *vdata);
+static void hook_gag_burst_finished(void *vdata);
 
 mapi_hfn_list_av1 ircx_oper_hfnlist[] = {
 	{ "privmsg_channel", (hookfn) hook_gag_privmsg_channel, HOOK_HIGHEST },
 	{ "privmsg_user", (hookfn) hook_gag_privmsg_user, HOOK_HIGHEST },
 	{ "umode_changed", (hookfn) hook_gag_umode_changed },
 	{ "new_local_user", (hookfn) hook_gag_new_local_user },
+	{ "burst_finished", (hookfn) hook_gag_burst_finished },
 	{ NULL, NULL }
 };
 
@@ -375,10 +377,13 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
 		add_gag_entry(mask, get_oper_name(source_p), 0);
 
-		/* propagate to other servers */
+		/* propagate to other servers: user mode + persistent entry */
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG %s ON",
 			use_id(source_p), use_id(target_p));
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * GAG_ADD %s %s 0",
+			use_id(source_p), mask, get_oper_name(source_p));
 
 		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s has gagged %s (%s)", get_oper_name(source_p), target_p->name, mask);
@@ -400,6 +405,9 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG %s OFF",
 			use_id(source_p), use_id(target_p));
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * GAG_DEL %s",
+			use_id(source_p), mask);
 
 		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s has ungagged %s", get_oper_name(source_p), target_p->name);
@@ -470,6 +478,73 @@ me_gag_clear(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *so
 			if (user_modes['z'])
 				cp->umodes &= ~user_modes['z'];
 		}
+	}
+}
+
+/*
+ * GAG_ADD ENCAP: sync a persistent gag entry to remote servers.
+ * :source ENCAP * GAG_ADD <mask> <setter> <hold>
+ */
+static void
+me_gag_add(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	const char *mask, *setter;
+	time_t hold = 0;
+
+	if (parc < 3)
+		return;
+
+	mask = parv[1];
+	setter = parv[2];
+	if (parc >= 4)
+		hold = atol(parv[3]);
+
+	/* avoid duplicates */
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+		if (!irccmp(ge->mask, mask))
+			return;
+	}
+
+	add_gag_entry(mask, setter, hold);
+}
+
+/*
+ * GAG_DEL ENCAP: remove a persistent gag entry from remote servers.
+ * :source ENCAP * GAG_DEL <mask>
+ */
+static void
+me_gag_del(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	if (parc < 2)
+		return;
+
+	remove_gag_entry(parv[1]);
+}
+
+/*
+ * burst_finished hook: send all persistent gag entries to newly linked server.
+ */
+static void
+hook_gag_burst_finished(void *vdata)
+{
+	hook_data_client *hclientinfo = vdata;
+	struct Client *server_p = hclientinfo->client;
+	rb_dlink_node *ptr;
+
+	RB_DLINK_FOREACH(ptr, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+
+		/* skip expired entries */
+		if (ge->hold && ge->hold <= rb_current_time())
+			continue;
+
+		sendto_one(server_p, ":%s ENCAP %s GAG_ADD %s %s %ld",
+			use_id(&me), server_p->name,
+			ge->mask, ge->setter, (long)ge->hold);
 	}
 }
 
@@ -665,12 +740,22 @@ struct Message gag_clear_msgtab = {
 	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_gag_clear, 1}, mg_ignore}
 };
 
+struct Message gag_add_msgtab = {
+	"GAG_ADD", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_gag_add, 3}, mg_ignore}
+};
+
+struct Message gag_del_msgtab = {
+	"GAG_DEL", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_gag_del, 2}, mg_ignore}
+};
+
 struct Message opforce_msgtab = {
 	"OPFORCE", 0, 0, 0, 0,
 	{mg_unreg, {m_opforce, 3}, mg_ignore, mg_ignore, mg_ignore, {m_opforce, 3}}
 };
 
-mapi_clist_av1 ircx_oper_clist[] = { &gag_msgtab, &gag_clear_msgtab, &opforce_msgtab, NULL };
+mapi_clist_av1 ircx_oper_clist[] = { &gag_msgtab, &gag_clear_msgtab, &gag_add_msgtab, &gag_del_msgtab, &opforce_msgtab, NULL };
 
 static int
 ircx_oper_init(void)

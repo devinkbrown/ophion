@@ -251,6 +251,11 @@ handle_add_gag(struct Client *source_p, const char *mask, int parc, const char *
 			use_id(source_p), use_id(target_p));
 	}
 
+	/* propagate persistent GAG entry to all servers */
+	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+		":%s ENCAP * GAG_ADD %s %s 0",
+		use_id(source_p), fullmask, get_oper_name(source_p));
+
 	sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 		"%s added ACCESS * GAG for [%s]",
 		get_oper_name(source_p), fullmask);
@@ -319,7 +324,20 @@ handle_delete(struct Client *source_p, const char *level_or_mask, const char *ma
 		return;
 	}
 
-	sendto_one_notice(source_p, ":No ACCESS * entry found for [%s]", mask);
+	/* try to remove a GAG entry */
+	{
+		char fullmask[USERLEN + HOSTLEN + 2];
+		snprintf(fullmask, sizeof fullmask, "%s@%s", user, host);
+
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * GAG_DEL %s",
+			use_id(source_p), fullmask);
+
+		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+			"%s removed ACCESS * GAG for [%s]",
+			get_oper_name(source_p), fullmask);
+		sendto_one_notice(source_p, ":Removed GAG entry [%s]", fullmask);
+	}
 }
 
 /*

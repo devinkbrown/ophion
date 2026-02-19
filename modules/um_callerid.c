@@ -54,12 +54,12 @@ um_callerid_modinit(void)
 		return -1;
 	}
 
-	user_modes['G'] = find_umode_slot();
-	if (!user_modes['G'])
+	user_modes['B'] = find_umode_slot();
+	if (!user_modes['B'])
 	{
 		user_modes['g'] = 0;
 
-		ierror("um_callerid: unable to allocate usermode slot for +G; unloading module.");
+		ierror("um_callerid: unable to allocate usermode slot for +B; unloading module.");
 		return -1;
 	}
 
@@ -74,18 +74,18 @@ static void
 um_callerid_moddeinit(void)
 {
 	user_modes['g'] = 0;
-	user_modes['G'] = 0;
+	user_modes['B'] = 0;
 	construct_umodebuf();
 
 	delete_isupport("CALLERID");
 }
 
 #define IsSetStrictCallerID(c)	((c->umodes & user_modes['g']) == user_modes['g'])
-#define IsSetRelaxedCallerID(c)	((c->umodes & user_modes['G']) == user_modes['G'])
+#define IsSetRelaxedCallerID(c)	((c->umodes & user_modes['B']) == user_modes['B'])
 #define IsSetAnyCallerID(c)	(IsSetStrictCallerID(c) || IsSetRelaxedCallerID(c))
 
 static const char um_callerid_desc[] =
-	"Provides usermodes +g and +G which restrict messages from unauthorized users.";
+	"Provides usermodes +g and +B which restrict messages from unauthorized users.";
 
 static bool
 has_common_channel(struct Client *source_p, struct Client *target_p)
@@ -137,7 +137,7 @@ send_callerid_notice(enum message_type msgtype, struct Client *source_p, struct 
 		return;
 
 	sendto_one_numeric(source_p, ERR_TARGUMODEG, form_str(ERR_TARGUMODEG),
-		target_p->name, IsSetStrictCallerID(target_p) ? "+g" : "+G");
+		target_p->name, IsSetStrictCallerID(target_p) ? "+g" : "+B");
 
 	if ((target_p->localClient->last_caller_id_time + ConfigFileEntry.caller_id_wait) < rb_current_time())
 	{
@@ -146,7 +146,7 @@ send_callerid_notice(enum message_type msgtype, struct Client *source_p, struct 
 
 		sendto_one(target_p, form_str(RPL_UMODEGMSG),
 			   me.name, target_p->name, source_p->name,
-			   source_p->username, source_p->host, IsSetStrictCallerID(target_p) ? "+g" : "+G");
+			   source_p->username, source_p->host, IsSetStrictCallerID(target_p) ? "+g" : "+B");
 
 		target_p->localClient->last_caller_id_time = rb_current_time();
 	}
@@ -180,7 +180,7 @@ add_callerid_accept_for_source(enum message_type msgtype, struct Client *source_
 		{
 			sendto_one_numeric(source_p, ERR_OWNMODE,
 					form_str(ERR_OWNMODE),
-					target_p->name, IsSetStrictCallerID(target_p) ? "+g" : "+G");
+					target_p->name, IsSetStrictCallerID(target_p) ? "+g" : "+B");
 			return false;
 		}
 	}
@@ -209,7 +209,7 @@ h_hdl_invite(void *vdata)
 		return;
 
 	snprintf(errorbuf, sizeof errorbuf, form_str(ERR_TARGUMODEG),
-		 target_p->name, IsSetStrictCallerID(target_p) ? "+g" : "+G");
+		 target_p->name, IsSetStrictCallerID(target_p) ? "+g" : "+B");
 
 	data->approved = ERR_TARGUMODEG;
 	data->error = errorbuf;
