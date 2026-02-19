@@ -47,4 +47,19 @@ extern rb_dictionary *cmd_dict;
  * Used by cap_message_tags to forward client-only tags. */
 extern const struct MsgBuf *g_client_msgbuf;
 
+/*
+ * Client-initiated batch handler callback.
+ *
+ * Called from parse() before normal command dispatch when a local
+ * client's message either:
+ *   - has a @batch= message tag, or
+ *   - is a BATCH command
+ *
+ * Returns 1 if the message was consumed (skip normal dispatch),
+ * 0 to let normal dispatch proceed.
+ */
+typedef int (*client_batch_handler_fn)(struct MsgBuf *msgbuf_p,
+	struct Client *client_p, struct Client *from);
+extern client_batch_handler_fn client_batch_handler;
+
 #endif /* INCLUDED_parse_h_h */
