@@ -60,16 +60,26 @@ struct Message tprop_msgtab = {
 	{mg_ignore, mg_ignore, mg_ignore, {ms_tprop, 5}, mg_ignore, mg_ignore}
 };
 
-mapi_clist_av1 ircx_prop_clist[] = { &prop_msgtab, &tprop_msgtab, NULL };
+/* :source BTPROP target channelTS :updateTS name value\x1FupdateTS name value... */
+static void ms_btprop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[]);
+
+struct Message btprop_msgtab = {
+	"BTPROP", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, {ms_btprop, 4}, mg_ignore, mg_ignore}
+};
+
+mapi_clist_av1 ircx_prop_clist[] = { &prop_msgtab, &tprop_msgtab, &btprop_msgtab, NULL };
 
 static int h_prop_show;
 static int h_prop_change;
 static int h_prop_match;
+static int h_prop_list_append;
 
 mapi_hlist_av1 ircx_prop_hlist[] = {
 	{ "prop_show", &h_prop_show },
 	{ "prop_change", &h_prop_change },
 	{ "prop_match", &h_prop_match },
+	{ "prop_list_append", &h_prop_list_append },
 	{ NULL, NULL }
 };
 
@@ -116,6 +126,18 @@ handle_prop_list(const struct PropMatch *prop_match, struct Client *source_p, co
 
 		sendto_one_numeric(source_p, RPL_PROPLIST, form_str(RPL_PROPLIST),
 			prop_match->target_name, prop->name, prop->value);
+	}
+
+	{
+		hook_data_prop_list list_data;
+
+		list_data.client = source_p;
+		list_data.target = prop_match->target_name;
+		list_data.keys = keys;
+		list_data.alevel = alevel;
+		list_data.target_ptr = prop_match->target;
+
+		call_hook(h_prop_list_append, &list_data);
 	}
 
 	sendto_one_numeric(source_p, RPL_PROPEND, form_str(RPL_PROPEND), prop_match->target_name);
@@ -318,4 +340,94 @@ ms_tprop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	prop_activity.target_ptr = prop_match.target;
 
 	call_hook(h_prop_change, &prop_activity);
+}
+
+/*
+ * BTPROP - Batched TPROP for optimized burst.
+ *
+ * parv[1] = target (channel name, UID, or account:name)
+ * parv[2] = creation TS
+ * parv[3] = entries separated by \x1F, each: "updateTS propName propValue"
+ *
+ * Each entry within parv[3] is delimited by \x1F (Unit Separator).
+ * Within each entry, the first space-separated token is updateTS,
+ * the second is propName, and the rest is propValue.
+ */
+static void
+ms_btprop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	time_t creation_ts = atol(parv[2]);
+	char *entries = LOCAL_COPY(parv[3]);
+	char *entry, *next;
+
+	for (entry = entries; entry != NULL; entry = next)
+	{
+		next = strchr(entry, '\x1F');
+		if (next != NULL)
+			*next++ = '\0';
+
+		/* skip empty entries */
+		if (!*entry)
+			continue;
+
+		/* parse: updateTS propName propValue */
+		char *ts_str = entry;
+		char *name = strchr(ts_str, ' ');
+		if (name == NULL)
+			continue;
+		*name++ = '\0';
+
+		char *value = strchr(name, ' ');
+		if (value == NULL)
+			value = "";
+		else
+			*value++ = '\0';
+
+		time_t update_ts = atol(ts_str);
+
+		struct PropMatch prop_match = {
+			.target_name = parv[1],
+			.match_request = PROP_WRITE,
+			.source_p = source_p,
+			.key = name,
+			.alevel = CHFL_PEON,
+			.creation_ts = creation_ts,
+			.update_ts = update_ts,
+		};
+
+		call_hook(h_prop_match, &prop_match);
+
+		if (prop_match.prop_list == NULL)
+			return;
+
+		if (creation_ts > prop_match.creation_ts)
+			return;
+
+		struct Property *prop = propertyset_add(prop_match.prop_list, name, value, source_p);
+		prop->set_at = update_ts;
+
+		/* re-propagate as individual TPROP to non-BPROP servers */
+		sendto_server(source_p, NULL, CAP_TS6, CAP_BPROP,
+			":%s TPROP %s %ld %ld %s :%s",
+			use_id(&me), parv[1], creation_ts, (long)prop->set_at,
+			prop->name, prop->value);
+
+		hook_data_prop_activity prop_activity;
+
+		prop_activity.client = &me;
+		prop_activity.target = prop_match.target_name;
+		prop_activity.prop_list = prop_match.prop_list;
+		prop_activity.key = prop->name;
+		prop_activity.value = prop->value;
+		prop_activity.alevel = CHFL_ADMIN;
+		prop_activity.approved = 1;
+		prop_activity.target_ptr = prop_match.target;
+
+		call_hook(h_prop_change, &prop_activity);
+	}
+
+	/* re-propagate in batched form to BPROP-capable servers */
+	sendto_server(source_p, NULL, CAP_TS6 | CAP_BPROP, NOCAPS,
+		":%s BTPROP %s %s :%s",
+		use_id(&me), parv[1], parv[2], parv[3]);
 }

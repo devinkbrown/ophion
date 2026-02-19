@@ -112,6 +112,15 @@ typedef struct
 typedef struct
 {
 	struct Client *client;
+	const char *target;
+	const char *keys;
+	int alevel;
+	const void *target_ptr;
+} hook_data_prop_list;
+
+typedef struct
+{
+	struct Client *client;
 	struct Channel *chptr;
 	struct membership *msptr;
 	struct Client *target;

@@ -63,7 +63,15 @@ struct Message taccess_msgtab = {
 	{mg_ignore, mg_ignore, mg_ignore, {ms_taccess, 4}, mg_ignore, mg_ignore}
 };
 
-mapi_clist_av1 ircx_access_clist[] = { &access_msgtab, &taccess_msgtab, NULL };
+/* :server BTACCESS #channel channelTS :entryTS mask level entryTS mask level ... */
+static void ms_btaccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[]);
+
+struct Message btaccess_msgtab = {
+	"BTACCESS", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, {ms_btaccess, 4}, mg_ignore, mg_ignore}
+};
+
+mapi_clist_av1 ircx_access_clist[] = { &access_msgtab, &taccess_msgtab, &btaccess_msgtab, NULL };
 
 static void h_access_channel_join(void *);
 static void h_access_burst_channel(void *);
@@ -634,6 +642,63 @@ ms_taccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 		ae->mask, ae_level_name(ae->flags));
 }
 
+/*
+ * BTACCESS - Batched TACCESS for optimized burst.
+ *
+ * parv[1] = channel name
+ * parv[2] = channel TS
+ * parv[3] = space-separated triplets: "entryTS mask level entryTS mask level ..."
+ */
+static void
+ms_btaccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	struct Channel *chptr = find_channel(parv[1]);
+	if (chptr == NULL)
+		return;
+
+	time_t creation_ts = atol(parv[2]);
+	if (creation_ts > chptr->channelts)
+		return;
+
+	char *entries = LOCAL_COPY(parv[3]);
+	char *p = entries;
+	char *tok;
+
+	while ((tok = strtok_r(p, " ", &p)) != NULL)
+	{
+		time_t entry_ts = atol(tok);
+
+		char *mask = strtok_r(NULL, " ", &p);
+		if (mask == NULL)
+			break;
+
+		char *level_name = strtok_r(NULL, " ", &p);
+		if (level_name == NULL)
+			break;
+
+		unsigned int flags = ae_level_from_name(level_name);
+		if (flags == 0)
+			continue;
+
+		if (flags == ACCESS_DENY_FLAG || flags == ACCESS_GRANT_FLAG)
+			continue;
+
+		struct AccessEntry *ae = channel_access_upsert(chptr, source_p, mask, flags);
+		ae->when = entry_ts;
+
+		/* re-propagate as individual TACCESS to non-BPROP servers */
+		sendto_server(source_p, chptr, CAP_TS6, CAP_BPROP,
+			":%s TACCESS %s %ld %ld %s %s",
+			use_id(&me), chptr->chname, creation_ts, entry_ts,
+			ae->mask, ae_level_name(ae->flags));
+	}
+
+	/* re-propagate in batched form to BPROP-capable servers */
+	sendto_server(source_p, chptr, CAP_TS6 | CAP_BPROP, NOCAPS,
+		":%s BTACCESS %s %s :%s",
+		use_id(&me), parv[1], parv[2], parv[3]);
+}
+
 /* channel join hook */
 static void
 h_access_channel_join(void *vdata)
@@ -645,7 +710,17 @@ h_access_channel_join(void *vdata)
 	apply_access_entries(chptr, client_p);
 }
 
-/* burst hook */
+/*
+ * Batched TACCESS burst.
+ *
+ * When the remote server supports CAP_BPROP, access entries are batched
+ * into fewer messages using the BTACCESS command.  Entries are packed as
+ * space-separated triplets (entryTS mask level) in the trailing parameter:
+ *
+ *   :<server> BTACCESS <channel> <channelTS> :<ts1> <mask1> <level1> <ts2> ...
+ *
+ * Fallback: one TACCESS per entry for servers without CAP_BPROP.
+ */
 static void
 h_access_burst_channel(void *vdata)
 {
@@ -654,13 +729,76 @@ h_access_burst_channel(void *vdata)
 	struct Client *client_p = hchaninfo->client;
 	rb_dlink_node *it;
 
-	RB_DLINK_FOREACH(it, chptr->access_list.head)
-	{
-		struct AccessEntry *ae = it->data;
+	if (rb_dlink_list_length(&chptr->access_list) == 0)
+		return;
 
-		sendto_one(client_p, ":%s TACCESS %s %ld %ld %s %s",
-			use_id(&me), chptr->chname, (long) chptr->channelts, ae->when,
-			ae->mask, ae_level_name(ae->flags));
+	if (IsCapable(client_p, CAP_BPROP))
+	{
+		static char buf[BUFSIZE];
+		char *t;
+		int mlen, cur_len;
+
+		cur_len = mlen = snprintf(buf, sizeof buf, ":%s BTACCESS %s %ld :",
+			me.id, chptr->chname, (long)chptr->channelts);
+		t = buf + mlen;
+
+		RB_DLINK_FOREACH(it, chptr->access_list.head)
+		{
+			struct AccessEntry *ae = it->data;
+			const char *level_name = ae_level_name(ae->flags);
+			char entry[BUFSIZE];
+			int elen;
+
+			elen = snprintf(entry, sizeof entry, "%ld %s %s",
+				(long)ae->when, ae->mask, level_name);
+
+			/* +1 for space separator */
+			int need = elen + (cur_len > mlen ? 1 : 0);
+
+			if (cur_len + need > BUFSIZE - 3)
+			{
+				if (cur_len > mlen)
+				{
+					sendto_one(client_p, "%s", buf);
+					cur_len = mlen;
+					t = buf + mlen;
+				}
+
+				if (mlen + elen > BUFSIZE - 3)
+				{
+					sendto_one(client_p, ":%s TACCESS %s %ld %ld %s %s",
+						use_id(&me), chptr->chname,
+						(long)chptr->channelts, (long)ae->when,
+						ae->mask, level_name);
+					continue;
+				}
+			}
+
+			if (cur_len > mlen)
+			{
+				*t++ = ' ';
+				cur_len++;
+			}
+
+			memcpy(t, entry, elen);
+			t += elen;
+			cur_len += elen;
+			*t = '\0';
+		}
+
+		if (cur_len > mlen)
+			sendto_one(client_p, "%s", buf);
+	}
+	else
+	{
+		RB_DLINK_FOREACH(it, chptr->access_list.head)
+		{
+			struct AccessEntry *ae = it->data;
+
+			sendto_one(client_p, ":%s TACCESS %s %ld %ld %s %s",
+				use_id(&me), chptr->chname, (long)chptr->channelts, ae->when,
+				ae->mask, ae_level_name(ae->flags));
+		}
 	}
 }
 

@@ -94,13 +94,73 @@ h_prop_burst_client(void *vdata)
 	if (burst_p->user == NULL)
 		return;
 
-	RB_DLINK_FOREACH(it, burst_p->user->prop_list.head)
-	{
-		struct Property *prop = it->data;
+	if (rb_dlink_list_length(&burst_p->user->prop_list) == 0)
+		return;
 
-		/* :source TPROP target creationTS updateTS propName [:propValue] */
-		sendto_one(client_p, ":%s TPROP %s %ld %ld %s :%s",
-			use_id(&me), use_id(burst_p), burst_p->tsinfo, prop->set_at, prop->name, prop->value);
+	if (IsCapable(client_p, CAP_BPROP))
+	{
+		static char buf[BUFSIZE];
+		char *t;
+		int mlen, cur_len;
+
+		cur_len = mlen = snprintf(buf, sizeof buf, ":%s BTPROP %s %ld :",
+			me.id, use_id(burst_p), (long)burst_p->tsinfo);
+		t = buf + mlen;
+
+		RB_DLINK_FOREACH(it, burst_p->user->prop_list.head)
+		{
+			struct Property *prop = it->data;
+			char entry[BUFSIZE];
+			int elen;
+
+			elen = snprintf(entry, sizeof entry, "%ld %s %s",
+				(long)prop->set_at, prop->name, prop->value);
+
+			int need = elen + (cur_len > mlen ? 1 : 0);
+
+			if (cur_len + need > BUFSIZE - 3)
+			{
+				if (cur_len > mlen)
+				{
+					sendto_one(client_p, "%s", buf);
+					cur_len = mlen;
+					t = buf + mlen;
+				}
+
+				if (mlen + elen > BUFSIZE - 3)
+				{
+					sendto_one(client_p, ":%s TPROP %s %ld %ld %s :%s",
+						use_id(&me), use_id(burst_p),
+						(long)burst_p->tsinfo, (long)prop->set_at,
+						prop->name, prop->value);
+					continue;
+				}
+			}
+
+			if (cur_len > mlen)
+			{
+				*t++ = '\x1F';
+				cur_len++;
+			}
+
+			memcpy(t, entry, elen);
+			t += elen;
+			cur_len += elen;
+			*t = '\0';
+		}
+
+		if (cur_len > mlen)
+			sendto_one(client_p, "%s", buf);
+	}
+	else
+	{
+		RB_DLINK_FOREACH(it, burst_p->user->prop_list.head)
+		{
+			struct Property *prop = it->data;
+
+			sendto_one(client_p, ":%s TPROP %s %ld %ld %s :%s",
+				use_id(&me), use_id(burst_p), burst_p->tsinfo, prop->set_at, prop->name, prop->value);
+		}
 	}
 }
 
