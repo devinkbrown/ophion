@@ -395,8 +395,6 @@ initialize_global_set_options(void)
 		splitchecking = 1;
 	}
 
-	GlobalSetOptions.ident_timeout = ConfigFileEntry.default_ident_timeout;
-
 	rb_strlcpy(GlobalSetOptions.operstring,
 		ConfigFileEntry.default_operstring,
 		sizeof(GlobalSetOptions.operstring));

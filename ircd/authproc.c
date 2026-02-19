@@ -318,6 +318,9 @@ configure_authd(void)
 	set_authd_timeout("rdns_timeout", ConfigFileEntry.connect_timeout);
 	set_authd_timeout("rbl_timeout", ConfigFileEntry.connect_timeout);
 
+	/* rDNS */
+	rdns_check_enable(ConfigFileEntry.rdns_lookups);
+
 	/* Configure OPM */
 	if(rb_dlink_list_length(&opm_list) > 0 &&
 		(opm_listeners[LISTEN_IPV4].ipaddr[0] != '\0' ||
@@ -660,11 +663,11 @@ set_authd_timeout(const char *key, int timeout)
 	return true;
 }
 
-/* Enable identd checks */
+/* Enable/disable rDNS hostname lookups */
 void
-ident_check_enable(bool enabled)
+rdns_check_enable(bool enabled)
 {
-	rb_helper_write(authd_helper, "O ident_enabled %d", enabled ? 1 : 0);
+	rb_helper_write(authd_helper, "O rdns_enabled %d", enabled ? 1 : 0);
 }
 
 /* Create an OPM listener

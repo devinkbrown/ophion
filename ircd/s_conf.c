@@ -739,6 +739,7 @@ set_default_conf(void)
 	ConfigFileEntry.kline_with_reason = true;
 	ConfigFileEntry.warn_no_nline = true;
 	ConfigFileEntry.non_redundant_klines = true;
+	ConfigFileEntry.rdns_lookups = true;
 	ConfigFileEntry.stats_e_disabled = false;
 	ConfigFileEntry.stats_o_oper_only = false;
 	ConfigFileEntry.stats_k_oper_only = 1;	/* masked */

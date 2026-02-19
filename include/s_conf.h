@@ -95,7 +95,6 @@ struct ConfItem
 #define CONF_FLAGS_MYOPER		0x00080000	/* need to rewrite info.oper on burst */
 /* auth{} flags... */
 #define CONF_FLAGS_NO_TILDE		0x00000004
-#define CONF_FLAGS_NEED_IDENTD		0x00000008
 #define CONF_FLAGS_EXEMPTKLINE		0x00000040
 #define CONF_FLAGS_NOLIMIT		0x00000080
 #define CONF_FLAGS_SPOOF_IP		0x00000200
@@ -120,7 +119,6 @@ struct ConfItem
 						CONF_RESV_CHANNEL|CONF_RESV_NICK))
 
 #define IsNoTilde(x)            ((x)->flags & CONF_FLAGS_NO_TILDE)
-#define IsNeedIdentd(x)         ((x)->flags & CONF_FLAGS_NEED_IDENTD)
 #define IsConfExemptKline(x)    ((x)->flags & CONF_FLAGS_EXEMPTKLINE)
 #define IsConfExemptLimits(x)   ((x)->flags & CONF_FLAGS_NOLIMIT)
 #define IsConfExemptFlood(x)    ((x)->flags & CONF_FLAGS_EXEMPTFLOOD)
@@ -209,7 +207,7 @@ struct config_file_entry
 	int min_nonwildcard;
 	int min_nonwildcard_simple;
 	int default_floodcount;
-	int default_ident_timeout;
+	int rdns_lookups;
 	int ping_cookie;
 	int tkline_expire_notices;
 	int use_whois_actually;

@@ -67,7 +67,6 @@ static void quote_adminstring(struct Client *, const char *, int);
 static void quote_autoconn(struct Client *, const char *, int);
 static void quote_autoconnall(struct Client *, const char *, int);
 static void quote_floodcount(struct Client *, const char *, int);
-static void quote_identtimeout(struct Client *, const char *, int);
 static void quote_max(struct Client *, const char *, int);
 static void quote_operstring(struct Client *, const char *, int);
 static void quote_spamnum(struct Client *, const char *, int);
@@ -94,7 +93,6 @@ static struct SetStruct set_cmd_table[] = {
 	{"AUTOCONN", 	quote_autoconn, 	true,	true	},
 	{"AUTOCONNALL", quote_autoconnall, 	false,	true	},
 	{"FLOODCOUNT", 	quote_floodcount, 	false,	true	},
-	{"IDENTTIMEOUT", quote_identtimeout,	false,	true	},
 	{"MAX", 	quote_max, 		false,	true	},
 	{"MAXCLIENTS",	quote_max,		false,	true	},
 	{"OPERSTRING",	quote_operstring,	true,	false	},
@@ -183,30 +181,6 @@ quote_floodcount(struct Client *source_p, const char *arg, int newval)
 		sendto_one_notice(source_p, ":FLOODCOUNT is currently %i",
 			   GlobalSetOptions.floodcount);
 	}
-}
-
-/* SET IDENTTIMEOUT */
-static void
-quote_identtimeout(struct Client *source_p, const char *arg, int newval)
-{
-	if(!IsOperAdmin(source_p))
-	{
-		sendto_one(source_p, form_str(ERR_NOPRIVS),
-			   me.name, source_p->name, "admin");
-		return;
-	}
-
-	if(newval > 0)
-	{
-		sendto_realops_snomask(SNO_GENERAL, L_ALL,
-				     "%s has changed IDENTTIMEOUT to %d",
-				     get_oper_name(source_p), newval);
-		GlobalSetOptions.ident_timeout = newval;
-		set_authd_timeout("ident_timeout", newval);
-	}
-	else
-		sendto_one_notice(source_p, ":IDENTTIMEOUT is currently %d",
-			   GlobalSetOptions.ident_timeout);
 }
 
 /* SET MAX */

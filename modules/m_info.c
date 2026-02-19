@@ -165,12 +165,6 @@ static struct InfoStruct info_table[] = {
 		"Connect timeout for connections to servers"
 	},
 	{
-		"default_ident_timeout",
-		OUTPUT_DECIMAL,
-		&ConfigFileEntry.default_ident_timeout,
-		"Amount of time the server waits for ident responses from clients",
-	},
-	{
 		"default_floodcount",
 		OUTPUT_DECIMAL,
 		&ConfigFileEntry.default_floodcount,
