@@ -157,6 +157,10 @@ init_builtin_capabs(void)
 	CLICAP_SETNAME = capability_put(cli_capindex, "setname", NULL);
 	CLICAP_LABELED_RESPONSE = capability_put(cli_capindex, "labeled-response", NULL);
 	CLICAP_STANDARD_REPLIES = capability_put(cli_capindex, "standard-replies", NULL);
+
+	/* draft/typing: purely advisory; +draft/typing client-only tags are
+	 * already relayed by cap_message_tags via TAGMSG. */
+	capability_put(cli_capindex, "draft/typing", NULL);
 }
 
 static CNCB serv_connect_callback;
