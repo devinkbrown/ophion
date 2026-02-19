@@ -4,14 +4,14 @@
  * Unified IRCX operator tools per draft-pfenning-irc-extensions-04.
  *
  * Provides:
- *   - GAG user mode (+g): silences a user globally (oper-only set/unset)
+ *   - GAG user mode (+z): silences a user globally (oper-only set/unset)
  *   - OPFORCE command: unified oper channel force command
  *     OPFORCE JOIN <channel>     - force-join a channel (replaces m_ojoin)
  *     OPFORCE OP <channel>       - force-op self on channel (replaces m_opme)
  *     OPFORCE KICK <chan> <nick>  - force-kick (replaces m_okick)
  *     OPFORCE MODE <chan> <modes> - force-mode (replaces m_omode)
  *   - Hooks into message sending to enforce GAG silently
- *   - Server-to-server propagation of GAG via user mode 'g'
+ *   - Server-to-server propagation of GAG via user mode 'z'
  *
  * Per IRCX spec:
  *   - GAG mode is applied by sysop/sysop manager
@@ -37,7 +37,7 @@
 #include "send.h"
 
 static const char ircx_oper_desc[] =
-	"Provides IRCX operator tools: GAG mode (+g), OPFORCE commands";
+	"Provides IRCX operator tools: GAG mode (+z), OPFORCE commands";
 
 static void hook_gag_privmsg_channel(void *vdata);
 static void hook_gag_privmsg_user(void *vdata);
@@ -51,7 +51,7 @@ mapi_hfn_list_av1 ircx_oper_hfnlist[] = {
 };
 
 /*
- * GAG user mode (+g)
+ * GAG user mode (+z)
  *
  * Per IRCX spec: the server will discard all messages from a user
  * with GAG mode to any other user or to any channel.  The mode is
@@ -84,8 +84,8 @@ hook_gag_privmsg_user(void *vdata)
 
 /*
  * Enforce GAG mode restrictions:
- * - Only opers can set +g on others
- * - Non-opers cannot remove +g from themselves
+ * - Only opers can set +zon others
+ * - Non-opers cannot remove +zfrom themselves
  */
 static void
 hook_gag_umode_changed(void *vdata)
@@ -96,27 +96,27 @@ hook_gag_umode_changed(void *vdata)
 	if (!MyClient(source_p))
 		return;
 
-	/* if user just had +g set and isn't an oper, disallow self-set */
-	if ((source_p->umodes & user_modes['g']) && !IsOper(source_p))
+	/* if user just had +zset and isn't an oper, disallow self-set */
+	if ((source_p->umodes & user_modes['z']) && !IsOper(source_p))
 	{
 		/* check if the mode was already on before */
-		if (!(data->oldumodes & user_modes['g']))
+		if (!(data->oldumodes & user_modes['z']))
 		{
-			/* user tried to set +g on themselves without oper - remove it */
-			source_p->umodes &= ~user_modes['g'];
+			/* user tried to set +zon themselves without oper - remove it */
+			source_p->umodes &= ~user_modes['z'];
 		}
 	}
 
 	/* sync FLAGS_GAGGED with user mode */
-	if (source_p->umodes & user_modes['g'])
+	if (source_p->umodes & user_modes['z'])
 		SetGagged(source_p);
-	else if (!(source_p->umodes & user_modes['g']))
+	else if (!(source_p->umodes & user_modes['z']))
 	{
-		/* only allow oper to remove +g */
-		if ((data->oldumodes & user_modes['g']) && !IsOper(source_p))
+		/* only allow oper to remove +z*/
+		if ((data->oldumodes & user_modes['z']) && !IsOper(source_p))
 		{
-			/* re-apply +g, user can't remove it */
-			source_p->umodes |= user_modes['g'];
+			/* re-apply +z, user can't remove it */
+			source_p->umodes |= user_modes['z'];
 		}
 		else
 		{
@@ -168,8 +168,8 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 	if (set_gag)
 	{
 		SetGagged(target_p);
-		if (user_modes['g'])
-			target_p->umodes |= user_modes['g'];
+		if (user_modes['z'])
+			target_p->umodes |= user_modes['z'];
 
 		/* propagate to other servers */
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
@@ -184,8 +184,8 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 	else
 	{
 		ClearGagged(target_p);
-		if (user_modes['g'])
-			target_p->umodes &= ~user_modes['g'];
+		if (user_modes['z'])
+			target_p->umodes &= ~user_modes['z'];
 
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG %s OFF",
@@ -212,14 +212,14 @@ me_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 	if (!rb_strcasecmp(parv[2], "ON"))
 	{
 		SetGagged(target_p);
-		if (user_modes['g'])
-			target_p->umodes |= user_modes['g'];
+		if (user_modes['z'])
+			target_p->umodes |= user_modes['z'];
 	}
 	else
 	{
 		ClearGagged(target_p);
-		if (user_modes['g'])
-			target_p->umodes &= ~user_modes['g'];
+		if (user_modes['z'])
+			target_p->umodes &= ~user_modes['z'];
 	}
 }
 
@@ -420,8 +420,8 @@ mapi_clist_av1 ircx_oper_clist[] = { &gag_msgtab, &opforce_msgtab, NULL };
 static int
 ircx_oper_init(void)
 {
-	/* register GAG user mode (+g) */
-	user_modes['g'] = find_umode_slot();
+	/* register GAG user mode (+z) per IRCX spec section 7.2 */
+	user_modes['z'] = find_umode_slot();
 	construct_umodebuf();
 
 	return 0;
@@ -430,7 +430,7 @@ ircx_oper_init(void)
 static void
 ircx_oper_deinit(void)
 {
-	user_modes['g'] = 0;
+	user_modes['z'] = 0;
 	construct_umodebuf();
 }
 

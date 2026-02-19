@@ -5,7 +5,7 @@
  *
  * This module implements all channel modes defined in the IRCX draft:
  *
- *   +u  NOKNOCK    - Prevents KNOCK requests to the channel
+ *   +u  KNOCK      - Enables KNOCK notifications to channel hosts/owners
  *   +h  HIDDEN     - Channel not listed via LIST/LISTX but queryable by name
  *   +a  AUTHONLY   - Only authenticated (PASS/AUTH'd) users may join
  *   +d  CLONEABLE  - Channel creates numbered clones when full
@@ -43,11 +43,11 @@
 #include "supported.h"
 
 static const char ircx_modes_desc[] =
-	"Provides all IRCX channel modes: +u (noknock), +h (hidden), +a (authonly), "
+	"Provides all IRCX channel modes: +u (knock), +h (hidden), +a (authonly), "
 	"+d (cloneable), +f (noformat), +z (service)";
 
 /* Allocated mode bits */
-static unsigned int MODE_NOKNOCK;	/* +u */
+static unsigned int MODE_KNOCK;	/* +u */
 static unsigned int MODE_HIDDEN_IRCX;	/* +h */
 static unsigned int MODE_AUTHONLY;	/* +a */
 static unsigned int MODE_CLONEABLE;	/* +d */
@@ -130,8 +130,8 @@ chm_ircx_service(struct Client *source_p, struct Channel *chptr,
 	{
 		if (!(*errors & 0x80000000))
 		{
-			sendto_one(source_p, form_str(ERR_NOPRIVILEGES),
-				me.name, source_p->name);
+			sendto_one_numeric(source_p, ERR_NOPRIVILEGES,
+				form_str(ERR_NOPRIVILEGES));
 			*errors |= 0x80000000;
 		}
 		return;
@@ -197,8 +197,8 @@ ircx_modes_init(void)
 	 */
 
 	/* +u: NOKNOCK */
-	MODE_NOKNOCK = cflag_add('u', chm_simple);
-	if (MODE_NOKNOCK == 0)
+	MODE_KNOCK = cflag_add('u', chm_simple);
+	if (MODE_KNOCK == 0)
 		return -1;
 
 	/* +h: HIDDEN (custom handler for mutual exclusivity) */

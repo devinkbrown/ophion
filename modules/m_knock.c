@@ -128,8 +128,11 @@ m_knock(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		return;
 	}
 
-	/* IRCX +u (NOKNOCK): channel has disabled knock notifications */
-	if(chmode_flags['u'] && (chptr->mode.mode & chmode_flags['u']))
+	/* IRCX +u (KNOCK): KNOCK only works on channels with +u set.
+	 * Per draft-pfenning-irc-extensions-04 section 8.1.9, +u enables
+	 * knock notifications to channel hosts/owners. Without +u, KNOCK
+	 * requests are rejected. */
+	if(chmode_flags['u'] && !(chptr->mode.mode & chmode_flags['u']))
 	{
 		sendto_one(source_p, form_str(ERR_KNOCKDISABLED),
 			   me.name, source_p->name);
