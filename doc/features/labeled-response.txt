@@ -1,0 +1,35 @@
+IRCv3 labeled-response capability
+----------------------------------
+
+Specification: https://ircv3.net/specs/extensions/labeled-response
+
+The labeled-response capability allows clients to associate server
+responses with the command that triggered them.  The client sends a
+label tag on a command; the server echoes that label on all responses
+to that command.
+
+Capability name: labeled-response
+Registered in: ircd/s_serv.c
+Implementation: ircd/parse.c, ircd/send.c
+
+How it works
+~~~~~~~~~~~~
+
+The client attaches a label tag to a command:
+
+  @label=abc123 PRIVMSG #channel :hello
+
+The server includes the same label on all responses:
+
+  @label=abc123 :nick!user@host PRIVMSG #channel :hello
+
+If the command produces no visible response, the server sends an ACK:
+
+  @label=abc123 :server ACK
+
+The label tag is extracted during message parsing (ircd/parse.c) and
+injected into outgoing messages via sendto_one_prefix() and
+sendto_one_notice() (ircd/send.c).
+
+Labels are only echoed to the originating client and only when the
+client has negotiated the labeled-response capability.

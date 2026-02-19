@@ -1,0 +1,17 @@
+CHATHISTORY <subcommand> <target> <reference> <limit>
+
+Retrieves message history for a channel or private
+conversation. Requires the draft/chathistory capability.
+
+Subcommands:
+  LATEST <target> * <limit>
+  LATEST <target> timestamp=<ts> <limit>
+  BEFORE <target> timestamp=<ts> <limit>
+  AFTER  <target> timestamp=<ts> <limit>
+  AROUND <target> timestamp=<ts> <limit>
+  BETWEEN <target> timestamp=<ts1> timestamp=<ts2> <limit>
+  TARGETS timestamp=<ts1> timestamp=<ts2> <limit>
+
+Timestamps use ISO 8601 format (YYYY-MM-DDTHH:MM:SS.sssZ).
+Results are delivered inside a BATCH of type chathistory.
+Maximum limit is 100 messages per request.

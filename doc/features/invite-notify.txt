@@ -1,0 +1,20 @@
+IRCv3 invite-notify capability
+-------------------------------
+
+Specification: https://ircv3.net/specs/extensions/invite-notify
+
+The invite-notify capability allows channel members to be notified
+when another user is invited to the channel.
+
+Capability name: invite-notify
+Registered in: ircd/s_serv.c
+Implementation: modules/m_invite.c
+
+When a user with invite-notify negotiated is in a channel and someone
+is INVITEd to that channel, they receive an INVITE message:
+
+  :inviter!user@host INVITE invitee #channel
+
+Only channel operators and half-operators receive invite-notify
+messages by default.  The notification is sent to members who have
+the invite-notify capability negotiated.

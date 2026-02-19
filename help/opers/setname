@@ -1,0 +1,11 @@
+SETNAME :<new realname>
+
+Changes your realname (GECOS field). Requires the setname
+capability to be negotiated.
+
+The new realname must not exceed REALLEN characters. The
+change is broadcast to users sharing a channel with you
+who have the setname capability negotiated.
+
+If the realname is too long, the server replies with:
+  FAIL SETNAME INVALID_REALNAME :Realname is too long

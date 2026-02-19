@@ -1,0 +1,28 @@
+IRCv3 typing capability (draft)
+--------------------------------
+
+Specification: https://ircv3.net/specs/client-tags/typing
+
+The draft/typing capability enables typing indicator notifications
+between clients.
+
+Capability name: draft/typing
+Registered in: ircd/s_serv.c
+
+How it works
+~~~~~~~~~~~~
+
+Clients that negotiate both message-tags and draft/typing can send
+typing indicators using TAGMSG with the +draft/typing client tag:
+
+  @+draft/typing=active TAGMSG <target>
+
+The tag value may be:
+  active   The user is actively typing.
+  paused   The user started typing but stopped.
+  done     The user has cleared their input.
+
+Since +draft/typing is a client-only tag (prefixed with +), it is
+already relayed by the message-tags module (cap_message_tags) via
+TAGMSG.  The draft/typing capability registration simply advertises
+to clients that the server understands this tag.

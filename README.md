@@ -3,7 +3,7 @@
 Ophion is an IRC server for communities and teams, forked from
 charybdis and extended with:
 
- * IRCv3.2 and portions of the IRCv3 living standard,
+ * comprehensive IRCv3 support (see below),
  * the patent-unencumbered parts of the IRCX protocol
    (draft-pfenning-irc-extensions-04),
  * automatic SID generation and SVSSID collision negotiation for
@@ -12,6 +12,73 @@ charybdis and extended with:
  * and websocket transport support.
 
 Come chat with us at irc.ophion.dev #ophion.
+
+## IRCv3 Support
+
+Ophion implements a broad set of IRCv3 capabilities. Capabilities marked
+with (module) are provided by loadable modules and can be enabled or
+disabled independently.
+
+### Client Capabilities
+
+| Capability | Module | Description |
+|------------|--------|-------------|
+| `account-notify` | core | Notifies clients when a user's account changes |
+| `account-tag` | cap_account_tag | Adds account name as a message tag |
+| `away-notify` | core | Notifies clients when a user goes/returns from away |
+| `batch` | core | Groups related messages together |
+| `cap-notify` | core | Notifies clients of capability changes |
+| `chghost` | core | Notifies clients of hostname/username changes |
+| `echo-message` | core | Echoes sent messages back to the sender |
+| `extended-join` | core | Includes account and realname in JOIN messages |
+| `invite-notify` | core | Notifies channel members when someone is invited |
+| `labeled-response` | core | Associates responses with the command that caused them |
+| `message-tags` | cap_message_tags | Enables message tags and the TAGMSG command |
+| `msgid` | m_chathistory | Unique message identifiers on PRIVMSG/NOTICE |
+| `multi-prefix` | core | Shows all prefix modes in NAMES and WHO |
+| `sasl` | m_sasl_core | SASL authentication |
+| `server-time` | cap_server_time | Adds server timestamp to messages |
+| `setname` | core | Allows clients to change their realname |
+| `standard-replies` | core | Standardised error/warning/note replies |
+| `sts` | cap_sts | Strict Transport Security |
+| `tls` | m_starttls | STARTTLS for connection encryption |
+| `userhost-in-names` | core | Includes full user@host in NAMES replies |
+| `draft/chathistory` | m_chathistory | Message history retrieval |
+| `draft/event-playback` | m_chathistory | Event playback within history batches |
+| `draft/typing` | core | Typing indicator notifications |
+
+### IRCv3 Commands
+
+| Command | Module | Description |
+|---------|--------|-------------|
+| `TAGMSG` | cap_message_tags | Send a message with tags but no text body |
+| `SETNAME` | m_setname | Change your realname (GECOS) |
+| `CHATHISTORY` | m_chathistory | Retrieve message history for a target |
+
+### CHATHISTORY Subcommands
+
+The `CHATHISTORY` command (requires `draft/chathistory` capability)
+supports the following subcommands:
+
+- `LATEST <target> * <limit>` -- most recent messages
+- `LATEST <target> timestamp=<ts> <limit>` -- messages since a timestamp
+- `BEFORE <target> timestamp=<ts> <limit>` -- messages before a timestamp
+- `AFTER <target> timestamp=<ts> <limit>` -- messages after a timestamp
+- `AROUND <target> timestamp=<ts> <limit>` -- messages around a timestamp
+- `BETWEEN <target> timestamp=<ts1> timestamp=<ts2> <limit>` -- messages between two timestamps
+- `TARGETS timestamp=<ts1> timestamp=<ts2> <limit>` -- list targets with recent history
+
+Messages are delivered inside a `batch` of type `chathistory`. The server
+advertises `CHATHISTORY=100` and `MSGREFTYPES=timestamp` in ISUPPORT.
+
+### ISUPPORT Tokens
+
+The following ISUPPORT tokens are added by IRCv3 modules:
+
+| Token | Value | Description |
+|-------|-------|-------------|
+| `CHATHISTORY` | `100` | Maximum messages per history request |
+| `MSGREFTYPES` | `timestamp` | Supported message reference types |
 
 ## IRCX Protocol Support
 

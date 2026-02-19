@@ -1,0 +1,26 @@
+IRCv3 standard-replies capability
+----------------------------------
+
+Specification: https://ircv3.net/specs/extensions/standard-replies
+
+The standard-replies capability indicates that the client understands
+the FAIL, WARN, and NOTE message formats.  These provide a structured
+way for the server to communicate errors, warnings, and informational
+messages that don't fit neatly into the traditional numeric reply
+system.
+
+Capability name: standard-replies
+Registered in: ircd/s_serv.c
+
+Message format
+~~~~~~~~~~~~~~
+
+  :server FAIL <command> <code> [context...] :<description>
+  :server WARN <command> <code> [context...] :<description>
+  :server NOTE <command> <code> [context...] :<description>
+
+Used by:
+- SETNAME: sends FAIL SETNAME INVALID_REALNAME when the realname is
+  too long.
+- CHATHISTORY: sends FAIL CHATHISTORY INVALID_PARAMS for malformed
+  requests, and FAIL CHATHISTORY INVALID_TARGET for unknown targets.
