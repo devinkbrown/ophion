@@ -29,6 +29,7 @@ extensions = [
   'ip_cloaking_old',
   'ip_cloaking_3.0',
   'ip_cloaking_4.0',
+  'ip_cloaking_unified',
   'override',
   'override_kick_immunity',
   'restrict-unauthenticated',

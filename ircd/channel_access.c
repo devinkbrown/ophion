@@ -136,3 +136,69 @@ channel_access_match(struct Channel *chptr, struct Client *client_p)
 
 	return NULL;
 }
+
+/*
+ * channel_access_best_match - return the highest-privilege matching entry.
+ *
+ * Unlike channel_access_match() which returns the first match,
+ * this iterates all entries and returns the one with the highest
+ * flags value (CHFL_ADMIN > CHFL_CHANOP > CHFL_VOICE).
+ */
+struct AccessEntry *
+channel_access_best_match(struct Channel *chptr, struct Client *client_p)
+{
+	s_assert(chptr != NULL);
+	s_assert(client_p != NULL);
+
+	if (!MyClient(client_p))
+		return NULL;
+
+	struct matchset ms;
+	matchset_for_client(client_p, &ms);
+
+	struct AccessEntry *best = NULL;
+	rb_dlink_node *iter;
+
+	RB_DLINK_FOREACH(iter, chptr->access_list.head)
+	{
+		struct AccessEntry *ae = iter->data;
+		int matched = 0;
+
+		if (matches_mask(&ms, ae->mask))
+			matched = 1;
+		else if (match_extban(ae->mask, client_p, chptr, CHFL_ACL))
+			matched = 1;
+
+		if (matched && (best == NULL || ae->flags > best->flags))
+			best = ae;
+	}
+
+	return best;
+}
+
+/*
+ * channel_access_delete_wildcard - delete all entries matching a wildcard pattern.
+ * Returns the number of entries deleted.
+ */
+int
+channel_access_delete_wildcard(struct Channel *chptr, const char *pattern)
+{
+	s_assert(chptr != NULL);
+	s_assert(pattern != NULL);
+
+	int count = 0;
+	rb_dlink_node *iter, *next;
+
+	RB_DLINK_FOREACH_SAFE(iter, next, chptr->access_list.head)
+	{
+		struct AccessEntry *ae = iter->data;
+
+		if (match(pattern, ae->mask))
+		{
+			channel_access_delete_one(chptr, ae);
+			count++;
+		}
+	}
+
+	return count;
+}

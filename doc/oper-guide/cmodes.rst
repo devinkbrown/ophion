@@ -12,6 +12,9 @@ or::
 
   /RAW HELP CMODE
 
+Standard channel modes
+~~~~~~~~~~~~~~~~~~~~~~
+
 ``+b``, channel ban
 -------------------
 
@@ -66,25 +69,28 @@ in. For example::
 
 Only channel operators can see ``+e`` changes or request the list.
 
-``+f``, channel forwarding
---------------------------
+``+f``, no format / NOFORMAT (IRCX)
+------------------------------------
+
+.. note:: When the ``m_ircx_modes`` module is loaded, ``+f`` is
+          repurposed as the IRCX NOFORMAT mode. The original charybdis
+          channel forwarding mode is saved and restored if the module
+          is unloaded.
+
+**IRCX NOFORMAT mode (with m_ircx_modes loaded):**
+
+Per IRCX draft section 8.1.10, when ``+f`` is set, messages in this
+channel contain raw text only. IRC clients should not apply formatting
+(colors, bold, underline, etc.) to messages in this channel. This is
+useful for channels dedicated to code, logs, or data transfer.
+
+**Legacy forwarding mode (without m_ircx_modes):**
 
 This mode takes one parameter, the name of a channel (``+f
 #channel``). If the channel also has the ``+i`` cmode set, and
-somebody attempts to join without either being expliticly invited, or
+somebody attempts to join without either being explicitly invited, or
 having an invex (``+I``), then they will instead join the channel
-named in the mode parameter. The client will also be sent a 470
-numeric giving the original and target channels.
-
-Users are similarly forwarded if the ``+j`` cmode is set and their attempt
-to join is throttled, if ``+l`` is set and there are already too many users
-in the channel or if ``+r`` is set and they are not identified.
-
-Forwards may only be set to ``+F`` channels, or to channels the setter has
-ops in.
-
-Without parameter (``/mode #channel f`` or ``/mode #channel +f``) the forward
-channel is returned. This form also works off channel.
+named in the mode parameter.
 
 ``+F``, allow anybody to forward to this
 ----------------------------------------
@@ -185,13 +191,20 @@ which ensure the founder (and users designated by the founder) can
 always gain channel operator privileges and provide some features to
 manage the channel.
 
-``+p``, paranoid channel
-------------------------
+``+p``, paranoid channel / PRIVATE (IRCX)
+------------------------------------------
 
 When set, the ``KNOCK`` command cannot be used on the channel to request an
 invite, and users will not be shown the channel in ``WHOIS`` replies unless
-they are on it. Unlike in traditional IRC, ``+p`` and ``+s`` can be set
-together.
+they are on it.
+
+Per the IRCX draft (section 8.1.2), ``+p`` marks a channel as PRIVATE.
+The channel appears in ``LIST`` output, but its properties (topic, member
+count) may be restricted from non-members.
+
+``+p`` is mutually exclusive with ``+h`` (HIDDEN) per the IRCX visibility
+model. Setting ``+p`` or ``+s`` will clear ``+h`` if the IRCX modes module
+is loaded.
 
 ``+P``, permanent channel
 -------------------------
@@ -227,13 +240,20 @@ This does not affect the ability to set ``+f``.
 When set, this mode prevents unidentified users from joining. Invited
 users can still join.
 
-``+s``, secret channel
-----------------------
+``+s``, secret channel / SECRET (IRCX)
+---------------------------------------
 
 When set, this mode prevents the channel from appearing in the output of
 the ``LIST``, ``WHO`` and ``WHOIS`` command by users who are not on it. Also, the
 server will refuse to answer ``WHO``, ``NAMES``, ``TOPIC`` and ``LIST`` queries from
 users not on the channel.
+
+Per the IRCX draft (section 8.1.4), ``+s`` marks a channel as SECRET.
+This is the most restrictive visibility level -- the channel is not
+visible to non-members in any way.
+
+``+s`` is mutually exclusive with ``+h`` (HIDDEN) per the IRCX visibility
+model.
 
 ``+t``, topic limit
 -------------------
@@ -252,13 +272,129 @@ clients voiced users are marked with a plus sign.
 The privilege is lost if the user leaves the channel or server in any
 way.
 
-``+z``, reduced moderation
---------------------------
+``+z``, SERVICE (IRCX)
+-----------------------
+
+.. note:: When the ``m_ircx_modes`` module is loaded, ``+z`` is
+          repurposed as the IRCX SERVICE mode. The original charybdis
+          opmoderate/reduced moderation mode is saved and restored if
+          the module is unloaded.
+
+**IRCX SERVICE mode (with m_ircx_modes loaded):**
+
+Per IRCX draft section 8.1.14, indicates that a service (bot, monitor,
+or automated agent) is monitoring this channel. This mode can only be
+set by IRC operators (sysops). It is informational -- it tells users
+that a service is present and may be logging or responding to activity.
+
+**Legacy opmoderate mode (without m_ircx_modes):**
 
 When ``+z`` is set, the effects of ``+m``, ``+b`` and ``+q`` are relaxed. For each
 message, if that message would normally be blocked by one of these
-modes, it is instead sent to all channel operators. This is intended for
-use in moderated debates.
+modes, it is instead sent to all channel operators.
 
-Note that ``+n`` is unaffected by this. To silence a given user completely,
-remove them from the channel.
+IRCX channel modes
+~~~~~~~~~~~~~~~~~~
+
+The following modes are provided by the ``m_ircx_modes`` module
+(``modules/m_ircx_modes.c``). They implement channel modes defined in
+the IRCX draft specification (draft-pfenning-irc-extensions-04).
+
+``+a``, AUTHONLY (IRCX)
+------------------------
+
+Per IRCX draft section 8.1.15, when ``+a`` is set, only authenticated
+users may join the channel. A user is considered authenticated if they
+have identified to services (i.e., their services account name is set).
+Unauthenticated users receive ``ERR_NEEDREGGEDNICK`` (477) when they
+attempt to join.
+
+This is useful for channels that require verified identity, such as
+private team channels or moderated discussion forums.
+
+``+d``, CLONEABLE (IRCX)
+--------------------------
+
+Per IRCX draft section 8.1.16, when ``+d`` is set on a channel, the
+channel is marked as cloneable. When the channel reaches its member
+limit (``+l``), the server may automatically create numbered clone
+channels (e.g., ``#chat`` -> ``#chat1``, ``#chat2``, etc.) and redirect
+new joiners to the clone.
+
+Currently, the ``+d`` flag is registered and can be set/queried, but the
+automatic clone creation behavior is designed to be implemented by
+services or extended in a future update. The clone channels themselves
+are marked with ``+E``.
+
+``+E``, CLONE (IRCX)
+---------------------
+
+Per IRCX draft section 8.1.17, marks a channel as a numbered clone of
+a CLONEABLE (``+d``) channel. This flag is set automatically by the
+server when a clone channel is created due to overflow on a ``+d``
+channel.
+
+.. note:: The IRCX draft uses ``+e`` for CLONE, but since ``+e`` is
+          used for ban exceptions in the charybdis/solanum lineage,
+          CLONE has been remapped to ``+E`` to avoid the conflict.
+
+``+h``, HIDDEN (IRCX)
+-----------------------
+
+Per IRCX draft section 8.1.3, when ``+h`` is set, the channel is
+hidden from ``LIST`` and ``LISTX`` output for non-members. However,
+unlike ``+s`` (SECRET), the channel can still be queried by name --
+users who know the channel name can view its properties and join it
+(subject to other restrictions).
+
+**Visibility model (mutually exclusive):**
+
+The IRCX draft defines four visibility levels for channels:
+
+==========  ====  ==========================================
+Visibility  Mode  Description
+==========  ====  ==========================================
+PUBLIC      none  Default. Visible in LIST, all data queryable.
+PRIVATE     ``+p``  Listed, but properties restricted to non-members.
+HIDDEN      ``+h``  Not in LIST, but queryable if name is known.
+SECRET      ``+s``  Not visible to non-members at all.
+==========  ====  ==========================================
+
+These are mutually exclusive. When ``+h`` is set, ``+p`` and ``+s``
+are automatically cleared. When ``+p`` or ``+s`` is set by other means,
+the mutual exclusivity should be observed.
+
+``+u``, KNOCK (IRCX)
+----------------------
+
+Per IRCX draft section 8.1.9, when ``+u`` is set, KNOCK notifications
+are enabled for the channel. Channel hosts and owners will receive
+notifications when a user uses the ``KNOCK`` command to request entry.
+
+Without ``+u`` set, the ``KNOCK`` command will be rejected for this
+channel. This allows channel operators to opt-in to receiving knock
+requests.
+
+``+x``, AUDITORIUM (IRCX)
+---------------------------
+
+Per IRCX draft section 8.1.12, when ``+x`` is set, the channel operates
+in auditorium mode. Non-operator members cannot see each other in the
+channel -- only channel operators are visible in ``NAMES`` and ``WHO``
+output. JOIN, PART, and QUIT messages from non-operators are suppressed
+for other non-operators.
+
+This is ideal for large announcement channels, lectures, or events where
+only the presenters/operators should be visible.
+
+Provided by the ``m_ircx_auditorium`` module.
+
+``+w``, NOWHISPER (IRCX)
+--------------------------
+
+When ``+w`` is set, the IRCX ``WHISPER`` command is disabled for the
+channel. WHISPER allows sending a message to a specific channel member
+via the channel (visible only to that member), similar to a private
+message but routed through the channel context.
+
+Provided by the ``m_ircx_whisper`` module.

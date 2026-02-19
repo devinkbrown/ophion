@@ -1,8 +1,123 @@
+Ophion Mode Reference
+=====================
+
 Standard user modes are listed in help/opers/umode
 Standard server notice masks are listed in help/opers/snomask
 Standard channel modes are listed in help/opers/cmode
 
-The sgml docs have more detailed descriptions.
+The oper-guide (doc/oper-guide/) has comprehensive documentation.
+
+IRCX Channel Modes (m_ircx_modes module)
+-----------------------------------------
+
+  +a  AUTHONLY   - Only authenticated (services-identified) users may join
+  +d  CLONEABLE  - Channel creates numbered clones when full
+  +E  CLONE      - Marks channel as a clone of a +d channel (IRCX +e remapped)
+  +f  NOFORMAT   - Raw text only, clients should not format (overrides forwarding)
+  +h  HIDDEN     - Not in LIST/LISTX but queryable by name
+  +u  KNOCK      - Enables KNOCK notifications to channel hosts/owners
+  +z  SERVICE    - Service monitoring channel, oper-only (overrides opmoderate)
+
+IRCX Visibility Model (mutually exclusive)
+  PUBLIC   - No mode flag (default). Visible in LIST, all data queryable.
+  PRIVATE  - +p (RFC1459). Listed but properties restricted.
+  HIDDEN   - +h (IRCX). Not in LIST but queryable if name is known.
+  SECRET   - +s (RFC1459). Not visible to non-members at all.
+
+Other IRCX Channel Modes (separate modules)
+  +x  AUDITORIUM - Only ops visible to non-ops (m_ircx_auditorium)
+  +w  NOWHISPER  - Disables WHISPER command in channel (m_ircx_whisper)
+
+IRCX User Mode (m_ircx_oper module)
+-------------------------------------
+
+  +z  GAG        - User silenced globally, oper-only set/unset
+
+IRCX Commands
+--------------
+
+  AUTH     - IRCX authentication (m_ircx_auth)
+  CREATE   - Create channel with initial modes (m_ircx_create)
+  LISTX    - Extended channel listing (m_ircx_listx)
+  PROP     - Get/set/list properties on channels and users (m_ircx_prop)
+  WHISPER  - Private message to channel member (m_ircx_whisper)
+  ACCESS   - Channel access list management (m_ircx_access)
+  EVENT    - Oper event subscription system (m_ircx_event)
+  GAG      - Silence a user globally, oper-only (m_ircx_oper)
+  OPFORCE  - Unified oper channel force commands (m_ircx_oper)
+
+Microsoft Comic Chat Support (m_ircx_comic module)
+----------------------------------------------------
+
+  The m_ircx_comic module enables Microsoft Comic Chat/Microsoft Chat
+  character metadata via the PROP system. Advertised via ISUPPORT COMICCHAT.
+
+  PROP keys: MCC (character data), MCCGUID (character GUID), MCCEX (expression)
+
+ACCESS Hierarchy Overrides
+---------------------------
+
+  When the m_ircx_access module is loaded, ACCESS list entries can
+  override channel join restrictions based on hierarchy:
+
+    OWNER/ADMIN (CHFL_ADMIN) - overrides: +b, +k, +i, +l, +j, +r
+    HOST/OP (CHFL_CHANOP)    - overrides: +b, +k, +i, +l, +j
+    VOICE (CHFL_VOICE)       - overrides: +b
+
+  This allows channel access lists to serve as a complete authorization
+  system.  Users with GRANT entries are already handled via +I (invex).
+
+Oper Auto-Owner (m_ircx_oper_autoowner module)
+------------------------------------------------
+
+  When loaded, opers with the "oper:autoowner" privilege are automatically
+  granted channel owner (+q) status when they join any channel.
+
+  Configure in privset{} blocks:
+    privset "admin" {
+        privs = oper:admin, oper:autoowner;
+    };
+
+MEMBERKEY / +k Integration
+----------------------------
+
+  The IRCX MEMBERKEY property and IRC +k (channel key) mode are fully
+  synchronized:
+
+    PROP #channel MEMBERKEY mykey  ->  sets +k mykey
+    PROP #channel MEMBERKEY :      ->  removes +k
+    MODE #channel +k mykey         ->  MEMBERKEY reflects new key
+    PROP #channel MEMBERKEY        ->  shows key to chanops only
+
+IRCX Module List
+-----------------
+
+  m_ircx_access           - ACCESS command, channel access lists, join overrides
+  m_ircx_auditorium       - Auditorium mode (+x)
+  m_ircx_auth             - AUTH command
+  m_ircx_base             - IRCX base protocol negotiation
+  m_ircx_comic            - Microsoft Comic Chat character metadata
+  m_ircx_create           - CREATE command
+  m_ircx_event            - EVENT command (CHANNEL/MEMBER/USER/SERVER/OPERSPY)
+  m_ircx_listx            - LISTX command
+  m_ircx_modes            - All IRCX channel modes (+u/+h/+a/+d/+E/+f/+z)
+  m_ircx_oper             - GAG mode (+z) and OPFORCE command
+  m_ircx_oper_autoowner   - Auto-owner opers on channel join (oper:autoowner)
+  m_ircx_prop             - PROP command core
+  m_ircx_prop_adminkey    - ADMINKEY channel property
+  m_ircx_prop_channel_builtins - OID/NAME/CREATION/TOPIC/MEMBERCOUNT/MEMBERKEY
+  m_ircx_prop_entity_account   - Account entity properties
+  m_ircx_prop_entity_channel   - Channel entity properties
+  m_ircx_prop_entity_user      - User entity properties
+  m_ircx_prop_member_of        - MEMBER_OF channel property
+  m_ircx_prop_onjoin           - ONJOIN channel property
+  m_ircx_prop_onpart           - ONPART channel property
+  m_ircx_prop_opkey            - OPKEY/HOSTKEY channel property
+  m_ircx_prop_user_profile     - User profile properties (URL, GENDER, etc.)
+  m_ircx_whisper               - WHISPER command and +w mode
+
+Standard Modes
+--------------
 
 User mode +x (hide hostname) is provided by contrib/ip_cloaking.so
 Server notice mask +F (far connects) is provided by contrib/sno_farconnect.so

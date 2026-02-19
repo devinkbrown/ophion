@@ -121,8 +121,35 @@ Opers with ``+w`` additionally receive ``WALLOPS`` sent by servers (e.g. remote
 ``CONNECT``, remote ``SQUIT``, various severe misconfigurations, many services
 packages).
 
-``+z``, receive operwall
-------------------------
+``+z``, GAG / receive operwall (IRCX)
+--------------------------------------
+
+.. note:: When the ``m_ircx_oper`` module is loaded, user mode ``+z``
+          is repurposed as the IRCX GAG mode. The original charybdis
+          operwall reception mode is affected; opers needing operwall
+          should use the ``OPERWALL`` command directly.
+
+**IRCX GAG mode (with m_ircx_oper loaded):**
+
+Per IRCX draft section 7.2, GAG mode silences a user globally. When a
+user has ``+z`` set:
+
+- All ``PRIVMSG`` and ``NOTICE`` messages sent by the user to channels
+  or other users are silently discarded by the server.
+- The user is **not** notified that their messages are being dropped
+  (per IRCX specification).
+- Only IRC operators can set or remove ``+z`` on other users.
+- Users cannot set ``+z`` on themselves, and cannot remove it once set.
+
+Operators can manage GAG via:
+
+- ``/GAG nick`` -- toggle GAG on a user
+- ``/GAG nick ON`` -- explicitly gag a user
+- ``/GAG nick OFF`` -- explicitly ungag a user
+
+GAG state is propagated to all servers on the network.
+
+**Legacy operwall mode (without m_ircx_oper):**
 
 ``OPERWALL`` differs from ``WALLOPS`` in that the ability to receive such
 messages is restricted. Opers with ``+z`` set will receive ``OPERWALL``

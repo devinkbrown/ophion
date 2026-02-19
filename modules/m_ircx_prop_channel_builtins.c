@@ -29,6 +29,7 @@
 
 #include "stdinc.h"
 #include "capability.h"
+#include "channel.h"
 #include "client.h"
 #include "msg.h"
 #include "parse.h"
@@ -41,6 +42,7 @@
 #include "send.h"
 #include "supported.h"
 #include "hash.h"
+#include "match.h"
 #include "propertyset.h"
 
 static const char ircx_prop_channel_builtins_desc[] =
@@ -65,7 +67,7 @@ DECLARE_MODULE_AV2(ircx_prop_channel_builtins, NULL, NULL, NULL, NULL,
 static inline bool
 key_matches(const char *keys, const char *name)
 {
-	return keys == NULL || rb_strcasestr(keys, name) != NULL;
+	return keys == NULL || match(keys, name);
 }
 
 /*
@@ -129,6 +131,29 @@ h_prop_list_append(void *vdata)
 		const char *topic = chptr->topic ? chptr->topic : "";
 		sendto_one_numeric(data->client, RPL_PROPLIST, form_str(RPL_PROPLIST),
 			data->target, "TOPIC", topic);
+	}
+
+	/* MEMBERCOUNT: current member count (read-only) */
+	if (key_matches(data->keys, "MEMBERCOUNT"))
+	{
+		snprintf(buf, sizeof buf, "%lu",
+			(unsigned long)rb_dlink_list_length(&chptr->members));
+		sendto_one_numeric(data->client, RPL_PROPLIST, form_str(RPL_PROPLIST),
+			data->target, "MEMBERCOUNT", buf);
+	}
+
+	/* MEMBERKEY: show current +k value to channel operators only.
+	 * Per IRCX spec, MEMBERKEY is write-only for non-ops, but
+	 * channel operators can see the current key value. This ensures
+	 * MEMBERKEY and +k stay in sync. */
+	if (key_matches(data->keys, "MEMBERKEY") && *chptr->mode.key)
+	{
+		struct membership *msptr = find_channel_membership(chptr, data->client);
+		if (msptr != NULL && (is_chanop(msptr) || is_admin(msptr)))
+		{
+			sendto_one_numeric(data->client, RPL_PROPLIST, form_str(RPL_PROPLIST),
+				data->target, "MEMBERKEY", chptr->mode.key);
+		}
 	}
 }
 

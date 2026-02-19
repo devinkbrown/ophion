@@ -54,6 +54,7 @@
 #include "wsproc.h"
 #include "s_assert.h"
 #include "propertyset.h"
+#include "chmode.h"
 
 #define DEBUG_EXITED_CLIENTS
 
@@ -909,12 +910,13 @@ remove_client_from_list(struct Client *client_p)
 
 /* clean_nick()
  *
- * input	- nickname to check, flag for nick from local client
+ * input	- nickname to check, flag for nick from local client,
+ *		  flag to allow UTF-8 (high bytes 0x80-0xFF) in nicks
  * output	- 0 if erroneous, else 1
  * side effects -
  */
 int
-clean_nick(const char *nick, int loc_client)
+clean_nick(const char *nick, int loc_client, int allow_utf8)
 {
 	int len = 0;
 
@@ -929,7 +931,12 @@ clean_nick(const char *nick, int loc_client)
 	{
 		len++;
 		if(!IsNickChar(*nick))
+		{
+			/* allow high bytes (UTF-8) when IRCX mode permits */
+			if(allow_utf8 && ((unsigned char)*nick >= 0x80))
+				continue;
 			return 0;
+		}
 	}
 
 	/* nicklen is +1 */
@@ -1348,10 +1355,80 @@ exit_generic_client(struct Client *client_p, struct Client *source_p, struct Cli
 	if(IsOper(source_p))
 		rb_dlinkFindDestroy(source_p, &oper_list);
 
+	/*
+	 * Auditorium mode (+x) QUIT filtering: if the user is in any
+	 * channel with +x set and is not an op/voiced there, only ops
+	 * in that channel should see the QUIT.  We handle this by
+	 * doing per-channel delivery when auditorium mode is active.
+	 */
+	if (chmode_flags['x'])
+	{
+		bool has_auditorium = false;
+		rb_dlink_node *aptr;
+
+		RB_DLINK_FOREACH(aptr, source_p->user->channel.head)
+		{
+			struct membership *amsp = aptr->data;
+			struct Channel *achptr = amsp->chptr;
+
+			if ((achptr->mode.mode & chmode_flags['x']) && !is_chanop_voiced(amsp))
+			{
+				has_auditorium = true;
+				break;
+			}
+		}
+
+		if (has_auditorium)
+		{
+			/* per-channel QUIT delivery with auditorium filtering */
+			rb_dlink_node *cptr, *cnext;
+			rb_dlink_node *uptr, *unext;
+
+			++current_serial;
+
+			RB_DLINK_FOREACH_SAFE(cptr, cnext, source_p->user->channel.head)
+			{
+				struct membership *mscptr = cptr->data;
+				struct Channel *chptr = mscptr->chptr;
+				int auditorium_filtered = (chptr->mode.mode & chmode_flags['x']) &&
+							  !is_chanop_voiced(mscptr);
+
+				RB_DLINK_FOREACH_SAFE(uptr, unext, chptr->locmembers.head)
+				{
+					struct membership *msptr = uptr->data;
+					struct Client *target_p = msptr->client_p;
+
+					if (IsIOError(target_p) || target_p->serial == current_serial)
+						continue;
+
+					/* in auditorium channels, non-ops don't see non-op QUITs */
+					if (auditorium_filtered && !is_chanop_voiced(msptr))
+						continue;
+
+					target_p->serial = current_serial;
+					sendto_one(target_p, ":%s!%s@%s QUIT :%s",
+						   source_p->name, source_p->username,
+						   source_p->host, comment);
+				}
+			}
+
+			/* send to self if not already done */
+			if (MyConnect(source_p) && source_p->serial != current_serial)
+			{
+				sendto_one(source_p, ":%s!%s@%s QUIT :%s",
+					   source_p->name, source_p->username,
+					   source_p->host, comment);
+			}
+
+			goto quit_done;
+		}
+	}
+
 	sendto_common_channels_local(source_p, NOCAPS, NOCAPS, ":%s!%s@%s QUIT :%s",
 				     source_p->name,
 				     source_p->username, source_p->host, comment);
 
+quit_done:
 	remove_user_from_channels(source_p);
 
 	/* Should not be in any channels now */

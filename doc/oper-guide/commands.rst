@@ -752,3 +752,109 @@ OPERWALL
 
 Sends an OPERWALL message to all opers who have the +z umode set. +z is
 restricted, OPERWALL should be considered private communications.
+
+IRCX operator commands
+~~~~~~~~~~~~~~~~~~~~~~
+
+The following commands are provided by the ``m_ircx_oper`` module and
+require IRC operator privileges.
+
+GAG
+---
+
+::
+
+   GAG nick [ON | OFF]
+
+Toggles or explicitly sets the GAG (``+z``) user mode on the target
+user. When gagged, all messages from the user are silently discarded
+by the server -- the user is not informed that their messages are being
+dropped (per IRCX specification).
+
+Without ``ON`` or ``OFF``, the command toggles the current GAG state.
+
+GAG is propagated to all servers on the network. Only IRC operators
+can use this command.
+
+OPFORCE
+-------
+
+::
+
+   OPFORCE JOIN <channel>
+   OPFORCE OP <channel>
+   OPFORCE KICK <channel> <nick> [reason]
+   OPFORCE MODE <channel> <modes> [params]
+
+Unified operator channel force command. Requires oper and admin
+privileges. All OPFORCE actions generate WALLOPS notices to alert
+other operators.
+
+``OPFORCE JOIN <channel>``
+    Force-join the channel as a channel operator. The operator is
+    added to the channel with ``+o`` status immediately.
+
+``OPFORCE OP <channel>``
+    Grant yourself channel operator status on a channel you are
+    already a member of.
+
+``OPFORCE KICK <channel> <nick> [reason]``
+    Force-kick a user from a channel, bypassing normal permission
+    checks. If no reason is given, the operator's nick is used.
+
+``OPFORCE MODE <channel> <modes> [params]``
+    Force-set channel modes, bypassing normal permission checks.
+    All standard mode syntax applies.
+
+EVENT
+-----
+
+::
+
+   EVENT ADD <event> [mask]
+   EVENT DELETE <event>
+   EVENT LIST [event]
+
+IRCX event subscription system for operator monitoring. Allows opers
+to subscribe to real-time event notifications about server activity.
+
+Provided by the ``m_ircx_event`` module. Requires oper privileges.
+
+The EVENT system subsumes many legacy server notice (snomask) functions
+into a unified framework. Channel creation events replace ``sno_channelcreate``,
+nick change events replace ``sno_globalnickchange``, and OPERSPY events
+provide accountability tracking.
+
+**Event types:**
+
+``CHANNEL``
+    Channel creation (replaces ``sno_channelcreate`` +l snomask),
+    destruction, topic changes, and mode changes.
+
+``MEMBER``
+    Channel join, part, kick, and membership mode changes.
+
+``USER``
+    User connections, disconnections, nick changes (replaces
+    ``sno_globalnickchange``), and mode changes.
+
+``SERVER``
+    Server connections, disconnections, and end-of-burst notifications.
+
+``OPERSPY``
+    Operspy usage notifications. Tracks when operators use operspy
+    functions (``!`` prefix on WHO/WHOIS/MODE etc). Complements the
+    ``+Z`` snomask.
+
+**Subcommands:**
+
+``EVENT ADD <type> [mask]``
+    Subscribe to events of the given type. An optional mask can filter
+    which events are received.
+
+``EVENT DELETE <type>``
+    Unsubscribe from events of the given type.
+
+``EVENT LIST [type]``
+    List current event subscriptions. If a type is given, show only
+    that subscription.

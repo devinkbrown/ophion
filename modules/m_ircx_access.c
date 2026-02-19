@@ -29,7 +29,9 @@
 
 #include "stdinc.h"
 #include "capability.h"
+#include "channel.h"
 #include "client.h"
+#include "hook.h"
 #include "msg.h"
 #include "parse.h"
 #include "modules.h"
@@ -41,6 +43,7 @@
 #include "send.h"
 #include "supported.h"
 #include "hash.h"
+#include "match.h"
 #include "channel_access.h"
 
 static const char ircx_access_desc[] = "Provides IRCX ACCESS command";
@@ -73,11 +76,13 @@ struct Message btaccess_msgtab = {
 
 mapi_clist_av1 ircx_access_clist[] = { &access_msgtab, &taccess_msgtab, &btaccess_msgtab, NULL };
 
+static void h_access_can_join(void *);
 static void h_access_channel_join(void *);
 static void h_access_burst_channel(void *);
 static void h_access_channel_lowerts(void *);
 
 mapi_hfn_list_av1 ircx_access_hfnlist[] = {
+	{ "can_join", (hookfn) h_access_can_join, HOOK_HIGHEST },
 	{ "channel_join", (hookfn) h_access_channel_join },
 	{ "burst_channel", (hookfn) h_access_burst_channel },
 	{ "channel_lowerts", (hookfn) h_access_channel_lowerts },
@@ -246,6 +251,14 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 	unsigned int level_match = ae_level_from_name(level);
 	const rb_dlink_node *iter;
 
+	/*
+	 * If the level argument is not a known level name, treat it
+	 * as a wildcard mask filter for the LIST output.
+	 */
+	const char *mask_filter = NULL;
+	if (level != NULL && level_match == 0)
+		mask_filter = level;
+
 	if (!can_read_from_access_list(chptr, source_p, level_match))
 	{
 		sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
@@ -265,6 +278,10 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 			if (level_match && (ae->flags & level_match) != level_match)
 				continue;
 
+			/* apply wildcard mask filter if given */
+			if (mask_filter && !match(mask_filter, ae->mask))
+				continue;
+
 			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
 				chptr->chname, ae_level_name(ae->flags), ae->mask, (long) 0, ae->who, "");
 		}
@@ -277,6 +294,9 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 		{
 			const struct Ban *ban = iter->data;
 
+			if (mask_filter && !match(mask_filter, ban->banstr))
+				continue;
+
 			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
 				chptr->chname, "DENY", ban->banstr, (long) ban->when, ban->who, "");
 		}
@@ -288,6 +308,9 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 		RB_DLINK_FOREACH(iter, chptr->invexlist.head)
 		{
 			const struct Ban *ban = iter->data;
+
+			if (mask_filter && !match(mask_filter, ban->banstr))
+				continue;
 
 			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
 				chptr->chname, "GRANT", ban->banstr, (long) ban->when, ban->who, "");
@@ -471,6 +494,24 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 		return;
 	}
 
+	if (newflags == 0)
+	{
+		sendto_one(source_p, form_str(ERR_NEEDMOREPARAMS),
+			   me.name,
+			   EmptyString(source_p->name) ? "*" : source_p->name,
+			   "ACCESS ADD");
+		return;
+	}
+
+	/* validate mask format: must contain at least one non-whitespace char,
+	 * and must not be excessively long */
+	if (EmptyString(mask) || strlen(mask) > BANLEN)
+	{
+		sendto_one_numeric(source_p, ERR_INVALIDBAN, form_str(ERR_INVALIDBAN),
+			chptr->chname, 'b', mask ? mask : "*");
+		return;
+	}
+
 	if (!can_upsert_on_access_list(chptr, source_p, mask, newflags))
 	{
 		sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
@@ -528,10 +569,95 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 		ae->mask, ae_level_name(ae->flags));
 }
 
+/*
+ * can_join hook: ACCESS hierarchy overrides join restrictions.
+ *
+ * Per IRCX spec, users with sufficient ACCESS levels can override
+ * channel join restrictions in a hierarchical manner:
+ *
+ *   OWNER/ADMIN (CHFL_ADMIN) - overrides: +b, +k, +i, +l, +j, +r
+ *   HOST/OP (CHFL_CHANOP)    - overrides: +b, +k, +i, +l, +j
+ *   VOICE (CHFL_VOICE)       - overrides: +b
+ *   GRANT (invex)            - already handled by core via +I
+ *   DENY (ban)               - already handled by core via +b
+ *
+ * This hook runs at HOOK_HIGHEST priority so it executes after the
+ * core can_join checks have set the error, allowing us to clear it
+ * if the user has sufficient access.
+ */
+static void
+h_access_can_join(void *vdata)
+{
+	hook_data_channel *data = vdata;
+	struct Client *source_p = data->client;
+	struct Channel *chptr = data->chptr;
+
+	/* only override if there IS an error to override */
+	if (data->approved == 0)
+		return;
+
+	/* find the user's best ACCESS entry for this channel */
+	struct AccessEntry *ae = channel_access_best_match(chptr, source_p);
+	if (ae == NULL)
+		return;
+
+	/*
+	 * Hierarchical override based on access level:
+	 *
+	 * CHFL_ADMIN (OWNER) >= 4: overrides everything
+	 * CHFL_CHANOP (HOST) >= 2: overrides +b, +k, +i, +l, +j
+	 * CHFL_VOICE         >= 1: overrides +b only
+	 */
+	unsigned int level = ae->flags;
+
+	switch (data->approved)
+	{
+	case ERR_BANNEDFROMCHAN:
+		/* VOICE+ can override bans */
+		if (level >= CHFL_VOICE)
+			data->approved = 0;
+		break;
+
+	case ERR_BADCHANNELKEY:
+		/* HOST/OP+ can override +k */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_INVITEONLYCHAN:
+		/* HOST/OP+ can override +i */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_CHANNELISFULL:
+		/* HOST/OP+ can override +l */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_THROTTLE:
+		/* HOST/OP+ can override +j throttle */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_NEEDREGGEDNICK:
+		/* OWNER/ADMIN can override +r */
+		if (level >= CHFL_ADMIN)
+			data->approved = 0;
+		break;
+
+	default:
+		break;
+	}
+}
+
 static void
 apply_access_entries(struct Channel *chptr, struct Client *client_p)
 {
-	struct AccessEntry *ae = channel_access_match(chptr, client_p);
+	/* use best_match to get the highest-privilege matching entry */
+	struct AccessEntry *ae = channel_access_best_match(chptr, client_p);
 	if (ae == NULL)
 		return;
 
@@ -584,7 +710,13 @@ m_access(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	else if (!rb_strcasecmp(parv[2], "ADD"))
 		handle_access_upsert(chptr, source_p, parv[3], parv[4]);
 	else if (!rb_strcasecmp(parv[2], "DEL") || !rb_strcasecmp(parv[2], "DELETE"))
-		handle_access_delete(chptr, source_p, parv[4]);
+	{
+		/* Accept both: ACCESS #chan DELETE mask
+		 *         and: ACCESS #chan DELETE level mask
+		 * If parv[4] exists, use it (level was given). Otherwise use parv[3]. */
+		const char *mask = (parc > 4 && parv[4] != NULL) ? parv[4] : parv[3];
+		handle_access_delete(chptr, source_p, mask);
+	}
 	else if (!rb_strcasecmp(parv[2], "CLEAR"))
 		handle_access_clear(chptr, source_p, parv[3]);
 	else if (!rb_strcasecmp(parv[2], "SYNC"))

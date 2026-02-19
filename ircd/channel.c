@@ -128,17 +128,40 @@ send_channel_join(struct Channel *chptr, struct Client *client_p)
 	if (!IsClient(client_p))
 		return;
 
-	sendto_channel_local_with_capability(client_p, ALL_MEMBERS, NOCAPS, CLICAP_EXTENDED_JOIN, chptr, ":%s!%s@%s JOIN %s",
+	/*
+	 * Auditorium mode (+x): only ops see JOIN from non-ops.
+	 * The joining user always sees their own JOIN.
+	 */
+	int audience = ALL_MEMBERS;
+	struct membership *msptr = find_channel_membership(chptr, client_p);
+	if (chmode_flags['x'] && (chptr->mode.mode & chmode_flags['x']) &&
+	    msptr != NULL && !is_chanop_voiced(msptr))
+		audience = ONLY_CHANOPS;
+
+	sendto_channel_local_with_capability(client_p, audience, NOCAPS, CLICAP_EXTENDED_JOIN, chptr, ":%s!%s@%s JOIN %s",
 					     client_p->name, client_p->username, client_p->host, chptr->chname);
 
-	sendto_channel_local_with_capability(client_p, ALL_MEMBERS, CLICAP_EXTENDED_JOIN, NOCAPS, chptr, ":%s!%s@%s JOIN %s %s :%s",
+	sendto_channel_local_with_capability(client_p, audience, CLICAP_EXTENDED_JOIN, NOCAPS, chptr, ":%s!%s@%s JOIN %s %s :%s",
 					     client_p->name, client_p->username, client_p->host, chptr->chname,
 					     EmptyString(client_p->user->suser) ? "*" : client_p->user->suser,
 					     client_p->info);
 
+	/* The joining user must always see their own JOIN. */
+	if (audience != ALL_MEMBERS && MyClient(client_p))
+	{
+		if (IsCapable(client_p, CLICAP_EXTENDED_JOIN))
+			sendto_one(client_p, ":%s!%s@%s JOIN %s %s :%s",
+				   client_p->name, client_p->username, client_p->host, chptr->chname,
+				   EmptyString(client_p->user->suser) ? "*" : client_p->user->suser,
+				   client_p->info);
+		else
+			sendto_one(client_p, ":%s!%s@%s JOIN %s",
+				   client_p->name, client_p->username, client_p->host, chptr->chname);
+	}
+
 	/* Send away message to away-notify enabled clients. */
 	if (client_p->user->away)
-		sendto_channel_local_with_capability_butone(client_p, ALL_MEMBERS, CLICAP_AWAY_NOTIFY, NOCAPS, chptr,
+		sendto_channel_local_with_capability_butone(client_p, audience, CLICAP_AWAY_NOTIFY, NOCAPS, chptr,
 							    ":%s!%s@%s AWAY :%s", client_p->name, client_p->username,
 							    client_p->host, client_p->user->away);
 }
@@ -467,12 +490,29 @@ channel_member_names(struct Channel *chptr, struct Client *client_p, int show_eo
 
 		t = lbuf + cur_len;
 
+		/*
+		 * Auditorium mode (+x): non-ops only see ops and
+		 * themselves in the NAMES list.
+		 */
+		int auditorium = 0;
+		struct membership *my_msptr = NULL;
+		if (chmode_flags['x'] && (chptr->mode.mode & chmode_flags['x']))
+		{
+			my_msptr = find_channel_membership(chptr, client_p);
+			if (my_msptr != NULL && !is_chanop_voiced(my_msptr))
+				auditorium = 1;
+		}
+
 		RB_DLINK_FOREACH(ptr, chptr->members.head)
 		{
 			msptr = ptr->data;
 			target_p = msptr->client_p;
 
 			if(IsInvisible(target_p) && !is_member)
+				continue;
+
+			/* auditorium: non-ops only see ops and self */
+			if (auditorium && !is_chanop_voiced(msptr) && target_p != client_p)
 				continue;
 
 			if (IsCapable(client_p, CLICAP_USERHOST_IN_NAMES))
