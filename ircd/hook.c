@@ -72,6 +72,7 @@ int h_conf_read_end;
 int h_outbound_msgbuf;
 int h_rehash;
 int h_operspy;
+int h_tagmsg_channel;
 
 void
 init_hook(void)
@@ -97,6 +98,7 @@ init_hook(void)
 	h_outbound_msgbuf = register_hook("outbound_msgbuf");
 	h_rehash = register_hook("rehash");
 	h_operspy = register_hook("operspy");
+	h_tagmsg_channel = register_hook("tagmsg_channel");
 }
 
 /* grow_hooktable()

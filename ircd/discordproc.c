@@ -58,6 +58,8 @@
 #include "logger.h"
 #include "modules.h"
 #include "newconf.h"
+#include "msgbuf.h"
+#include "parse.h"
 #include "s_conf.h"
 #include "s_newconf.h"
 #include "s_serv.h"
@@ -100,6 +102,7 @@ static void discord_phantom_join_channel(struct Client *phantom,
 					 const char *chname);
 static void discord_exit_all_phantoms(void);
 static void hook_discord_privmsg(void *vdata);
+static void hook_discord_tagmsg(void *vdata);
 
 /* -------------------------------------------------------------------------
  * Percent-encoding helpers
@@ -581,32 +584,104 @@ parse_discordd_reply(rb_helper *helper)
 		}
 
 		/*
-		 * Y <channel_id> <user_id> <nick>
-		 * Discord user started typing.
+		 * Y <channel_id> <user_id> <nick_pct>
+		 * Discord user started typing — relay as draft/typing TAGMSG.
 		 */
 		case 'Y':
 		{
-			/* Nothing to do at the IRC level for now — we could
-			 * forward a draft/typing TAGMSG here in the future. */
+			struct Client *phantom;
+			const char *channel_id, *user_id, *nick;
+			const char *irc_channel;
+			struct Channel *chptr;
+
+			if(parc < 4) break;
+			channel_id = argv[1];
+			user_id    = argv[2];
+			nick       = argv[3];
+
+			irc_channel = rb_dictionary_retrieve(discord_to_irc,
+							     channel_id);
+			if(irc_channel == NULL) break;
+
+			chptr = find_channel(irc_channel);
+			if(chptr == NULL) break;
+
+			phantom = discord_find_or_create_phantom(nick, user_id);
+			if(phantom == NULL) break;
+
+			discord_phantom_join_channel(phantom, irc_channel);
+
+			/*
+			 * Deliver "@+draft/typing=active :nick!user@host TAGMSG #chan"
+			 * to every local member that negotiated message-tags.
+			 */
+			sendto_channel_local_with_capability(NULL, ALL_MEMBERS,
+				CLICAP_MESSAGE_TAGS, 0, chptr,
+				"@+draft/typing=active :%s!%s@%s TAGMSG %s",
+				phantom->name, phantom->username,
+				phantom->host, chptr->chname);
 			break;
 		}
 
 		/*
 		 * D <channel_id> <msgid>
-		 * Discord message deleted.
+		 * Discord message deleted — emit a NOTICE to the IRC channel.
 		 */
 		case 'D':
-			/* No standard IRC mechanism for message deletion;
-			 * could emit a NOTICE in the future. */
+		{
+			const char *irc_channel;
+			struct Channel *chptr;
+
+			if(parc < 3) break;
+			irc_channel = rb_dictionary_retrieve(discord_to_irc,
+							     argv[1]);
+			if(irc_channel == NULL) break;
+
+			chptr = find_channel(irc_channel);
+			if(chptr == NULL) break;
+
+			sendto_channel_local(NULL, ALL_MEMBERS, chptr,
+				":%s NOTICE %s :[Discord] (a message was deleted)",
+				me.name, chptr->chname);
 			break;
+		}
 
 		/*
-		 * E <channel_id> <msgid> :<new_text_pct>
-		 * Discord message edited.
+		 * E <channel_id> <msgid> <user_id> <nick_pct> :<new_text_pct>
+		 * Discord message edited — emit a NOTICE showing the new text.
 		 */
 		case 'E':
 		{
-			/* Could emit a NOTICE "* nick edited: …" in the future. */
+			struct Client *phantom;
+			const char *channel_id, *user_id, *nick, *new_text;
+			const char *irc_channel;
+			struct Channel *chptr;
+			char decoded[BUFSIZE];
+
+			if(parc < 6) break;
+			channel_id = argv[1];
+			/* argv[2] is the msgid */
+			user_id    = argv[3];
+			nick       = argv[4];
+			new_text   = argv[5];
+
+			irc_channel = rb_dictionary_retrieve(discord_to_irc,
+							     channel_id);
+			if(irc_channel == NULL) break;
+
+			chptr = find_channel(irc_channel);
+			if(chptr == NULL) break;
+
+			phantom = discord_find_or_create_phantom(nick, user_id);
+			if(phantom == NULL) break;
+
+			rb_strlcpy(decoded, new_text, sizeof(decoded));
+			pct_decode(decoded);
+
+			sendto_channel_local(NULL, ALL_MEMBERS, chptr,
+				":%s!%s@%s NOTICE %s :[edit] %s",
+				phantom->name, phantom->username,
+				phantom->host, chptr->chname, decoded);
 			break;
 		}
 
@@ -682,6 +757,59 @@ hook_discord_privmsg(void *vdata)
 }
 
 /* -------------------------------------------------------------------------
+ * h_tagmsg_channel hook — forward IRC typing indicators to Discord
+ * ---------------------------------------------------------------------- */
+
+/*
+ * hook_discord_tagmsg - called when any local client sends TAGMSG to a
+ * channel.  If the tag includes "+draft/typing" and the channel is bridged,
+ * forward a typing indicator to Discord.
+ *
+ * g_client_msgbuf is still set to the incoming message when this fires,
+ * so we can inspect its tags directly.
+ */
+static void
+hook_discord_tagmsg(void *vdata)
+{
+	hook_data_channel_activity *data = vdata;
+	struct Client *source_p = data->client;
+	struct Channel *chptr = data->chptr;
+	const char *discord_channel_id;
+	size_t i;
+
+	/* Don't relay phantom-originated tags back to Discord. */
+	if(source_p->flags & FLAGS_SERVICE)
+		return;
+
+	if(irc_to_discord == NULL)
+		return;
+
+	discord_channel_id = rb_dictionary_retrieve(irc_to_discord,
+						    chptr->chname);
+	if(discord_channel_id == NULL)
+		return;
+
+	if(g_client_msgbuf == NULL)
+		return;
+
+	for(i = 0; i < g_client_msgbuf->n_tags; i++)
+	{
+		const char *key = g_client_msgbuf->tags[i].key;
+		const char *val = g_client_msgbuf->tags[i].value;
+
+		if(key == NULL || strcmp(key, "+draft/typing") != 0)
+			continue;
+
+		/* "done" means the user stopped typing — nothing to relay. */
+		if(val != NULL && strcmp(val, "done") == 0)
+			break;
+
+		discord_send_typing(discord_channel_id);
+		break;
+	}
+}
+
+/* -------------------------------------------------------------------------
  * Public interface
  * ---------------------------------------------------------------------- */
 
@@ -742,8 +870,9 @@ init_discordproc(void)
 
 	memset(&discord_config, 0, sizeof(discord_config));
 
-	/* Register the h_privmsg_channel hook. */
+	/* Register channel message hooks. */
 	add_hook("privmsg_channel", hook_discord_privmsg);
+	add_hook("tagmsg_channel",  hook_discord_tagmsg);
 
 	ilog(L_MAIN, "Discord bridge subsystem initialised");
 }

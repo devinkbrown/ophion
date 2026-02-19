@@ -542,11 +542,25 @@ handle_gw_frame(const char *json)
 		else if(strcmp(ev,"MESSAGE_UPDATE")==0)
 		{
 			char cid[32],mid[32],content[2048],enc[4096];
+			char uid[32],uname[256],nick[64];
+			const char *author;
 			json_str(d,"channel_id",cid,sizeof(cid));
 			json_str(d,"id",mid,sizeof(mid));
 			if(json_str(d,"content",content,sizeof(content)) && content[0]) {
+				uid[0] = '\0'; nick[0] = '\0';
+				author = json_obj(d,"author");
+				if(author) {
+					json_str(author,"id",uid,sizeof(uid));
+					uname[0] = '\0';
+					json_str(author,"global_name",uname,sizeof(uname));
+					if(!uname[0])
+						json_str(author,"username",uname,sizeof(uname));
+					sanitise_nick(uname, nick, sizeof(nick));
+				}
+				if(!uid[0]) { snprintf(uid,sizeof(uid),"0"); }
+				if(!nick[0]) { snprintf(nick,sizeof(nick),"DiscordUser"); }
 				pct_encode(content,enc,sizeof(enc));
-				ircd_write("E %s %s :%s", cid, mid, enc);
+				ircd_write("E %s %s %s %s :%s", cid, mid, uid, nick, enc);
 			}
 		}
 		else if(strcmp(ev,"MESSAGE_DELETE")==0)
@@ -966,6 +980,7 @@ run(void)
  * main
  * ---------------------------------------------------------------------- */
 
+#ifndef DISCORD_NO_MAIN
 int
 main(int argc, char *argv[])
 {
@@ -1019,3 +1034,4 @@ main(int argc, char *argv[])
 	run();
 	return 0;
 }
+#endif /* DISCORD_NO_MAIN */
