@@ -536,6 +536,31 @@ handle_gw_frame(const char *json)
 			if(strcmp(isbot,"true")==0) break;
 
 			sanitise_nick(uname,nick,sizeof(nick));
+
+			/*
+			 * Bot commands start with '!'.  We handle "!identify"
+			 * here and suppress it from appearing as a PRIVMSG on
+			 * IRC.  Any other '!'-prefixed content is dropped
+			 * silently so bots don't spam the IRC channel.
+			 *
+			 * "!identify [account] password" — relayed as:
+			 *   I <cid> <uid> <nick_pct> :<args_pct>
+			 * discordproc then forwards PRIVMSG NickServ IDENTIFY.
+			 * Services are optional: if NickServ is absent discordproc
+			 * simply logs and continues.
+			 */
+			if(content[0] == '!') {
+				if(strncmp(content, "!identify ", 10) == 0) {
+					char nenc[256], aenc[512];
+					pct_encode(nick, nenc, sizeof(nenc));
+					pct_encode(content + 10, aenc, sizeof(aenc));
+					ircd_write("I %s %s %s :%s",
+						   cid, uid, nenc, aenc);
+				}
+				/* All other !commands are silently dropped. */
+				break;
+			}
+
 			pct_encode(content,enc,sizeof(enc));
 			ircd_write("P %s %s %s %s :%s", cid, uid, nick, mid, enc);
 		}

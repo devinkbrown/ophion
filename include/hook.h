@@ -47,6 +47,7 @@ extern int h_outbound_msgbuf;
 extern int h_rehash;
 extern int h_operspy;
 extern int h_tagmsg_channel;
+extern int h_account_login;
 
 void init_hook(void);
 int register_hook(const char *name);
