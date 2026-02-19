@@ -90,6 +90,7 @@ struct membership
 	rb_dlink_node channode;
 	rb_dlink_node locchannode;
 	rb_dlink_node usernode;
+	rb_dlink_node hashnode;
 
 	struct Channel *chptr;
 	struct Client *client_p;
