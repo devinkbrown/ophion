@@ -40,7 +40,8 @@ static const char ircx_event_desc[] = "Provides IRCX EVENT command for oper even
 #define EVENT_MEMBER	0x02
 #define EVENT_USER	0x04
 #define EVENT_SERVER	0x08
-#define EVENT_ALL	(EVENT_CHANNEL | EVENT_MEMBER | EVENT_USER | EVENT_SERVER)
+#define EVENT_OPERSPY	0x10
+#define EVENT_ALL	(EVENT_CHANNEL | EVENT_MEMBER | EVENT_USER | EVENT_SERVER | EVENT_OPERSPY)
 
 struct event_type_name {
 	const char *name;
@@ -50,6 +51,7 @@ struct event_type_name {
 static const struct event_type_name event_types[] = {
 	{ "CHANNEL", EVENT_CHANNEL },
 	{ "MEMBER",  EVENT_MEMBER },
+	{ "OPERSPY", EVENT_OPERSPY },
 	{ "USER",    EVENT_USER },
 	{ "SERVER",  EVENT_SERVER },
 	{ NULL, 0 }
@@ -244,6 +246,64 @@ h_event_server_eob(void *vdata)
 		source_p->name);
 }
 
+/* CHANNEL event: channel creation (first member joined as chanop) */
+static void
+h_event_channel_create(void *vdata)
+{
+	hook_data_channel_activity *data = vdata;
+	struct Channel *chptr = data->chptr;
+	struct Client *client_p = data->client;
+
+	/* only fire for newly created channels (single member who is chanop) */
+	if (rb_dlink_list_length(&chptr->members) == 1 &&
+	    is_chanop(find_channel_membership(chptr, client_p)))
+	{
+		dispatch_event(EVENT_CHANNEL, "CREATE %s by %s!%s@%s",
+			chptr->chname, client_p->name,
+			client_p->username, client_p->host);
+	}
+}
+
+/* USER event: nick changes (local) */
+static void
+h_event_nick_change(void *vdata)
+{
+	hook_data *data = vdata;
+	struct Client *source_p = data->client;
+	const char *oldnick = data->arg1;
+	const char *newnick = data->arg2;
+
+	dispatch_event(EVENT_USER, "NICK %s -> %s [%s@%s]",
+		oldnick, newnick, source_p->username, source_p->host);
+}
+
+/* USER event: remote nick changes */
+static void
+h_event_remote_nick_change(void *vdata)
+{
+	hook_data *data = vdata;
+	struct Client *source_p = data->client;
+	const char *oldnick = data->arg1;
+	const char *newnick = data->arg2;
+
+	dispatch_event(EVENT_USER, "NICK %s -> %s [%s@%s] (remote via %s)",
+		oldnick, newnick, source_p->username, source_p->host,
+		source_p->servptr ? source_p->servptr->name : "?");
+}
+
+/* MEMBER event: kick */
+static void
+h_event_channel_kick(void *vdata)
+{
+	hook_data_channel_activity *data = vdata;
+	struct Channel *chptr = data->chptr;
+	struct Client *source_p = data->client;
+
+	dispatch_event(EVENT_MEMBER, "KICK %s %s!%s@%s",
+		chptr->chname, source_p->name,
+		source_p->username, source_p->host);
+}
+
 /* cleanup on client exit */
 static void
 h_event_cleanup(void *vdata)
@@ -254,12 +314,16 @@ h_event_cleanup(void *vdata)
 
 mapi_hfn_list_av1 ircx_event_hfnlist[] = {
 	{ "channel_join", (hookfn) h_event_channel_join },
+	{ "channel_join", (hookfn) h_event_channel_create },
 	{ "burst_channel", (hookfn) h_event_burst_channel },
 	{ "new_local_user", (hookfn) h_event_new_local_user },
 	{ "new_remote_user", (hookfn) h_event_new_remote_user },
 	{ "client_exit", (hookfn) h_event_client_exit },
 	{ "after_client_exit", (hookfn) h_event_cleanup },
 	{ "umode_changed", (hookfn) h_event_umode_changed },
+	{ "nick_change", (hookfn) h_event_nick_change },
+	{ "remote_nick_change", (hookfn) h_event_remote_nick_change },
+	{ "can_kick", (hookfn) h_event_channel_kick },
 	{ "server_introduced", (hookfn) h_event_server_introduced },
 	{ "server_eob", (hookfn) h_event_server_eob },
 	{ NULL, NULL }

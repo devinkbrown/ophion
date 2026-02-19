@@ -29,7 +29,9 @@
 
 #include "stdinc.h"
 #include "capability.h"
+#include "channel.h"
 #include "client.h"
+#include "hook.h"
 #include "msg.h"
 #include "parse.h"
 #include "modules.h"
@@ -74,11 +76,13 @@ struct Message btaccess_msgtab = {
 
 mapi_clist_av1 ircx_access_clist[] = { &access_msgtab, &taccess_msgtab, &btaccess_msgtab, NULL };
 
+static void h_access_can_join(void *);
 static void h_access_channel_join(void *);
 static void h_access_burst_channel(void *);
 static void h_access_channel_lowerts(void *);
 
 mapi_hfn_list_av1 ircx_access_hfnlist[] = {
+	{ "can_join", (hookfn) h_access_can_join, HOOK_HIGHEST },
 	{ "channel_join", (hookfn) h_access_channel_join },
 	{ "burst_channel", (hookfn) h_access_burst_channel },
 	{ "channel_lowerts", (hookfn) h_access_channel_lowerts },
@@ -563,6 +567,90 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 		":%s TACCESS %s %ld %ld %s %s",
 		use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
 		ae->mask, ae_level_name(ae->flags));
+}
+
+/*
+ * can_join hook: ACCESS hierarchy overrides join restrictions.
+ *
+ * Per IRCX spec, users with sufficient ACCESS levels can override
+ * channel join restrictions in a hierarchical manner:
+ *
+ *   OWNER/ADMIN (CHFL_ADMIN) - overrides: +b, +k, +i, +l, +j, +r
+ *   HOST/OP (CHFL_CHANOP)    - overrides: +b, +k, +i, +l, +j
+ *   VOICE (CHFL_VOICE)       - overrides: +b
+ *   GRANT (invex)            - already handled by core via +I
+ *   DENY (ban)               - already handled by core via +b
+ *
+ * This hook runs at HOOK_HIGHEST priority so it executes after the
+ * core can_join checks have set the error, allowing us to clear it
+ * if the user has sufficient access.
+ */
+static void
+h_access_can_join(void *vdata)
+{
+	hook_data_channel *data = vdata;
+	struct Client *source_p = data->client;
+	struct Channel *chptr = data->chptr;
+
+	/* only override if there IS an error to override */
+	if (data->approved == 0)
+		return;
+
+	/* find the user's best ACCESS entry for this channel */
+	struct AccessEntry *ae = channel_access_best_match(chptr, source_p);
+	if (ae == NULL)
+		return;
+
+	/*
+	 * Hierarchical override based on access level:
+	 *
+	 * CHFL_ADMIN (OWNER) >= 4: overrides everything
+	 * CHFL_CHANOP (HOST) >= 2: overrides +b, +k, +i, +l, +j
+	 * CHFL_VOICE         >= 1: overrides +b only
+	 */
+	unsigned int level = ae->flags;
+
+	switch (data->approved)
+	{
+	case ERR_BANNEDFROMCHAN:
+		/* VOICE+ can override bans */
+		if (level >= CHFL_VOICE)
+			data->approved = 0;
+		break;
+
+	case ERR_BADCHANNELKEY:
+		/* HOST/OP+ can override +k */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_INVITEONLYCHAN:
+		/* HOST/OP+ can override +i */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_CHANNELISFULL:
+		/* HOST/OP+ can override +l */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_THROTTLE:
+		/* HOST/OP+ can override +j throttle */
+		if (level >= CHFL_CHANOP)
+			data->approved = 0;
+		break;
+
+	case ERR_NEEDREGGEDNICK:
+		/* OWNER/ADMIN can override +r */
+		if (level >= CHFL_ADMIN)
+			data->approved = 0;
+		break;
+
+	default:
+		break;
+	}
 }
 
 static void

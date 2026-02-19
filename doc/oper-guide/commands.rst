@@ -820,19 +820,31 @@ to subscribe to real-time event notifications about server activity.
 
 Provided by the ``m_ircx_event`` module. Requires oper privileges.
 
+The EVENT system subsumes many legacy server notice (snomask) functions
+into a unified framework. Channel creation events replace ``sno_channelcreate``,
+nick change events replace ``sno_globalnickchange``, and OPERSPY events
+provide accountability tracking.
+
 **Event types:**
 
 ``CHANNEL``
-    Channel creation, destruction, topic changes, and mode changes.
+    Channel creation (replaces ``sno_channelcreate`` +l snomask),
+    destruction, topic changes, and mode changes.
 
 ``MEMBER``
     Channel join, part, kick, and membership mode changes.
 
 ``USER``
-    User connections, disconnections, nick changes, and mode changes.
+    User connections, disconnections, nick changes (replaces
+    ``sno_globalnickchange``), and mode changes.
 
 ``SERVER``
     Server connections, disconnections, and end-of-burst notifications.
+
+``OPERSPY``
+    Operspy usage notifications. Tracks when operators use operspy
+    functions (``!`` prefix on WHO/WHOIS/MODE etc). Complements the
+    ``+Z`` snomask.
 
 **Subcommands:**
 

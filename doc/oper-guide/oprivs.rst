@@ -117,6 +117,21 @@ oper:xline, xline and unxline
 
 Allows using ``XLINE`` and ``UNXLINE``, to ban/unban users by realname.
 
+oper:autoowner, automatic channel owner
+---------------------------------------
+
+When an oper with this privilege joins any channel, they are automatically
+granted channel owner (``+q``) status. This is useful for server administrators
+who need full control over channels.
+
+Configure in ``privset{}`` blocks::
+
+    privset "admin" {
+        privs = oper:admin, oper:autoowner;
+    };
+
+Provided by the ``m_ircx_oper_autoowner`` module.
+
 snomask:nick\_changes, see nick changes
 ---------------------------------------
 

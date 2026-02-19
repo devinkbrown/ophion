@@ -52,6 +52,7 @@ modules = [
   'm_ircx_prop_opkey',
   'm_ircx_prop_user_profile',
   'm_ircx_oper',
+  'm_ircx_oper_autoowner',
   'm_ircx_whisper',
   'm_ison',
   'm_kline',
