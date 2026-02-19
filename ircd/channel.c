@@ -758,10 +758,8 @@ can_join(struct Client *source_p, struct Channel *chptr, const char *key, const 
 	if(chptr->mode.limit &&
 	   rb_dlink_list_length(&chptr->members) >= (unsigned long) chptr->mode.limit)
 		i = ERR_CHANNELISFULL;
-	if(chptr->mode.mode & MODE_REGONLY && EmptyString(source_p->user->suser))
-		i = ERR_NEEDREGGEDNICK;
 	/* join throttling stuff --nenolod */
-	else if(chptr->mode.join_num > 0 && chptr->mode.join_time > 0)
+	if(chptr->mode.join_num > 0 && chptr->mode.join_time > 0)
 	{
 		if ((rb_current_time() - chptr->join_delta <=
 			chptr->mode.join_time) && (chptr->join_count >=

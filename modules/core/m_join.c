@@ -83,6 +83,69 @@ static void remove_our_modes(struct Channel *chptr, struct Client *source_p);
 static void remove_ban_list(struct Channel *chptr, struct Client *source_p,
 			    rb_dlink_list * list, char c, int mems);
 
+/*
+ * check_cloneable - IRCX CLONEABLE (+d) channel redirect
+ *
+ * When a +d channel is full, find or create the next numbered clone.
+ * Clone channels are named <original>1, <original>2, etc. and get +E set.
+ * Returns the clone channel if found/created, NULL if no clone is available.
+ */
+static struct Channel *
+check_cloneable(struct Client *source_p, struct Channel *chptr, char *key)
+{
+	char clone_name[CHANNELLEN + 8];
+	int clone_num;
+	int i;
+	const char *next = NULL;
+
+	/* only handle +d channels */
+	if (!chmode_flags['d'] || !(chptr->mode.mode & chmode_flags['d']))
+		return NULL;
+
+	/* try clones 1-99 */
+	for (clone_num = 1; clone_num <= 99; clone_num++)
+	{
+		struct Channel *clone;
+		bool isnew = false;
+
+		snprintf(clone_name, sizeof clone_name, "%s%d",
+			chptr->chname, clone_num);
+
+		clone = find_channel(clone_name);
+		if (clone != NULL)
+		{
+			/* already on this clone */
+			if (IsMember(source_p, clone))
+				continue;
+
+			/* check if we can join this clone */
+			i = can_join(source_p, clone, key, &next);
+			if (i == 0)
+				return clone;
+
+			/* clone full or otherwise blocked, try next */
+			continue;
+		}
+
+		/* clone doesn't exist, create it */
+		clone = get_or_create_channel(source_p, clone_name, &isnew);
+		if (clone == NULL)
+			return NULL;
+
+		/* set +E (CLONE) on the new clone */
+		if (isnew && chmode_flags['E'])
+			clone->mode.mode |= chmode_flags['E'];
+
+		/* copy the parent's user limit to the clone */
+		if (isnew && chptr->mode.limit > 0)
+			clone->mode.limit = chptr->mode.limit;
+
+		return clone;
+	}
+
+	return NULL;
+}
+
 /* Check what we will forward to, without sending any notices to the user
  * -- jilles
  */
@@ -98,6 +161,17 @@ check_forward(struct Client *source_p, struct Channel *chptr,
 	 */
 	if ((*err = can_join(source_p, chptr, key, &next)) == 0)
 		return chptr;
+
+	/* IRCX CLONEABLE (+d): when a +d channel is full, redirect to
+	 * a numbered clone channel (e.g., #chat -> #chat1, #chat2, etc.)
+	 * per draft-pfenning-irc-extensions-04 section 8.1.16.
+	 */
+	if (*err == ERR_CHANNELISFULL)
+	{
+		struct Channel *clone = check_cloneable(source_p, chptr, key);
+		if (clone != NULL)
+			return clone;
+	}
 
 	/* User is +Q, or forwarding disabled */
 	if (IsNoForward(source_p) || !ConfigChannel.use_forward)
@@ -315,7 +389,15 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 			continue;
 		}
 		else if(chptr != chptr2)
+		{
 			sendto_one_numeric(source_p, ERR_LINKCHANNEL, form_str(ERR_LINKCHANNEL), name, chptr2->chname);
+
+			/* If redirected to a brand-new channel (e.g., CLONEABLE clone),
+			 * make the user the founder so SJOIN is sent to remote servers.
+			 */
+			if(rb_dlink_list_length(&chptr2->members) == 0)
+				flags = CHFL_ADMIN;
+		}
 
 		chptr = chptr2;
 

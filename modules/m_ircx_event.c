@@ -31,6 +31,7 @@
 #include "s_conf.h"
 #include "s_newconf.h"
 #include "s_serv.h"
+#include "s_user.h"
 #include "send.h"
 
 static const char ircx_event_desc[] = "Provides IRCX EVENT command for oper event monitoring";
@@ -158,9 +159,29 @@ dispatch_event(unsigned int event_flag, const char *fmt, ...)
 	}
 }
 
+/*
+ * format_umodes - convert a umode bitmask to a mode string like "+iow"
+ */
+static const char *
+format_umodes(unsigned int umodes)
+{
+	static char buf[64];
+	char *p = buf;
+	int i;
+
+	*p++ = '+';
+	for (i = 0; i < 256; i++)
+	{
+		if (user_modes[i] && (umodes & user_modes[i]))
+			*p++ = (char)i;
+	}
+	*p = '\0';
+	return buf;
+}
+
 /* --- Hook handlers --- */
 
-/* CHANNEL events: channel creation via join */
+/* MEMBER events: join */
 static void
 h_event_channel_join(void *vdata)
 {
@@ -169,6 +190,19 @@ h_event_channel_join(void *vdata)
 	struct Client *client_p = data->client;
 
 	dispatch_event(EVENT_MEMBER, "JOIN %s %s!%s@%s",
+		chptr->chname, client_p->name,
+		client_p->username, client_p->host);
+}
+
+/* MEMBER events: part */
+static void
+h_event_channel_part(void *vdata)
+{
+	hook_data_channel_activity *data = vdata;
+	struct Channel *chptr = data->chptr;
+	struct Client *client_p = data->client;
+
+	dispatch_event(EVENT_MEMBER, "PART %s %s!%s@%s",
 		chptr->chname, client_p->name,
 		client_p->username, client_p->host);
 }
@@ -224,8 +258,13 @@ h_event_umode_changed(void *vdata)
 	hook_data_umode_changed *data = vdata;
 	struct Client *source_p = data->client;
 
-	dispatch_event(EVENT_USER, "MODE %s +%u (was +%u)",
-		source_p->name, source_p->umodes, data->oldumodes);
+	{
+		const char *newmodes = format_umodes(source_p->umodes);
+		char oldstr[64];
+		rb_strlcpy(oldstr, format_umodes(data->oldumodes), sizeof(oldstr));
+		dispatch_event(EVENT_USER, "MODE %s %s (was %s)",
+			source_p->name, newmodes, oldstr);
+	}
 }
 
 static void
@@ -329,6 +368,7 @@ h_event_cleanup(void *vdata)
 
 mapi_hfn_list_av1 ircx_event_hfnlist[] = {
 	{ "channel_join", (hookfn) h_event_channel_join },
+	{ "channel_part", (hookfn) h_event_channel_part },
 	{ "channel_join", (hookfn) h_event_channel_create },
 	{ "burst_channel", (hookfn) h_event_burst_channel },
 	{ "new_local_user", (hookfn) h_event_new_local_user },

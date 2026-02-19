@@ -57,12 +57,14 @@ static void hook_gag_privmsg_channel(void *vdata);
 static void hook_gag_privmsg_user(void *vdata);
 static void hook_gag_umode_changed(void *vdata);
 static void hook_gag_new_local_user(void *vdata);
+static void hook_gag_burst_finished(void *vdata);
 
 mapi_hfn_list_av1 ircx_oper_hfnlist[] = {
 	{ "privmsg_channel", (hookfn) hook_gag_privmsg_channel, HOOK_HIGHEST },
 	{ "privmsg_user", (hookfn) hook_gag_privmsg_user, HOOK_HIGHEST },
 	{ "umode_changed", (hookfn) hook_gag_umode_changed },
 	{ "new_local_user", (hookfn) hook_gag_new_local_user },
+	{ "burst_finished", (hookfn) hook_gag_burst_finished },
 	{ NULL, NULL }
 };
 
@@ -375,10 +377,13 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
 		add_gag_entry(mask, get_oper_name(source_p), 0);
 
-		/* propagate to other servers */
+		/* propagate to other servers: user mode + persistent entry */
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG %s ON",
 			use_id(source_p), use_id(target_p));
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * GAG_ADD %s %s 0",
+			use_id(source_p), mask, get_oper_name(source_p));
 
 		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s has gagged %s (%s)", get_oper_name(source_p), target_p->name, mask);
@@ -400,6 +405,9 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG %s OFF",
 			use_id(source_p), use_id(target_p));
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * GAG_DEL %s",
+			use_id(source_p), mask);
 
 		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
 			"%s has ungagged %s", get_oper_name(source_p), target_p->name);
@@ -474,12 +482,81 @@ me_gag_clear(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *so
 }
 
 /*
+ * GAG_ADD ENCAP: sync a persistent gag entry to remote servers.
+ * :source ENCAP * GAG_ADD <mask> <setter> <hold>
+ */
+static void
+me_gag_add(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	const char *mask, *setter;
+	time_t hold = 0;
+
+	if (parc < 3)
+		return;
+
+	mask = parv[1];
+	setter = parv[2];
+	if (parc >= 4)
+		hold = atol(parv[3]);
+
+	/* avoid duplicates */
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+		if (!irccmp(ge->mask, mask))
+			return;
+	}
+
+	add_gag_entry(mask, setter, hold);
+}
+
+/*
+ * GAG_DEL ENCAP: remove a persistent gag entry from remote servers.
+ * :source ENCAP * GAG_DEL <mask>
+ */
+static void
+me_gag_del(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	if (parc < 2)
+		return;
+
+	remove_gag_entry(parv[1]);
+}
+
+/*
+ * burst_finished hook: send all persistent gag entries to newly linked server.
+ */
+static void
+hook_gag_burst_finished(void *vdata)
+{
+	hook_data_client *hclientinfo = vdata;
+	struct Client *server_p = hclientinfo->client;
+	rb_dlink_node *ptr;
+
+	RB_DLINK_FOREACH(ptr, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+
+		/* skip expired entries */
+		if (ge->hold && ge->hold <= rb_current_time())
+			continue;
+
+		sendto_one(server_p, ":%s ENCAP %s GAG_ADD %s %s %ld",
+			use_id(&me), server_p->name,
+			ge->mask, ge->setter, (long)ge->hold);
+	}
+}
+
+/*
  * OPFORCE - unified oper channel tools
  *
  * OPFORCE JOIN <channel>          - force-join channel
  * OPFORCE OP <channel>            - force-op self on channel
  * OPFORCE KICK <channel> <nick> [reason]  - force-kick user
  * OPFORCE MODE <channel> <modes>  - force set modes
+ * OPFORCE CLOSE <channel> [reason] - mass-kick and destroy channel
+ *   If oper has +K (anonkill), kicks show as from "SYSTEM"
  */
 static void
 m_opforce(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
@@ -652,7 +729,76 @@ m_opforce(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 		return;
 	}
 
-	sendto_one_notice(source_p, ":Usage: OPFORCE {JOIN|OP|KICK|MODE} <channel> [args]");
+	if (!rb_strcasecmp(parv[1], "CLOSE"))
+	{
+		/* OPFORCE CLOSE <channel> [reason]
+		 * Mass-kick all users from a channel and destroy it.
+		 * Respects +K (anonymous kill mode): if the oper has +K set,
+		 * the kick source shows as "SYSTEM" instead of the oper's name.
+		 */
+		if (parc < 3)
+		{
+			sendto_one(source_p, form_str(ERR_NEEDMOREPARAMS),
+				me.name, source_p->name, "OPFORCE CLOSE");
+			return;
+		}
+
+		chptr = find_channel(parv[2]);
+		if (chptr == NULL)
+		{
+			sendto_one_numeric(source_p, ERR_NOSUCHCHANNEL,
+				form_str(ERR_NOSUCHCHANNEL), parv[2]);
+			return;
+		}
+
+		const char *reason = (parc >= 4 && !EmptyString(parv[3])) ?
+			parv[3] : "Channel closed by server administrator";
+
+		/* determine kick source: anonymous if oper has +K */
+		const char *kickfrom;
+		const char *kickfrom_id;
+		bool anonymous = false;
+
+		if (user_modes['K'] && (source_p->umodes & user_modes['K']))
+		{
+			kickfrom = me.name;
+			kickfrom_id = me.id;
+			anonymous = true;
+		}
+		else
+		{
+			kickfrom = me.name;
+			kickfrom_id = me.id;
+		}
+
+		/* kick all members */
+		rb_dlink_node *ptr, *next_ptr;
+		RB_DLINK_FOREACH_SAFE(ptr, next_ptr, chptr->members.head)
+		{
+			struct membership *msptr = ptr->data;
+			struct Client *target_p = msptr->client_p;
+
+			sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+				":%s KICK %s %s :Kicked by %s: %s",
+				kickfrom, chptr->chname, target_p->name,
+				anonymous ? "SYSTEM" : source_p->name, reason);
+			sendto_server(NULL, chptr, CAP_TS6, NOCAPS,
+				":%s KICK %s %s :Kicked by %s: %s",
+				kickfrom_id, chptr->chname, use_id(target_p),
+				anonymous ? "SYSTEM" : source_p->name, reason);
+			remove_user_from_channel(msptr);
+		}
+
+		sendto_wallops_flags(UMODE_WALLOP, &me,
+			"OPFORCE: %s closed channel %s (%s)%s",
+			get_oper_name(source_p), parv[2], reason,
+			anonymous ? " [anonymous]" : "");
+
+		sendto_one_notice(source_p, ":Channel %s has been closed", parv[2]);
+		return;
+	}
+
+	sendto_one_notice(source_p, ":Usage: OPFORCE {JOIN|OP|KICK|MODE|CLOSE} <channel> [args]");
 }
 
 struct Message gag_msgtab = {
@@ -665,12 +811,22 @@ struct Message gag_clear_msgtab = {
 	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_gag_clear, 1}, mg_ignore}
 };
 
+struct Message gag_add_msgtab = {
+	"GAG_ADD", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_gag_add, 3}, mg_ignore}
+};
+
+struct Message gag_del_msgtab = {
+	"GAG_DEL", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_gag_del, 2}, mg_ignore}
+};
+
 struct Message opforce_msgtab = {
 	"OPFORCE", 0, 0, 0, 0,
 	{mg_unreg, {m_opforce, 3}, mg_ignore, mg_ignore, mg_ignore, {m_opforce, 3}}
 };
 
-mapi_clist_av1 ircx_oper_clist[] = { &gag_msgtab, &gag_clear_msgtab, &opforce_msgtab, NULL };
+mapi_clist_av1 ircx_oper_clist[] = { &gag_msgtab, &gag_clear_msgtab, &gag_add_msgtab, &gag_del_msgtab, &opforce_msgtab, NULL };
 
 static int
 ircx_oper_init(void)

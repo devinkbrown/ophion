@@ -21,6 +21,9 @@
  *   words       - Word-based cloaking (brave-tiger-42.network)
  *   geo         - Cloud/CDN-style fake geographic cloaking
  *   account     - Uses SASL account name when available
+ *   truncated   - Short compact hash (3f7a2b.cloak.network)
+ *   stellar     - Constellation-themed (lyra-vega-42.network)
+ *   none/off    - Disable cloaking entirely (+x does nothing)
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -73,6 +76,9 @@ enum cloak_style {
 	CLOAK_WORDS,
 	CLOAK_GEO,
 	CLOAK_ACCOUNT,
+	CLOAK_TRUNCATED,
+	CLOAK_STELLAR,
+	CLOAK_NONE,
 };
 
 static enum cloak_style active_style = CLOAK_CHARYBDIS;
@@ -142,6 +148,12 @@ update_style_from_config(void)
 		active_style = CLOAK_GEO;
 	else if (!rb_strcasecmp(style, "account"))
 		active_style = CLOAK_ACCOUNT;
+	else if (!rb_strcasecmp(style, "truncated") || !rb_strcasecmp(style, "short"))
+		active_style = CLOAK_TRUNCATED;
+	else if (!rb_strcasecmp(style, "stellar") || !rb_strcasecmp(style, "constellation"))
+		active_style = CLOAK_STELLAR;
+	else if (!rb_strcasecmp(style, "none") || !rb_strcasecmp(style, "off") || !rb_strcasecmp(style, "disabled"))
+		active_style = CLOAK_NONE;
 	else
 		active_style = CLOAK_CHARYBDIS;
 }
@@ -626,6 +638,73 @@ account_cloak(const char *inbuf, char *outbuf, struct Client *client_p)
 }
 
 /* ============================================================
+ * STYLE: TRUNCATED - Short compact hash cloaking
+ *
+ * Produces: 3f7a2b.cloak.network
+ * A single short hex hash for minimal visual footprint.
+ * ============================================================ */
+
+static void
+truncated_cloak(const char *inbuf, char *outbuf, int is_ip)
+{
+	uint32_t h = fnv1a_hash(inbuf) ^ djb2_hash(inbuf);
+
+	const char *suffix = ServerInfo.network_name;
+	if (suffix == NULL || !*suffix)
+		suffix = "network";
+
+	snprintf(outbuf, HOSTLEN, "%06x.cloak.%s", h & 0xffffff, suffix);
+}
+
+/* ============================================================
+ * STYLE: STELLAR - Constellation-themed cloaking
+ *
+ * Produces: lyra-vega-42.network
+ * Maps hash values to constellation-star pairs with a
+ * numeric suffix.
+ * ============================================================ */
+
+static const char *stellar_constellations[] = {
+	"lyra",   "orion",  "draco",  "cygnus", "aquila",
+	"hydra",  "virgo",  "leo",    "cetus",  "lupus",
+	"pavo",   "ara",    "vela",   "pyxis",  "crux",
+	"corvus", "norma",  "musca",  "canis",  "lepus",
+	"columba","pictor", "fornax", "dorado", "phoenix",
+	"tucana", "grus",   "indus",  "volans", "mensa",
+	"apus",   "scutum",
+};
+
+static const char *stellar_stars[] = {
+	"vega",   "rigel",  "spica",  "deneb",  "altair",
+	"sirius", "polaris","castor", "mira",   "atlas",
+	"capella","achernar","procyon","canopus","antares",
+	"regulus","bellatrix","mimosa","acrux",  "naos",
+	"suhail", "avior",  "menkib", "hadar",  "shaula",
+	"sargas", "dschubba","nunki", "kaus",   "alnilam",
+	"alnitak","mintaka",
+};
+
+#define NUM_CONSTELLATIONS (sizeof(stellar_constellations) / sizeof(stellar_constellations[0]))
+#define NUM_STARS (sizeof(stellar_stars) / sizeof(stellar_stars[0]))
+
+static void
+stellar_cloak(const char *inbuf, char *outbuf, int is_ip)
+{
+	uint32_t h1 = fnv1a_hash(inbuf);
+	uint32_t h2 = djb2_hash(inbuf);
+
+	const char *constellation = stellar_constellations[h1 % NUM_CONSTELLATIONS];
+	const char *star = stellar_stars[h2 % NUM_STARS];
+	unsigned int num = (h1 ^ h2) % 100;
+
+	const char *suffix = ServerInfo.network_name;
+	if (suffix == NULL || !*suffix)
+		suffix = "network";
+
+	snprintf(outbuf, HOSTLEN, "%s-%s-%02u.%s", constellation, star, num, suffix);
+}
+
+/* ============================================================
  * STYLE DISPATCHER
  * ============================================================ */
 
@@ -657,6 +736,15 @@ cloak_ip(const char *inbuf, char *outbuf, struct Client *client_p)
 		break;
 	case CLOAK_ACCOUNT:
 		account_cloak(inbuf, outbuf, client_p);
+		break;
+	case CLOAK_TRUNCATED:
+		truncated_cloak(inbuf, outbuf, 1);
+		break;
+	case CLOAK_STELLAR:
+		stellar_cloak(inbuf, outbuf, 1);
+		break;
+	case CLOAK_NONE:
+		rb_strlcpy(outbuf, inbuf, HOSTLEN + 1);
 		break;
 	}
 }
@@ -690,6 +778,15 @@ cloak_host(const char *inbuf, char *outbuf, struct Client *client_p)
 	case CLOAK_ACCOUNT:
 		account_cloak(inbuf, outbuf, client_p);
 		break;
+	case CLOAK_TRUNCATED:
+		truncated_cloak(inbuf, outbuf, 0);
+		break;
+	case CLOAK_STELLAR:
+		stellar_cloak(inbuf, outbuf, 0);
+		break;
+	case CLOAK_NONE:
+		rb_strlcpy(outbuf, inbuf, HOSTLEN + 1);
+		break;
 	}
 }
 
@@ -708,6 +805,13 @@ check_umode_change(void *vdata)
 
 	if (!((data->oldumodes ^ source_p->umodes) & user_modes['x']))
 		return;
+
+	/* cloaking disabled: silently strip +x */
+	if (active_style == CLOAK_NONE)
+	{
+		source_p->umodes &= ~user_modes['x'];
+		return;
+	}
 
 	if (source_p->umodes & user_modes['x'])
 	{
