@@ -54,6 +54,7 @@
 #include "s_assert.h"
 #include "authproc.h"
 #include "supported.h"
+#include "discordproc.h"
 
 struct config_server_hide ConfigServerHide;
 
@@ -659,6 +660,8 @@ rehash(bool sig)
 
 	/* don't close listeners until we know we can go ahead with the rehash */
 	read_conf_files(false);
+
+	rehash_discord_bridge();
 
 	if(ServerInfo.description != NULL)
 		rb_strlcpy(me.info, ServerInfo.description, sizeof(me.info));

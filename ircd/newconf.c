@@ -26,6 +26,7 @@
 #include "snomask.h"
 #include "sslproc.h"
 #include "wsproc.h"
+#include "discordproc.h"
 #include "privilege.h"
 #include "chmode.h"
 #include "certfp.h"
@@ -2844,6 +2845,78 @@ static struct ConfEntry conf_sts_table[] =
 };
 /* *INDENT-ON* */
 
+/* -------------------------------------------------------------------------
+ * Discord bridge configuration callbacks
+ * ---------------------------------------------------------------------- */
+
+static int
+conf_begin_discord(struct TopConf *tc)
+{
+	(void)tc;
+	discord_config_clear();
+	return 0;
+}
+
+static int
+conf_end_discord(struct TopConf *tc)
+{
+	(void)tc;
+	/* start_discord_bridge() is called later, after all config is loaded */
+	return 0;
+}
+
+static void
+conf_set_discord_enabled(void *data)
+{
+	discord_config.enabled = *(int *)data ? true : false;
+}
+
+static void
+conf_set_discord_token(void *data)
+{
+	rb_free(discord_config.token);
+	discord_config.token = rb_strdup((char *)data);
+}
+
+static void
+conf_set_discord_guild_id(void *data)
+{
+	rb_free(discord_config.guild_id);
+	discord_config.guild_id = rb_strdup((char *)data);
+}
+
+/*
+ * conf_set_discord_channel_map - parse a "channel_map" entry of the form
+ * "#ircchannel=discord_snowflake".  Multiple entries may be listed via
+ * CF_FLIST.
+ */
+static void
+conf_set_discord_channel_map(void *data)
+{
+	char *entry = (char *)data;
+	char *eq;
+	struct DiscordChannelMap *map;
+
+	eq = strchr(entry, '=');
+	if(eq == NULL)
+	{
+		conf_report_error("discord: channel_map entry \"%s\" missing "
+				  "'=' separator (expected #channel=snowflake)",
+				  entry);
+		return;
+	}
+
+	map = rb_malloc(sizeof(*map));
+	*eq = '\0';
+
+	rb_strlcpy(map->irc_channel,       entry,  sizeof(map->irc_channel));
+	rb_strlcpy(map->discord_channel_id, eq + 1, sizeof(map->discord_channel_id));
+
+	*eq = '='; /* restore */
+
+	rb_dlinkAddAlloc(map, &discord_config.channel_maps);
+}
+
 void
 newconf_init()
 {
@@ -2919,4 +2992,10 @@ newconf_init()
 	add_conf_item("opm", "httpsconnect_ports", CF_INT | CF_FLIST, conf_set_opm_scan_ports_httpsconnect);
 
 	add_top_conf("sts", NULL, NULL, conf_sts_table);
+
+	add_top_conf("discord", conf_begin_discord, conf_end_discord, NULL);
+	add_conf_item("discord", "enabled",     CF_YESNO,              conf_set_discord_enabled);
+	add_conf_item("discord", "token",       CF_QSTRING,            conf_set_discord_token);
+	add_conf_item("discord", "guild_id",    CF_QSTRING,            conf_set_discord_guild_id);
+	add_conf_item("discord", "channel_map", CF_QSTRING | CF_FLIST, conf_set_discord_channel_map);
 }
