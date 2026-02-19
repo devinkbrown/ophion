@@ -35,6 +35,7 @@
 #include "logger.h"
 #include "match.h"
 #include "bandbi.h"
+#include "hook.h"
 #include "parse.h"
 #include "channel.h"
 #include "hostmask.h"
@@ -50,8 +51,11 @@ static void
 bandb_handle_failure(rb_helper *helper, char **parv, int parc) __attribute__((noreturn));
 
 static char bandb_add_letter[LAST_BANDB_TYPE] = {
-	'K', 'D', 'X', 'R'
+	'K', 'D', 'X', 'R', 'G'
 };
+
+static int h_bandb_gag_restore;
+static int h_bandb_gag_restore_done;
 
 rb_dlink_list bandb_pending;
 
@@ -65,6 +69,9 @@ static char *bandb_path;
 void
 init_bandb(void)
 {
+	h_bandb_gag_restore = register_hook("bandb_gag_restore");
+	h_bandb_gag_restore_done = register_hook("bandb_gag_restore_done");
+
 	if(start_bandb())
 	{
 		ilog(L_MAIN, "Unable to start bandb helper: %s", strerror(errno));
@@ -143,7 +150,7 @@ bandb_add(bandb_type type, struct Client *source_p, const char *mask1,
 }
 
 static char bandb_del_letter[LAST_BANDB_TYPE] = {
-	'k', 'd', 'x', 'r'
+	'k', 'd', 'x', 'r', 'g'
 };
 
 void
@@ -420,6 +427,38 @@ bandb_parse(rb_helper *helper)
 			bandb_handle_ban(parv, parc);
 			break;
 
+		case 'G':
+			/* GAG restore: G <mask> <setter> :<reason>[|<hold>]
+			 * Fired by both 'L' (rehash) and 'W' (gag-only load).
+			 * The module hooks bandb_gag_restore to apply entries. */
+			if(parc >= 4)
+			{
+				hook_data_bandb_gag gdata;
+				char reason_buf[512];
+				char *hold_str;
+
+				rb_strlcpy(reason_buf, parv[3], sizeof(reason_buf));
+				hold_str = strchr(reason_buf, '|');
+				if(hold_str != NULL)
+				{
+					*hold_str++ = '\0';
+					gdata.hold = (time_t)atol(hold_str);
+				}
+				else
+				{
+					gdata.hold = 0;
+				}
+				gdata.mask   = parv[1];
+				gdata.setter = reason_buf;  /* reason field holds the setter */
+				call_hook(h_bandb_gag_restore, &gdata);
+			}
+			break;
+
+		case 'w':
+			/* end-of-GAG-list marker sent after 'W' command */
+			call_hook(h_bandb_gag_restore_done, NULL);
+			break;
+
 		case 'C':
 			bandb_handle_clear();
 			break;
@@ -435,6 +474,22 @@ bandb_rehash_bans(void)
 {
 	if(bandb_helper != NULL)
 		rb_helper_write(bandb_helper, "L");
+}
+
+/*
+ * bandb_rehash_gags - request the bandb helper to resend all stored GAG
+ * entries without disturbing the kline/dline/xline/resv state.
+ *
+ * The helper responds with one "G <mask> <setter> :<reason>[|<hold>]" line
+ * per entry, followed by a "w" end-of-list marker.  bandbi.c fires the
+ * bandb_gag_restore hook for each 'G' line and bandb_gag_restore_done on
+ * receipt of 'w'.
+ */
+void
+bandb_rehash_gags(void)
+{
+	if(bandb_helper != NULL)
+		rb_helper_write(bandb_helper, "W");
 }
 
 static void

@@ -44,15 +44,16 @@ typedef enum
 	BANDB_DLINE,
 	BANDB_XLINE,
 	BANDB_RESV,
+	BANDB_GAG,
 	LAST_BANDB_TYPE
 } bandb_type;
 
 static char bandb_letter[LAST_BANDB_TYPE] = {
-	'K', 'D', 'X', 'R'
+	'K', 'D', 'X', 'R', 'G'
 };
 
 static const char *bandb_table[LAST_BANDB_TYPE] = {
-	"kline", "dline", "xline", "resv"
+	"kline", "dline", "xline", "resv", "gag"
 };
 
 
@@ -210,6 +211,10 @@ parse_request(rb_helper *helper)
 			parse_ban(BANDB_RESV, parv, parc);
 			break;
 
+		case 'G':
+			parse_ban(BANDB_GAG, parv, parc);
+			break;
+
 		case 'k':
 			parse_unban(BANDB_KLINE, parv, parc);
 			break;
@@ -226,9 +231,40 @@ parse_request(rb_helper *helper)
 			parse_unban(BANDB_RESV, parv, parc);
 			break;
 
+		case 'g':
+			parse_unban(BANDB_GAG, parv, parc);
+			break;
+
 		case 'L':
 			list_bans();
 			break;
+
+		case 'W':
+		{
+			/* List only GAG entries without a full C/F cycle.
+			 * Responds with one G line per entry, then 'w'. */
+			static char buf[512];
+			struct rsdb_table table;
+			int j;
+
+			rsdb_exec_fetch(&table,
+				"SELECT mask1,mask2,oper,reason FROM gag WHERE 1");
+
+			for(j = 0; j < table.row_count; j++)
+			{
+				/* non-KLINE format: G mask1 oper :reason */
+				snprintf(buf, sizeof(buf), "G %s %s :%s",
+					table.row[j][0],
+					table.row[j][2],
+					table.row[j][3]);
+				rb_helper_write_queue(bandb_helper, "%s", buf);
+			}
+
+			rsdb_exec_fetch_end(&table);
+			rb_helper_write(bandb_helper, "w");
+			break;
+		}
+
 		default:
 			break;
 		}
