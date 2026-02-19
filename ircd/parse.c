@@ -47,6 +47,9 @@ rb_dictionary *cmd_dict = NULL;
 const struct MsgBuf *g_client_msgbuf = NULL;
 rb_dictionary *alias_dict = NULL;
 
+/* Client-initiated batch handler callback (set by modules like m_multiline) */
+client_batch_handler_fn client_batch_handler = NULL;
+
 static void cancel_clients(struct Client *, struct Client *);
 static void remove_unknown(struct Client *, const char *, char *);
 
@@ -175,6 +178,33 @@ parse(struct Client *client_p, char *pbuffer, char *bufend)
 				g_labeled_response_label = msgbuf.tags[i].value;
 				g_labeled_response_client = from;
 				break;
+			}
+		}
+	}
+
+	/* Client-initiated batch interception: check for @batch= tag or
+	 * BATCH command and let the handler consume the message if needed. */
+	if (client_batch_handler && MyClient(from) && IsPerson(from))
+	{
+		int has_batch_tag = 0;
+		for (size_t i = 0; i < msgbuf.n_tags; i++)
+		{
+			if (strcmp(msgbuf.tags[i].key, "batch") == 0)
+			{
+				has_batch_tag = 1;
+				break;
+			}
+		}
+
+		if (has_batch_tag || strcasecmp(msgbuf.cmd, "BATCH") == 0)
+		{
+			if (client_batch_handler(&msgbuf, client_p, from))
+			{
+				/* Message was consumed by the batch handler */
+				g_client_msgbuf = NULL;
+				g_labeled_response_label = NULL;
+				g_labeled_response_client = NULL;
+				return;
 			}
 		}
 	}
