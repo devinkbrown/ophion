@@ -20,6 +20,7 @@
  */
 
 #include "stdinc.h"
+#include "bandbi.h"
 #include "client.h"
 #include "channel.h"
 #include "hash.h"
@@ -58,6 +59,8 @@ static void hook_gag_privmsg_user(void *vdata);
 static void hook_gag_umode_changed(void *vdata);
 static void hook_gag_new_local_user(void *vdata);
 static void hook_gag_burst_finished(void *vdata);
+static void hook_gag_bandb_restore(void *vdata);
+static void hook_gag_bandb_restore_done(void *vdata);
 
 mapi_hfn_list_av1 ircx_oper_hfnlist[] = {
 	{ "privmsg_channel", (hookfn) hook_gag_privmsg_channel, HOOK_HIGHEST },
@@ -65,6 +68,8 @@ mapi_hfn_list_av1 ircx_oper_hfnlist[] = {
 	{ "umode_changed", (hookfn) hook_gag_umode_changed },
 	{ "new_local_user", (hookfn) hook_gag_new_local_user },
 	{ "burst_finished", (hookfn) hook_gag_burst_finished },
+	{ "bandb_gag_restore", (hookfn) hook_gag_bandb_restore },
+	{ "bandb_gag_restore_done", (hookfn) hook_gag_bandb_restore_done },
 	{ NULL, NULL }
 };
 
@@ -105,8 +110,20 @@ find_gag_match(struct Client *client_p)
 	return NULL;
 }
 
+/*
+ * add_gag_entry - add a gag to the in-memory list and optionally persist it.
+ *
+ * When persist is true, the entry is written to bandb so it survives a
+ * full network restart.  Pass persist=false when restoring from bandb to
+ * avoid writing the entry back unnecessarily.
+ *
+ * The setter name is stored in the bandb "reason" field; the hold timestamp
+ * is appended after '|' (oper_reason) so it survives the round-trip through
+ * the helper's list response.
+ */
 static void
-add_gag_entry(const char *mask, const char *setter, time_t hold)
+add_gag_entry(struct Client *source_p, const char *mask, const char *setter,
+              time_t hold, bool persist)
 {
 	struct gag_entry *ge;
 
@@ -116,6 +133,20 @@ add_gag_entry(const char *mask, const char *setter, time_t hold)
 	ge->when = rb_current_time();
 	ge->hold = hold;
 	rb_dlinkAdd(ge, &ge->node, &gag_list);
+
+	if(persist)
+	{
+		char hold_str[32];
+		if(hold > 0)
+			snprintf(hold_str, sizeof(hold_str), "%ld", (long)hold);
+		/*
+		 * mask1 = user@host, reason = setter name,
+		 * oper_reason = hold timestamp (NULL for permanent).
+		 * The "oper" column is populated by get_oper_name(source_p).
+		 */
+		bandb_add(BANDB_GAG, source_p, mask, NULL,
+		          setter, hold > 0 ? hold_str : NULL, 0);
+	}
 }
 
 static void
@@ -129,6 +160,7 @@ remove_gag_entry(const char *mask)
 
 		if (!irccmp(ge->mask, mask))
 		{
+			bandb_del(BANDB_GAG, ge->mask, NULL);
 			rb_dlinkDelete(&ge->node, &gag_list);
 			rb_free(ge->mask);
 			rb_free(ge->setter);
@@ -149,6 +181,7 @@ expire_gag_entries(void *unused)
 
 		if (ge->hold && ge->hold <= rb_current_time())
 		{
+			bandb_del(BANDB_GAG, ge->mask, NULL);
 			rb_dlinkDelete(&ge->node, &gag_list);
 			rb_free(ge->mask);
 			rb_free(ge->setter);
@@ -314,6 +347,7 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 		RB_DLINK_FOREACH_SAFE(ptr, next, gag_list.head)
 		{
 			struct gag_entry *ge = ptr->data;
+			bandb_del(BANDB_GAG, ge->mask, NULL);
 			rb_dlinkDelete(&ge->node, &gag_list);
 			rb_free(ge->mask);
 			rb_free(ge->setter);
@@ -375,7 +409,7 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 
 		/* store persistent gag entry by user@host */
 		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
-		add_gag_entry(mask, get_oper_name(source_p), 0);
+		add_gag_entry(source_p, mask, get_oper_name(source_p), 0, true);
 
 		/* propagate to other servers: user mode + persistent entry */
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
@@ -437,7 +471,7 @@ me_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 
 		/* store persistent gag entry for reconnect enforcement */
 		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
-		add_gag_entry(mask, source_p->name, 0);
+		add_gag_entry(source_p, mask, source_p->name, 0, true);
 	}
 	else
 	{
@@ -458,10 +492,11 @@ me_gag_clear(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *so
 {
 	rb_dlink_node *ptr, *next;
 
-	/* clear the persistent list */
+	/* clear the persistent list, removing each entry from bandb */
 	RB_DLINK_FOREACH_SAFE(ptr, next, gag_list.head)
 	{
 		struct gag_entry *ge = ptr->data;
+		bandb_del(BANDB_GAG, ge->mask, NULL);
 		rb_dlinkDelete(&ge->node, &gag_list);
 		rb_free(ge->mask);
 		rb_free(ge->setter);
@@ -508,7 +543,7 @@ me_gag_add(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 			return;
 	}
 
-	add_gag_entry(mask, setter, hold);
+	add_gag_entry(source_p, mask, setter, hold, true);
 }
 
 /*
@@ -522,6 +557,66 @@ me_gag_del(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 		return;
 
 	remove_gag_entry(parv[1]);
+}
+
+/*
+ * hook_gag_bandb_restore - fired once per GAG entry when bandb sends its list
+ * in response to the W (bandb_rehash_gags) command.
+ *
+ * Adds the entry to gag_list without writing it back to bandb (persist=false).
+ * Skips entries that have already expired.
+ */
+static void
+hook_gag_bandb_restore(void *vdata)
+{
+	hook_data_bandb_gag *data = vdata;
+
+	/* skip expired entries */
+	if (data->hold > 0 && data->hold <= rb_current_time())
+	{
+		/* clean it out of bandb while we're here */
+		bandb_del(BANDB_GAG, data->mask, NULL);
+		return;
+	}
+
+	/* skip duplicates (e.g. if bandb_rehash_gags called more than once) */
+	rb_dlink_node *ptr;
+	RB_DLINK_FOREACH(ptr, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+		if (!irccmp(ge->mask, data->mask))
+			return;
+	}
+
+	add_gag_entry(NULL, data->mask, data->setter, data->hold, false);
+}
+
+/*
+ * hook_gag_bandb_restore_done - fired after the last GAG entry has been
+ * restored from bandb.  At this point gag_list is fully populated from the
+ * database, so re-apply GAG flags to any clients that are already connected
+ * (relevant for runtime module loads; a no-op during server startup because
+ * no clients exist yet).
+ */
+static void
+hook_gag_bandb_restore_done(void *unused)
+{
+	rb_dlink_node *ptr;
+
+	RB_DLINK_FOREACH(ptr, lclient_list.head)
+	{
+		struct Client *cp = ptr->data;
+
+		if (!MyClient(cp) || IsGagged(cp))
+			continue;
+
+		if (find_gag_match(cp) != NULL)
+		{
+			SetGagged(cp);
+			if (user_modes['z'])
+				cp->umodes |= user_modes['z'];
+		}
+	}
 }
 
 /*
@@ -836,6 +931,14 @@ ircx_oper_init(void)
 	construct_umodebuf();
 
 	expire_gag_ev = rb_event_add("expire_gag_entries", expire_gag_entries, NULL, 60);
+
+	/*
+	 * Request the bandb helper to resend all stored GAG entries.
+	 * The helper responds with individual "G" lines (firing bandb_gag_restore
+	 * for each) followed by "w" (firing bandb_gag_restore_done).
+	 * This is a targeted load that does not disturb kline/dline/xline/resv state.
+	 */
+	bandb_rehash_gags();
 
 	return 0;
 }
