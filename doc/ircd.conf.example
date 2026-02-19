@@ -51,7 +51,8 @@
 
 serverinfo {
 	name = "hades.arpa";
-	sid = "42X";
+	/* sid is optional: omit to auto-derive from server name */
+	#sid = "42X";
 	description = "charybdis test server";
 	network_name = "StaticBox";
 

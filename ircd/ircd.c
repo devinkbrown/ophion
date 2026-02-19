@@ -111,6 +111,33 @@ bool ircd_zlib_ok = true;
 int testing_conf = 0;
 time_t startup_time;
 
+/*
+ * generate_sid_from_name
+ *
+ * Deterministically derive a valid TS6 SID from a server name using
+ * FNV-1a so restarts produce the same SID without requiring one in the
+ * config.  SID format: digit [0-9], then two alphanumeric [0-9A-Z].
+ * 10 × 36 × 36 = 12,960 distinct values — more than sufficient.
+ */
+static void
+generate_sid_from_name(const char *name, char sid[4])
+{
+	static const char sid_chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+	uint32_t h = 2166136261u;
+	const unsigned char *p = (const unsigned char *)name;
+
+	while(*p)
+	{
+		h ^= *p++;
+		h *= 16777619u;
+	}
+
+	sid[0] = '0' + (h % 10);
+	sid[1] = sid_chars[(h / 10) % 36];
+	sid[2] = sid_chars[(h / 360) % 36];
+	sid[3] = '\0';
+}
+
 /* Event loop lag tracking (CLOCK_MONOTONIC, millisecond resolution) */
 unsigned long loop_lag_max_ms = 0;
 unsigned long long loop_lag_total_ms = 0;
@@ -816,8 +843,10 @@ charybdis_main(int argc, char * const argv[])
 
 	if(ServerInfo.sid[0] == '\0')
 	{
-		ierror("no server sid specified in serverinfo block.");
-		return -2;
+		generate_sid_from_name(me.name, ServerInfo.sid);
+		inotice("no sid in serverinfo{} — auto-generated %s from server name"
+		        " (set sid = \"%.3s\"; to silence this notice)",
+		        ServerInfo.sid, ServerInfo.sid);
 	}
 	rb_strlcpy(me.id, ServerInfo.sid, sizeof(me.id));
 	init_uid();
