@@ -98,7 +98,6 @@ init_providers(void)
 
 	/* FIXME must be started after dnsbl/opm in case of early completion notifications */
 	load_provider(&rdns_provider);
-	load_provider(&ident_provider);
 }
 
 /* Terminate all providers */

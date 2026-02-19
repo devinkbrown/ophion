@@ -596,6 +596,9 @@ conf_end_oper(struct TopConf *tc)
 		yy_tmpoper->snomask = yy_oper->snomask;
 		yy_tmpoper->privset = yy_oper->privset;
 
+		if(!EmptyString(yy_oper->vhost))
+			yy_tmpoper->vhost = rb_strdup(yy_oper->vhost);
+
 #ifdef HAVE_LIBCRYPTO
 		if(yy_oper->rsa_pubkey_file)
 		{
@@ -726,6 +729,13 @@ static void
 conf_set_oper_snomask(void *data)
 {
 	yy_oper->snomask = parse_snobuf_to_mask(0, (const char *) data);
+}
+
+static void
+conf_set_oper_vhost(void *data)
+{
+	rb_free(yy_oper->vhost);
+	yy_oper->vhost = rb_strdup((char *) data);
 }
 
 static int
@@ -2639,6 +2649,7 @@ static struct ConfEntry conf_operator_table[] =
 	{ "user",	CF_QSTRING, conf_set_oper_user,		0, NULL },
 	{ "password",	CF_QSTRING, conf_set_oper_password,	0, NULL },
 	{ "fingerprint",	CF_QSTRING, conf_set_oper_fingerprint,	0, NULL },
+	{ "vhost",	CF_QSTRING, conf_set_oper_vhost,	0, NULL },
 	{ "\0",	0, NULL, 0, NULL }
 };
 

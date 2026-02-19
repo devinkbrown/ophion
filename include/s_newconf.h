@@ -114,6 +114,7 @@ struct oper_conf
 	char *host;
 	char *passwd;
 	char *certfp;
+	char *vhost;		/* virtual host applied on oper-up */
 
 	int flags;
 	int umodes;

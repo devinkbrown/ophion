@@ -30,6 +30,7 @@
 #include "logger.h"
 #include "s_serv.h"
 #include "s_conf.h"
+#include "s_user.h"
 #include "send.h"
 #include "whowas.h"
 #include "match.h"
@@ -132,13 +133,16 @@ mo_kill(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		/* The callee should have sent a message. */
 		return;
 
-	if(MyConnect(target_p))
-		sendto_one(target_p, ":%s!%s@%s KILL %s :%s",
-			   source_p->name, source_p->username, source_p->host,
-			   target_p->name, reason);
+	/* anonymous kill: if oper has +K (anonkill mode), show SYSTEM */
+	const char *killname = source_p->name;
+	if (user_modes['K'] && (source_p->umodes & user_modes['K']))
+		killname = "SYSTEM";
 
-	/* Do not change the format of this message.  There's no point in changing messages
-	 * that have been around for ever, for no reason.. */
+	if(MyConnect(target_p))
+		sendto_one(target_p, ":%s KILL %s :%s",
+			   killname, target_p->name, reason);
+
+	/* opers always see the real source */
 	sendto_realops_snomask(SNO_GENERAL, L_ALL,
 			     "Received KILL message for %s!%s@%s. From %s Path: %s (%s)",
 			     target_p->name, target_p->username, target_p->orighost,
@@ -165,7 +169,7 @@ mo_kill(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		target_p->flags |= FLAGS_KILLED;
 	}
 
-	sprintf(buf, "Killed (%s (%s))", source_p->name, reason);
+	sprintf(buf, "Killed (%s (%s))", killname, reason);
 
 	exit_client(client_p, target_p, source_p, buf);
 }
@@ -234,6 +238,11 @@ ms_kill(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		return;
 	}
 
+	/* anonymous kill: if oper has +K (anonkill mode), show SYSTEM */
+	const char *killname = source_p->name;
+	if (IsOper(source_p) && user_modes['K'] && (source_p->umodes & user_modes['K']))
+		killname = "SYSTEM";
+
 	if(MyConnect(target_p))
 	{
 		if(IsServer(source_p))
@@ -242,17 +251,12 @@ ms_kill(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 				   source_p->name, target_p->name, reason);
 		}
 		else
-			sendto_one(target_p, ":%s!%s@%s KILL %s :%s",
-				   source_p->name, source_p->username, source_p->host,
-				   target_p->name, reason);
+			sendto_one(target_p, ":%s KILL %s :%s",
+				   killname, target_p->name, reason);
 	}
 
-	/* Be warned, this message must be From %s, or it confuses clients
-	 * so dont change it to From: or the case or anything! -- fl -- db */
-	/* path must contain at least 2 !'s, or bitchx falsely declares it
-	 * local --fl
-	 */
-	if(IsOper(source_p))	/* send it normally */
+	/* opers always see the real source */
+	if(IsOper(source_p))
 	{
 		sendto_realops_snomask(IsService(source_p) ? SNO_SKILL : SNO_GENERAL, L_ALL,
 				     "Received KILL message for %s!%s@%s. From %s Path: %s!%s!%s!%s %s",
@@ -282,7 +286,7 @@ ms_kill(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 	/* FLAGS_KILLED prevents a quit being sent out */
 	target_p->flags |= FLAGS_KILLED;
 
-	sprintf(buf, "Killed (%s %s)", source_p->name, reason);
+	sprintf(buf, "Killed (%s %s)", killname, reason);
 
 	exit_client(client_p, target_p, source_p, buf);
 }

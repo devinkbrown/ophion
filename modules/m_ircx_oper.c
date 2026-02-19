@@ -39,16 +39,123 @@
 static const char ircx_oper_desc[] =
 	"Provides IRCX operator tools: GAG mode (+z), OPFORCE commands";
 
+/*
+ * Persistent GAG list - stores user@host masks that persist across reconnects.
+ * Per IRCX spec, gagged users have ALL messages silently discarded.
+ */
+struct gag_entry {
+	char *mask;	/* user@host mask */
+	char *setter;	/* who set the gag */
+	time_t when;	/* when it was set */
+	time_t hold;	/* expiry time (0 = permanent) */
+	rb_dlink_node node;
+};
+
+static rb_dlink_list gag_list = { NULL, NULL, 0 };
+
 static void hook_gag_privmsg_channel(void *vdata);
 static void hook_gag_privmsg_user(void *vdata);
 static void hook_gag_umode_changed(void *vdata);
+static void hook_gag_new_local_user(void *vdata);
 
 mapi_hfn_list_av1 ircx_oper_hfnlist[] = {
 	{ "privmsg_channel", (hookfn) hook_gag_privmsg_channel, HOOK_HIGHEST },
 	{ "privmsg_user", (hookfn) hook_gag_privmsg_user, HOOK_HIGHEST },
 	{ "umode_changed", (hookfn) hook_gag_umode_changed },
+	{ "new_local_user", (hookfn) hook_gag_new_local_user },
 	{ NULL, NULL }
 };
+
+/* check if a client matches any persistent gag entry */
+static struct gag_entry *
+find_gag_match(struct Client *client_p)
+{
+	rb_dlink_node *ptr;
+	char buf[USERLEN + HOSTLEN + 2];
+
+	snprintf(buf, sizeof buf, "%s@%s", client_p->username, client_p->host);
+
+	RB_DLINK_FOREACH(ptr, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+
+		/* skip expired entries */
+		if (ge->hold && ge->hold <= rb_current_time())
+			continue;
+
+		if (match(ge->mask, buf))
+			return ge;
+	}
+
+	/* also check against sockhost (IP) */
+	snprintf(buf, sizeof buf, "%s@%s", client_p->username, client_p->sockhost);
+	RB_DLINK_FOREACH(ptr, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+
+		if (ge->hold && ge->hold <= rb_current_time())
+			continue;
+
+		if (match(ge->mask, buf))
+			return ge;
+	}
+
+	return NULL;
+}
+
+static void
+add_gag_entry(const char *mask, const char *setter, time_t hold)
+{
+	struct gag_entry *ge;
+
+	ge = rb_malloc(sizeof(struct gag_entry));
+	ge->mask = rb_strdup(mask);
+	ge->setter = rb_strdup(setter);
+	ge->when = rb_current_time();
+	ge->hold = hold;
+	rb_dlinkAdd(ge, &ge->node, &gag_list);
+}
+
+static void
+remove_gag_entry(const char *mask)
+{
+	rb_dlink_node *ptr, *next;
+
+	RB_DLINK_FOREACH_SAFE(ptr, next, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+
+		if (!irccmp(ge->mask, mask))
+		{
+			rb_dlinkDelete(&ge->node, &gag_list);
+			rb_free(ge->mask);
+			rb_free(ge->setter);
+			rb_free(ge);
+			return;
+		}
+	}
+}
+
+static void
+expire_gag_entries(void *unused)
+{
+	rb_dlink_node *ptr, *next;
+
+	RB_DLINK_FOREACH_SAFE(ptr, next, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+
+		if (ge->hold && ge->hold <= rb_current_time())
+		{
+			rb_dlinkDelete(&ge->node, &gag_list);
+			rb_free(ge->mask);
+			rb_free(ge->setter);
+			rb_free(ge);
+		}
+	}
+}
+
+static struct ev_entry *expire_gag_ev = NULL;
 
 /*
  * GAG user mode (+z)
@@ -84,8 +191,9 @@ hook_gag_privmsg_user(void *vdata)
 
 /*
  * Enforce GAG mode restrictions:
- * - Only opers can set +zon others
- * - Non-opers cannot remove +zfrom themselves
+ * - Non-opers cannot set +z on themselves
+ * - Non-opers cannot remove +z from themselves
+ * - GAG flag is always synced with the user mode
  */
 static void
 hook_gag_umode_changed(void *vdata)
@@ -96,14 +204,13 @@ hook_gag_umode_changed(void *vdata)
 	if (!MyClient(source_p))
 		return;
 
-	/* if user just had +zset and isn't an oper, disallow self-set */
+	/* non-oper tried to set +z on themselves - disallow */
 	if ((source_p->umodes & user_modes['z']) && !IsOper(source_p))
 	{
-		/* check if the mode was already on before */
 		if (!(data->oldumodes & user_modes['z']))
 		{
-			/* user tried to set +zon themselves without oper - remove it */
 			source_p->umodes &= ~user_modes['z'];
+			return;
 		}
 	}
 
@@ -112,7 +219,7 @@ hook_gag_umode_changed(void *vdata)
 		SetGagged(source_p);
 	else if (!(source_p->umodes & user_modes['z']))
 	{
-		/* only allow oper to remove +z*/
+		/* only allow oper to remove +z */
 		if ((data->oldumodes & user_modes['z']) && !IsOper(source_p))
 		{
 			/* re-apply +z, user can't remove it */
@@ -126,10 +233,34 @@ hook_gag_umode_changed(void *vdata)
 }
 
 /*
+ * new_local_user hook: check persistent gag list on connect.
+ * If a newly registered user matches a stored gag entry, re-apply +z.
+ */
+static void
+hook_gag_new_local_user(void *vdata)
+{
+	struct Client *source_p = vdata;
+	struct gag_entry *ge;
+
+	ge = find_gag_match(source_p);
+	if (ge != NULL)
+	{
+		SetGagged(source_p);
+		if (user_modes['z'])
+			source_p->umodes |= user_modes['z'];
+	}
+}
+
+/*
  * GAG command - opers can gag/ungag other users
- * GAG <nick>     - toggle gag on user
- * GAG <nick> ON  - gag user
- * GAG <nick> OFF - ungag user
+ * GAG <nick>       - toggle gag on user
+ * GAG <nick> ON    - gag user
+ * GAG <nick> OFF   - ungag user
+ * GAG LIST         - show persistent gag list
+ * GAG CLEAR        - clear all persistent gags and ungag all users
+ *
+ * Gagging is persistent: the user@host mask is stored and checked
+ * on reconnect.  Operators cannot gag themselves.
  */
 static void
 m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
@@ -149,11 +280,78 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 		return;
 	}
 
+	/* GAG LIST - show all persistent gag entries */
+	if (!rb_strcasecmp(parv[1], "LIST"))
+	{
+		rb_dlink_node *ptr;
+
+		sendto_one_notice(source_p, ":--- Persistent gag list ---");
+		RB_DLINK_FOREACH(ptr, gag_list.head)
+		{
+			struct gag_entry *ge = ptr->data;
+
+			if (ge->hold && ge->hold <= rb_current_time())
+				continue;
+
+			if (ge->hold)
+				sendto_one_notice(source_p, ":%s (by %s, expires in %lds)",
+					ge->mask, ge->setter, (long)(ge->hold - rb_current_time()));
+			else
+				sendto_one_notice(source_p, ":%s (by %s, permanent)",
+					ge->mask, ge->setter);
+		}
+		sendto_one_notice(source_p, ":--- End of gag list ---");
+		return;
+	}
+
+	/* GAG CLEAR - remove all persistent gags and ungag all affected users */
+	if (!rb_strcasecmp(parv[1], "CLEAR"))
+	{
+		rb_dlink_node *ptr, *next;
+
+		RB_DLINK_FOREACH_SAFE(ptr, next, gag_list.head)
+		{
+			struct gag_entry *ge = ptr->data;
+			rb_dlinkDelete(&ge->node, &gag_list);
+			rb_free(ge->mask);
+			rb_free(ge->setter);
+			rb_free(ge);
+		}
+
+		/* ungag all currently gagged local users */
+		RB_DLINK_FOREACH(ptr, lclient_list.head)
+		{
+			struct Client *client_p = ptr->data;
+			if (IsGagged(client_p))
+			{
+				ClearGagged(client_p);
+				if (user_modes['z'])
+					client_p->umodes &= ~user_modes['z'];
+			}
+		}
+
+		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+			":%s ENCAP * GAG_CLEAR",
+			use_id(source_p));
+
+		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+			"%s has cleared all gags", get_oper_name(source_p));
+		sendto_one_notice(source_p, ":All gags have been cleared");
+		return;
+	}
+
 	target_p = find_named_person(parv[1]);
 	if (target_p == NULL)
 	{
 		sendto_one_numeric(source_p, ERR_NOSUCHNICK,
 			form_str(ERR_NOSUCHNICK), parv[1]);
+		return;
+	}
+
+	/* operators cannot gag themselves */
+	if (target_p == source_p)
+	{
+		sendto_one_notice(source_p, ":You cannot gag yourself");
 		return;
 	}
 
@@ -167,9 +365,15 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 
 	if (set_gag)
 	{
+		char mask[USERLEN + HOSTLEN + 2];
+
 		SetGagged(target_p);
 		if (user_modes['z'])
 			target_p->umodes |= user_modes['z'];
+
+		/* store persistent gag entry by user@host */
+		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
+		add_gag_entry(mask, get_oper_name(source_p), 0);
 
 		/* propagate to other servers */
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
@@ -177,15 +381,21 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 			use_id(source_p), use_id(target_p));
 
 		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
-			"%s has gagged %s", get_oper_name(source_p), target_p->name);
-		sendto_one_notice(source_p, ":%s is now gagged", target_p->name);
+			"%s has gagged %s (%s)", get_oper_name(source_p), target_p->name, mask);
+		sendto_one_notice(source_p, ":%s is now gagged (persistent: %s)", target_p->name, mask);
 		/* per IRCX spec: user is NOT notified */
 	}
 	else
 	{
+		char mask[USERLEN + HOSTLEN + 2];
+
 		ClearGagged(target_p);
 		if (user_modes['z'])
 			target_p->umodes &= ~user_modes['z'];
+
+		/* remove persistent gag entry */
+		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
+		remove_gag_entry(mask);
 
 		sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 			":%s ENCAP * GAG %s OFF",
@@ -211,15 +421,55 @@ me_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 
 	if (!rb_strcasecmp(parv[2], "ON"))
 	{
+		char mask[USERLEN + HOSTLEN + 2];
+
 		SetGagged(target_p);
 		if (user_modes['z'])
 			target_p->umodes |= user_modes['z'];
+
+		/* store persistent gag entry for reconnect enforcement */
+		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
+		add_gag_entry(mask, source_p->name, 0);
 	}
 	else
 	{
+		char mask[USERLEN + HOSTLEN + 2];
+
 		ClearGagged(target_p);
 		if (user_modes['z'])
 			target_p->umodes &= ~user_modes['z'];
+
+		snprintf(mask, sizeof mask, "%s@%s", target_p->username, target_p->host);
+		remove_gag_entry(mask);
+	}
+}
+
+/* remote GAG_CLEAR: clear all gags on this server */
+static void
+me_gag_clear(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+{
+	rb_dlink_node *ptr, *next;
+
+	/* clear the persistent list */
+	RB_DLINK_FOREACH_SAFE(ptr, next, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+		rb_dlinkDelete(&ge->node, &gag_list);
+		rb_free(ge->mask);
+		rb_free(ge->setter);
+		rb_free(ge);
+	}
+
+	/* ungag all local users */
+	RB_DLINK_FOREACH(ptr, lclient_list.head)
+	{
+		struct Client *cp = ptr->data;
+		if (IsGagged(cp))
+		{
+			ClearGagged(cp);
+			if (user_modes['z'])
+				cp->umodes &= ~user_modes['z'];
+		}
 	}
 }
 
@@ -410,12 +660,17 @@ struct Message gag_msgtab = {
 	{mg_unreg, {m_gag, 2}, mg_ignore, mg_ignore, {me_gag, 3}, {m_gag, 2}}
 };
 
+struct Message gag_clear_msgtab = {
+	"GAG_CLEAR", 0, 0, 0, 0,
+	{mg_ignore, mg_ignore, mg_ignore, mg_ignore, {me_gag_clear, 1}, mg_ignore}
+};
+
 struct Message opforce_msgtab = {
 	"OPFORCE", 0, 0, 0, 0,
 	{mg_unreg, {m_opforce, 3}, mg_ignore, mg_ignore, mg_ignore, {m_opforce, 3}}
 };
 
-mapi_clist_av1 ircx_oper_clist[] = { &gag_msgtab, &opforce_msgtab, NULL };
+mapi_clist_av1 ircx_oper_clist[] = { &gag_msgtab, &gag_clear_msgtab, &opforce_msgtab, NULL };
 
 static int
 ircx_oper_init(void)
@@ -424,14 +679,31 @@ ircx_oper_init(void)
 	user_modes['z'] = find_umode_slot();
 	construct_umodebuf();
 
+	expire_gag_ev = rb_event_add("expire_gag_entries", expire_gag_entries, NULL, 60);
+
 	return 0;
 }
 
 static void
 ircx_oper_deinit(void)
 {
+	rb_dlink_node *ptr, *next;
+
 	user_modes['z'] = 0;
 	construct_umodebuf();
+
+	if (expire_gag_ev)
+		rb_event_delete(expire_gag_ev);
+
+	/* free all gag entries */
+	RB_DLINK_FOREACH_SAFE(ptr, next, gag_list.head)
+	{
+		struct gag_entry *ge = ptr->data;
+		rb_dlinkDelete(&ge->node, &gag_list);
+		rb_free(ge->mask);
+		rb_free(ge->setter);
+		rb_free(ge);
+	}
 }
 
 DECLARE_MODULE_AV2(ircx_oper, ircx_oper_init, ircx_oper_deinit,

@@ -457,7 +457,11 @@ ssl_process_certfp(ssl_ctl_t * ctl, ssl_ctl_buf_t * ctl_buf)
 	int method_len;
 
 	if(ctl_buf->buflen > 13 + RB_SSL_CERTFP_LEN)
-		return;		/* bogus message..drop it.. XXX should warn here */
+	{
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+			"SSL certfp message too large (%zu bytes), dropping", ctl_buf->buflen);
+		return;
+	}
 
 	fd = buf_to_uint32(&ctl_buf->buf[1]);
 	certfp_method = buf_to_uint32(&ctl_buf->buf[5]);

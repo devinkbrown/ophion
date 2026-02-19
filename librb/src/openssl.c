@@ -387,6 +387,15 @@ rb_setup_ssl_server(const char *const certfile, const char *keyfile,
 		return 0;
 	}
 
+	if(SSL_CTX_check_private_key(ssl_ctx_new) != 1)
+	{
+		rb_lib_log("%s: SSL_CTX_check_private_key: certificate/key mismatch: %s", __func__,
+		           rb_ssl_strerror(rb_ssl_last_err()));
+
+		SSL_CTX_free(ssl_ctx_new);
+		return 0;
+	}
+
 	if(dhfile == NULL)
 	{
 		rb_lib_log("%s: no DH parameters file specified", __func__);

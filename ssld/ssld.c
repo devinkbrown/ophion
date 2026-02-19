@@ -548,8 +548,8 @@ ssl_send_cipher(conn_t *conn)
 
 	buf[0] = 'C';
 	uint32_to_buf(&buf[1], conn->id);
-	strcpy((char *) &buf[5], cstring);
-	len = (strlen(cstring) + 1) + 5;
+	rb_strlcpy((char *) &buf[5], cstring, sizeof(buf) - 5);
+	len = (strlen((char *) &buf[5]) + 1) + 5;
 	mod_cmd_write_queue(conn->ctl, buf, len);
 }
 
@@ -768,7 +768,7 @@ static void
 send_version(mod_ctl_t * ctl)
 {
 	char version[256] = { 'V', 0 };
-	strncpy(&version[1], rb_lib_version(), sizeof(version) - 2);
+	rb_strlcpy(&version[1], rb_lib_version(), sizeof(version) - 1);
 	mod_cmd_write_queue(ctl, version, strlen(version));
 }
 

@@ -200,12 +200,9 @@ cmd_dns_result(int parc, char **parv)
 static void
 cmd_notice_client(int parc, char **parv)
 {
-	struct Client *client_p;
-
-	if((client_p = str_cid_to_client(parv[1], false)) == NULL)
-		return;
-
-	sendto_one_notice(client_p, ":%s", parv[2]);
+	/* Connection notices suppressed -- no *** messages on connect */
+	(void)parc;
+	(void)parv;
 }
 
 static void
@@ -318,11 +315,8 @@ void
 configure_authd(void)
 {
 	/* Timeouts */
-	set_authd_timeout("ident_timeout", GlobalSetOptions.ident_timeout);
 	set_authd_timeout("rdns_timeout", ConfigFileEntry.connect_timeout);
 	set_authd_timeout("rbl_timeout", ConfigFileEntry.connect_timeout);
-
-	ident_check_enable(!ConfigFileEntry.disable_auth);
 
 	/* Configure OPM */
 	if(rb_dlink_list_length(&opm_list) > 0 &&
