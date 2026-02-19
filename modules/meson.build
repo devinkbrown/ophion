@@ -23,6 +23,7 @@ modules = [
   'm_cap',
   'm_capab',
   'm_certfp',
+  'm_chathistory',
   'm_chghost',
   'm_close',
   'm_connect',
