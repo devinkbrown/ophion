@@ -639,7 +639,7 @@ charybdis_main(int argc, char * const argv[])
 
 	ConfigFileEntry.dpath = ircd_paths[IRCD_PATH_PREFIX];
 	ConfigFileEntry.configfile = ircd_paths[IRCD_PATH_IRCD_CONF];	/* Server configuration file */
-	ConfigFileEntry.connect_timeout = 30;	/* Default to 30 */
+	ConfigFileEntry.connect_timeout = 10;	/* Default to 10 -- fast connect */
 
 	init_sys();
 

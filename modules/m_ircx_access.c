@@ -45,8 +45,16 @@
 #include "hash.h"
 #include "match.h"
 #include "channel_access.h"
+#include "s_user.h"
 
 static const char ircx_access_desc[] = "Provides IRCX ACCESS command";
+
+/* check if client has god mode (+G) active */
+static inline bool
+is_godmode(struct Client *source_p)
+{
+	return user_modes['G'] && (source_p->umodes & user_modes['G']);
+}
 
 static int ircx_access_init(void);
 static void ircx_access_deinit(void);
@@ -205,6 +213,9 @@ can_read_from_access_list(struct Channel *chptr, struct Client *source_p, unsign
 	if (!MyClient(source_p))
 		return true;
 
+	if (is_godmode(source_p))
+		return true;
+
 	const struct membership *msptr = find_channel_membership(chptr, source_p);
 	return is_admin(msptr) || is_chanop(msptr);
 }
@@ -213,6 +224,9 @@ static bool
 can_write_to_access_list(struct Channel *chptr, struct Client *source_p, unsigned int level)
 {
 	if (!MyClient(source_p))
+		return true;
+
+	if (is_godmode(source_p))
 		return true;
 
 	const struct membership *msptr = find_channel_membership(chptr, source_p);

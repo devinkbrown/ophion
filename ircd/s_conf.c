@@ -819,7 +819,6 @@ set_default_conf(void)
 	ConfigFileEntry.min_nonwildcard = 4;
 	ConfigFileEntry.min_nonwildcard_simple = 3;
 	ConfigFileEntry.default_floodcount = 8;
-	ConfigFileEntry.default_ident_timeout = IDENT_TIMEOUT_DEFAULT;
 	ConfigFileEntry.tkline_expire_notices = 0;
 
         ConfigFileEntry.reject_after_count = 5;
@@ -875,9 +874,6 @@ read_conf(void)
 static void
 validate_conf(void)
 {
-	if(ConfigFileEntry.default_ident_timeout < 1)
-		ConfigFileEntry.default_ident_timeout = IDENT_TIMEOUT_DEFAULT;
-
 	if(ConfigFileEntry.ts_warn_delta < TS_WARN_DELTA_MIN)
 		ConfigFileEntry.ts_warn_delta = TS_WARN_DELTA_DEFAULT;
 

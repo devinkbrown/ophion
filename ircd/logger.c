@@ -39,6 +39,7 @@
 #include "send.h"
 #include "client.h"
 #include "s_serv.h"
+#include "hook.h"
 
 static FILE *log_main;
 static FILE *log_user;
@@ -279,6 +280,13 @@ report_operspy(struct Client *source_p, const char *token, const char *arg)
 
 	ilog(L_OPERSPY, "OPERSPY %s %s %s",
 	     get_oper_name(source_p), token, arg ? arg : "");
+
+	/* dispatch to EVENT system via hook */
+	hook_cdata hdata;
+	hdata.client = source_p;
+	hdata.arg1 = token;
+	hdata.arg2 = arg;
+	call_hook(h_operspy, &hdata);
 }
 
 const char *

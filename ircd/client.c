@@ -458,7 +458,7 @@ check_unknowns_list(rb_dlink_list * list)
 		 * for > 30s, close them.
 		 */
 
-		timeout = IsAnyServer(client_p) ? ConfigFileEntry.connect_timeout : 30;
+		timeout = IsAnyServer(client_p) ? ConfigFileEntry.connect_timeout : ConfigFileEntry.connect_timeout;
 		if((rb_current_time() - client_p->localClient->firsttime) > timeout)
 		{
 			if(IsAnyServer(client_p))

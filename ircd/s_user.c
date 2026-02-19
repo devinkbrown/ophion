@@ -462,21 +462,10 @@ register_local_user(struct Client *client_p, struct Client *source_p)
 		const char *p;
 		int i = 0;
 
-		if(IsNeedIdentd(aconf))
-		{
-			ServerStats.is_ref++;
-			sendto_one_notice(source_p, ":*** Notice -- You need to install identd to use this server");
-			exit_client(client_p, source_p, &me, "Install identd");
-			return (CLIENT_EXITED);
-		}
-
 		/* dont replace username if its supposed to be spoofed --fl */
 		if(!IsConfDoSpoofIp(aconf) || !strchr(aconf->info.name, '@'))
 		{
 			p = myusername;
-
-			if(!IsNoTilde(aconf))
-				source_p->username[i++] = '~';
 
 			while (*p && i < USERLEN)
 			{

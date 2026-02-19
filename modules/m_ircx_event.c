@@ -304,6 +304,21 @@ h_event_channel_kick(void *vdata)
 		source_p->username, source_p->host);
 }
 
+/* OPERSPY event: dispatched from report_operspy() via h_operspy hook */
+static void
+h_event_operspy(void *vdata)
+{
+	hook_cdata *data = vdata;
+	struct Client *source_p = data->client;
+	const char *token = data->arg1;
+	const char *arg = data->arg2;
+
+	dispatch_event(EVENT_OPERSPY, "OPERSPY %s!%s@%s %s %s",
+		source_p->name, source_p->username, source_p->host,
+		token ? token : "",
+		arg ? arg : "");
+}
+
 /* cleanup on client exit */
 static void
 h_event_cleanup(void *vdata)
@@ -326,6 +341,7 @@ mapi_hfn_list_av1 ircx_event_hfnlist[] = {
 	{ "can_kick", (hookfn) h_event_channel_kick },
 	{ "server_introduced", (hookfn) h_event_server_introduced },
 	{ "server_eob", (hookfn) h_event_server_eob },
+	{ "operspy", (hookfn) h_event_operspy },
 	{ NULL, NULL }
 };
 
