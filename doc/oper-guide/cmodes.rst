@@ -292,6 +292,34 @@ somebody attempts to join without either being explicitly invited, or
 having an invex (``+I``), then they will instead join the channel
 named in the mode parameter.
 
+``+Z``, quiet/mute list
+-----------------------
+
+.. note:: In standard charybdis ``+q`` was the quiet mode.  In Ophion ``+q``
+          has been repurposed as channel-admin status (see above), and the
+          quiet/mute functionality has been moved to ``+Z``.
+
+This mode takes one parameter of the same form as bans (``nick!user@host``
+masks, CIDR, extbans, etc.).  Users matching the ``+Z`` list may join the
+channel and are visible in ``/NAMES``, but any attempt to send a message to
+the channel is silently blocked.
+
+Unlike ``+b``, a ``+Z`` quiet entry does **not** prevent the user from
+joining.  ``+e`` (ban exceptions) also lift the quiet restriction —
+a user who matches both ``+Z`` and ``+e`` can speak normally.
+
+IRC operators and server admins bypass ``+Z`` entirely when
+``oper_kick_protection = yes`` is set — their messages are elevated to
+``CAN_SEND_OPV`` by the godmode hook regardless of any quiet entries.
+
+Non-operators cannot add a ``+Z`` entry that matches a current IRC operator
+or server admin on the channel when ``oper_kick_protection`` is enabled.
+
+``+Z`` entries can also be added and removed via the ``ACCESS`` command::
+
+    ACCESS #channel ADD nick!user@host QUIET
+    ACCESS #channel DEL nick!user@host
+
 ``+z``, SERVICE (IRCX)
 -----------------------
 

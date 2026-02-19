@@ -260,7 +260,7 @@ add_id(struct Client *source_p, struct Channel *chptr, const char *banid, const 
 	 */
 	if(MyClient(source_p))
 	{
-		if((rb_dlink_list_length(&chptr->banlist) + rb_dlink_list_length(&chptr->exceptlist) + rb_dlink_list_length(&chptr->invexlist)) >= (unsigned long)((chptr->mode.mode & MODE_EXLIMIT) ? ConfigChannel.max_bans_large : ConfigChannel.max_bans))
+		if((rb_dlink_list_length(&chptr->banlist) + rb_dlink_list_length(&chptr->exceptlist) + rb_dlink_list_length(&chptr->invexlist) + rb_dlink_list_length(&chptr->quietlist)) >= (unsigned long)((chptr->mode.mode & MODE_EXLIMIT) ? ConfigChannel.max_bans_large : ConfigChannel.max_bans))
 		{
 			sendto_one(source_p, form_str(ERR_BANLISTFULL),
 				   me.name, source_p->name, chptr->chname, realban);
@@ -297,7 +297,7 @@ add_id(struct Client *source_p, struct Channel *chptr, const char *banid, const 
 	rb_dlinkAdd(actualBan, &actualBan->node, list);
 
 	/* invalidate the can_send() cache */
-	if(mode_type == CHFL_BAN || mode_type == CHFL_EXCEPTION)
+	if(mode_type == CHFL_BAN || mode_type == CHFL_EXCEPTION || mode_type == CHFL_QUIET)
 		chptr->bants++;
 
 	return true;
@@ -815,6 +815,15 @@ chm_ban(struct Client *source_p, struct Channel *chptr,
 			mems = ONLY_SERVERS;
 		break;
 
+	case CHFL_QUIET:
+		/* +Z quiet list: users can join but cannot send */
+		list = &chptr->quietlist;
+		errorval = SM_ERR_RPL_B;	/* reuse ban-list error suppression */
+		rpl_list_p = form_str(RPL_BANLIST);
+		rpl_endlist_p = form_str(RPL_ENDOFBANLIST);
+		mems = ALL_MEMBERS;
+		break;
+
 	default:
 		sendto_realops_snomask(SNO_GENERAL, L_ALL, "chm_ban() called with unknown type!");
 		return;
@@ -912,6 +921,41 @@ chm_ban(struct Client *source_p, struct Channel *chptr,
 						form_str(ERR_INVALIDBAN),
 						chptr->chname, c, raw_mask);
 				return;
+			}
+		}
+
+		/*
+		 * Oper ban protection: when oper_kick_protection is enabled, a
+		 * non-operator client cannot set a +b ban (or +Z quiet) whose
+		 * mask matches an IRC operator or server admin currently on the
+		 * channel.  This prevents opers from being silenced or banned
+		 * while they are present.
+		 */
+		if ((mode_type == CHFL_BAN || mode_type == CHFL_QUIET) &&
+		    MyClient(source_p) && ConfigFileEntry.oper_kick_protection &&
+		    !(IsOper(source_p) || IsAdmin(source_p)))
+		{
+			rb_dlink_node *optr;
+			RB_DLINK_FOREACH(optr, chptr->members.head)
+			{
+				struct membership *omsptr = optr->data;
+				struct Client *targ = omsptr->client_p;
+
+				if (!(IsOper(targ) || IsAdmin(targ)))
+					continue;
+
+				if (client_matches_mask(targ, mask))
+				{
+					sendto_one_numeric(source_p, ERR_ISCHANSERVICE,
+						"%s %s :Cannot ban/quiet IRC operators from channels.",
+						targ->name, chptr->chname);
+					sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+						"%s attempted to %s oper %s in %s with mask %s (blocked)",
+						source_p->name,
+						(mode_type == CHFL_QUIET) ? "quiet" : "ban",
+						targ->name, chptr->chname, mask);
+					return;
+				}
 			}
 		}
 
@@ -1604,7 +1648,7 @@ struct ChannelMode chmode_table[256] =
   {chm_nosuch,	0 },			/* W */
   {chm_nosuch,	0 },			/* X */
   {chm_nosuch,	0 },			/* Y */
-  {chm_nosuch,	0 },			/* Z */
+  {chm_ban,	CHFL_QUIET },		/* Z — quiet/mute list */
   {chm_nosuch,	0 },
   {chm_nosuch,	0 },
   {chm_nosuch,	0 },

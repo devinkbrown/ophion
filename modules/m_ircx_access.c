@@ -128,6 +128,7 @@ struct AccessLevel {
 /* sentinel flags for entries stored in mode lists, not access_list */
 #define ACCESS_DENY_FLAG  0x80000000	/* stored in banlist (+b) */
 #define ACCESS_GRANT_FLAG 0x40000000	/* stored in invexlist (+I) */
+#define ACCESS_QUIET_FLAG CHFL_QUIET	/* stored in quietlist (+Z) */
 
 /* keep this in alphabetical order for bsearch(3)! */
 static const struct AccessLevel alevel[] = {
@@ -137,6 +138,7 @@ static const struct AccessLevel alevel[] = {
 	{"HOST", 'o', CHFL_CHANOP},
 	{"OP", 'o', CHFL_CHANOP},
 	{"OWNER", 'q', CHFL_ADMIN},
+	{"QUIET", 'Z', ACCESS_QUIET_FLAG},
 	{"VOICE", 'v', CHFL_VOICE}
 };
 
@@ -541,17 +543,35 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 	}
 
 	/*
-	 * DENY and GRANT entries are stored in channel mode lists, not in
-	 * the access_list.  Route through set_channel_mode so the change
-	 * is properly propagated via TMODE to all servers.
+	 * DENY, GRANT, and QUIET entries are stored in channel mode lists, not
+	 * in the access_list.  Route through set_channel_mode so the change is
+	 * properly propagated via TMODE to all servers.
 	 *
 	 *   DENY  -> banlist (+b)
 	 *   GRANT -> invexlist (+I)
+	 *   QUIET -> quietlist (+Z) — user can join but cannot send
 	 */
-	if (newflags == ACCESS_DENY_FLAG || newflags == ACCESS_GRANT_FLAG)
+	if (newflags == ACCESS_DENY_FLAG || newflags == ACCESS_GRANT_FLAG ||
+	    newflags == ACCESS_QUIET_FLAG)
 	{
-		const char *modestr = (newflags == ACCESS_DENY_FLAG) ? "+b" : "+I";
-		const char *level_name = (newflags == ACCESS_DENY_FLAG) ? "DENY" : "GRANT";
+		const char *modestr;
+		const char *level_name;
+
+		if (newflags == ACCESS_DENY_FLAG)
+		{
+			modestr = "+b";
+			level_name = "DENY";
+		}
+		else if (newflags == ACCESS_GRANT_FLAG)
+		{
+			modestr = "+I";
+			level_name = "GRANT";
+		}
+		else
+		{
+			modestr = "+Z";
+			level_name = "QUIET";
+		}
 
 		const char *para[] = {modestr, mask};
 		set_channel_mode(source_p, &me, chptr, NULL, 2, para);
