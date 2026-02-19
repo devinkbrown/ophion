@@ -42,6 +42,8 @@
 
 static const char part_desc[] = "Provides the PART command to leave a channel";
 
+static int h_channel_part;
+
 static void m_part(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 
 struct Message part_msgtab = {
@@ -51,7 +53,12 @@ struct Message part_msgtab = {
 
 mapi_clist_av1 part_clist[] = { &part_msgtab, NULL };
 
-DECLARE_MODULE_AV2(part, NULL, NULL, part_clist, NULL, NULL, NULL, NULL, part_desc);
+mapi_hlist_av1 part_hlist[] = {
+	{ "channel_part", &h_channel_part },
+	{ NULL, NULL }
+};
+
+DECLARE_MODULE_AV2(part, NULL, NULL, part_clist, part_hlist, NULL, NULL, NULL, part_desc);
 
 static void part_one_client(struct Client *client_p,
 			    struct Client *source_p, char *name,
@@ -146,6 +153,15 @@ part_one_client(struct Client *client_p, struct Client *source_p, char *name, co
 				     source_p->name, source_p->username,
 				     source_p->host, chptr->chname);
 	}
+
+	{
+		hook_data_channel_activity hook_info;
+		hook_info.client = source_p;
+		hook_info.chptr = chptr;
+		hook_info.key = NULL;
+		call_hook(h_channel_part, &hook_info);
+	}
+
 	remove_user_from_channel(msptr);
 }
 

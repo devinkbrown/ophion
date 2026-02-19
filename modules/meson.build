@@ -40,6 +40,7 @@ modules = [
   'm_ircx_prop_entity_user',
   'm_ircx_prop_member_of',
   'm_ircx_prop_onjoin',
+  'm_ircx_prop_onpart',
   'm_ircx_prop_opkey',
   'm_ison',
   'm_kline',

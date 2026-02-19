@@ -97,13 +97,16 @@ struct AccessLevel {
 	unsigned int flag;
 };
 
-/* sentinel flag for DENY entries -- stored in banlist, not access_list */
-#define ACCESS_DENY_FLAG 0x80000000
+/* sentinel flags for entries stored in mode lists, not access_list */
+#define ACCESS_DENY_FLAG  0x80000000	/* stored in banlist (+b) */
+#define ACCESS_GRANT_FLAG 0x40000000	/* stored in invexlist (+I) */
 
 /* keep this in alphabetical order for bsearch(3)! */
 static const struct AccessLevel alevel[] = {
 	{"ADMIN", 'q', CHFL_ADMIN},
 	{"DENY", 0, ACCESS_DENY_FLAG},
+	{"GRANT", 0, ACCESS_GRANT_FLAG},
+	{"HOST", 'o', CHFL_CHANOP},
 	{"OP", 'o', CHFL_CHANOP},
 	{"OWNER", 'q', CHFL_ADMIN},
 	{"VOICE", 'v', CHFL_VOICE}
@@ -116,6 +119,9 @@ ae_level_name(unsigned int level)
 
 	if (level == ACCESS_DENY_FLAG)
 		return "DENY";
+
+	if (level == ACCESS_GRANT_FLAG)
+		return "GRANT";
 
 	/*
 	 * We iterate backwards so that OWNER is preferred over ADMIN for
@@ -241,8 +247,8 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 
 	sendto_one_numeric(source_p, RPL_ACCESSSTART, form_str(RPL_ACCESSSTART), chptr->chname);
 
-	/* show access_list entries (GRANT levels: OWNER/ADMIN/OP/VOICE) */
-	if (level_match != ACCESS_DENY_FLAG)
+	/* show access_list entries (membership levels: OWNER/HOST/OP/VOICE) */
+	if (level_match != ACCESS_DENY_FLAG && level_match != ACCESS_GRANT_FLAG)
 	{
 		RB_DLINK_FOREACH(iter, chptr->access_list.head)
 		{
@@ -268,6 +274,18 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 		}
 	}
 
+	/* show invite exception list entries as GRANT level */
+	if (!level_match || level_match == ACCESS_GRANT_FLAG)
+	{
+		RB_DLINK_FOREACH(iter, chptr->invexlist.head)
+		{
+			const struct Ban *ban = iter->data;
+
+			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
+				chptr->chname, "GRANT", ban->banstr, (long) ban->when, ban->who, "");
+		}
+	}
+
 	sendto_one_numeric(source_p, RPL_ACCESSEND, form_str(RPL_ACCESSEND), chptr->chname);
 }
 
@@ -285,8 +303,8 @@ handle_access_clear(struct Channel *chptr, struct Client *source_p, const char *
 
 	rb_dlink_node *iter, *next;
 
-	/* clear access_list entries (GRANT levels) */
-	if (level_match != ACCESS_DENY_FLAG)
+	/* clear access_list entries (membership levels) */
+	if (level_match != ACCESS_DENY_FLAG && level_match != ACCESS_GRANT_FLAG)
 	{
 		RB_DLINK_FOREACH_SAFE(iter, next, chptr->access_list.head)
 		{
@@ -315,6 +333,21 @@ handle_access_clear(struct Channel *chptr, struct Client *source_p, const char *
 			rb_strlcpy(mask_copy, ban->banstr, sizeof(mask_copy));
 
 			const char *para[] = {"-b", mask_copy};
+			set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+		}
+	}
+
+	/* clear invite exception list entries (GRANT level) via mode infrastructure */
+	if (!level_match || level_match == ACCESS_GRANT_FLAG)
+	{
+		RB_DLINK_FOREACH_SAFE(iter, next, chptr->invexlist.head)
+		{
+			struct Ban *ban = iter->data;
+			char mask_copy[BANLEN + 1];
+
+			rb_strlcpy(mask_copy, ban->banstr, sizeof(mask_copy));
+
+			const char *para[] = {"-I", mask_copy};
 			set_channel_mode(source_p, &me, chptr, NULL, 2, para);
 		}
 	}
@@ -349,47 +382,46 @@ handle_access_delete(struct Channel *chptr, struct Client *source_p, const char 
 	if (ae == NULL)
 	{
 		/*
-		 * Not found in access_list -- check the ban list, since
-		 * DENY entries are stored as channel bans (+b).
+		 * Not found in access_list -- check the mode lists, since
+		 * DENY entries are stored as bans (+b) and GRANT entries
+		 * are stored as invite exceptions (+I).
 		 */
+		rb_dlink_list *lists[] = { &chptr->banlist, &chptr->invexlist };
+		const char *level_names[] = { "DENY", "GRANT" };
+		const char *modestrs[] = { "-b", "-I" };
 		rb_dlink_node *ptr;
-		struct Ban *ban = NULL;
 
-		RB_DLINK_FOREACH(ptr, chptr->banlist.head)
+		for (size_t i = 0; i < ARRAY_SIZE(lists); i++)
 		{
-			struct Ban *b = ptr->data;
-
-			if (!irccmp(b->banstr, mask))
+			RB_DLINK_FOREACH(ptr, lists[i]->head)
 			{
-				ban = b;
-				break;
+				struct Ban *b = ptr->data;
+
+				if (irccmp(b->banstr, mask))
+					continue;
+
+				if (!can_write_to_access_list(chptr, source_p, CHFL_CHANOP))
+				{
+					sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
+						me.name, source_p->name, chptr->chname);
+					return;
+				}
+
+				if (MyClient(source_p))
+				{
+					sendto_one_numeric(source_p, RPL_ACCESSDELETE, form_str(RPL_ACCESSDELETE),
+						chptr->chname, level_names[i], mask,
+						(long) 0, source_p->name, "");
+				}
+
+				const char *para[] = {modestrs[i], mask};
+				set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+				return;
 			}
 		}
 
-		if (ban == NULL)
-		{
-			sendto_one_numeric(source_p, ERR_ACCESS_MISSING, form_str(ERR_ACCESS_MISSING),
-				chptr->chname, mask);
-			return;
-		}
-
-		/* chanops can remove bans */
-		if (!can_write_to_access_list(chptr, source_p, CHFL_CHANOP))
-		{
-			sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),
-				me.name, source_p->name, chptr->chname);
-			return;
-		}
-
-		if (MyClient(source_p))
-		{
-			sendto_one_numeric(source_p, RPL_ACCESSDELETE, form_str(RPL_ACCESSDELETE),
-				chptr->chname, "DENY", mask);
-		}
-
-		/* remove ban via mode infrastructure for proper propagation */
-		const char *para[] = {"-b", mask};
-		set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+		sendto_one_numeric(source_p, ERR_ACCESS_MISSING, form_str(ERR_ACCESS_MISSING),
+			chptr->chname, mask);
 		return;
 	}
 
@@ -404,7 +436,8 @@ handle_access_delete(struct Channel *chptr, struct Client *source_p, const char 
 	if (MyClient(source_p))
 	{
 		sendto_one_numeric(source_p, RPL_ACCESSDELETE, form_str(RPL_ACCESSDELETE),
-			chptr->chname, ae_level_name(ae->flags), ae->mask);
+			chptr->chname, ae_level_name(ae->flags), ae->mask,
+			(long) 0, ae->who, "");
 	}
 
 	/* propagate deletion to servers via TACCESS with empty level */
@@ -438,19 +471,25 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 	}
 
 	/*
-	 * DENY entries are stored in the channel ban list (+b), not in
-	 * the access_list.  Route through set_channel_mode so the ban
+	 * DENY and GRANT entries are stored in channel mode lists, not in
+	 * the access_list.  Route through set_channel_mode so the change
 	 * is properly propagated via TMODE to all servers.
+	 *
+	 *   DENY  -> banlist (+b)
+	 *   GRANT -> invexlist (+I)
 	 */
-	if (newflags == ACCESS_DENY_FLAG)
+	if (newflags == ACCESS_DENY_FLAG || newflags == ACCESS_GRANT_FLAG)
 	{
-		const char *para[] = {"+b", mask};
+		const char *modestr = (newflags == ACCESS_DENY_FLAG) ? "+b" : "+I";
+		const char *level_name = (newflags == ACCESS_DENY_FLAG) ? "DENY" : "GRANT";
+
+		const char *para[] = {modestr, mask};
 		set_channel_mode(source_p, &me, chptr, NULL, 2, para);
 
 		if (MyClient(source_p))
 		{
 			sendto_one_numeric(source_p, RPL_ACCESSADD, form_str(RPL_ACCESSADD),
-				chptr->chname, "DENY", mask,
+				chptr->chname, level_name, mask,
 				(long) 0, source_p->name, "");
 		}
 
@@ -582,8 +621,8 @@ ms_taccess(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 	if (flags == 0)
 		return;
 
-	/* DENY entries are propagated via TMODE (+b), not TACCESS */
-	if (flags == ACCESS_DENY_FLAG)
+	/* DENY and GRANT entries are propagated via TMODE, not TACCESS */
+	if (flags == ACCESS_DENY_FLAG || flags == ACCESS_GRANT_FLAG)
 		return;
 
 	struct AccessEntry *ae = channel_access_upsert(chptr, source_p, parv[4], flags);
