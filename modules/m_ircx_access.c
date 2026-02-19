@@ -340,6 +340,21 @@ handle_access_list(struct Channel *chptr, struct Client *source_p, const char *l
 		}
 	}
 
+	/* show quiet list entries as QUIET level */
+	if (!level_match || level_match == ACCESS_QUIET_FLAG)
+	{
+		RB_DLINK_FOREACH(iter, chptr->quietlist.head)
+		{
+			const struct Ban *ban = iter->data;
+
+			if (mask_filter && !match(mask_filter, ban->banstr))
+				continue;
+
+			sendto_one_numeric(source_p, RPL_ACCESSENTRY, form_str(RPL_ACCESSENTRY),
+				chptr->chname, "QUIET", ban->banstr, (long) ban->when, ban->who, "");
+		}
+	}
+
 	sendto_one_numeric(source_p, RPL_ACCESSEND, form_str(RPL_ACCESSEND), chptr->chname);
 }
 
@@ -405,6 +420,21 @@ handle_access_clear(struct Channel *chptr, struct Client *source_p, const char *
 			set_channel_mode(source_p, &me, chptr, NULL, 2, para);
 		}
 	}
+
+	/* clear quiet list entries (QUIET level) via mode infrastructure */
+	if (!level_match || level_match == ACCESS_QUIET_FLAG)
+	{
+		RB_DLINK_FOREACH_SAFE(iter, next, chptr->quietlist.head)
+		{
+			struct Ban *ban = iter->data;
+			char mask_copy[BANLEN + 1];
+
+			rb_strlcpy(mask_copy, ban->banstr, sizeof(mask_copy));
+
+			const char *para[] = {"-Z", mask_copy};
+			set_channel_mode(source_p, &me, chptr, NULL, 2, para);
+		}
+	}
 }
 
 /*
@@ -437,12 +467,13 @@ handle_access_delete(struct Channel *chptr, struct Client *source_p, const char 
 	{
 		/*
 		 * Not found in access_list -- check the mode lists, since
-		 * DENY entries are stored as bans (+b) and GRANT entries
-		 * are stored as invite exceptions (+I).
+		 * DENY entries are stored as bans (+b), GRANT entries are
+		 * stored as invite exceptions (+I), and QUIET entries are
+		 * stored in the quiet list (+Z).
 		 */
-		rb_dlink_list *lists[] = { &chptr->banlist, &chptr->invexlist };
-		const char *level_names[] = { "DENY", "GRANT" };
-		const char *modestrs[] = { "-b", "-I" };
+		rb_dlink_list *lists[] = { &chptr->banlist, &chptr->invexlist, &chptr->quietlist };
+		const char *level_names[] = { "DENY", "GRANT", "QUIET" };
+		const char *modestrs[] = { "-b", "-I", "-Z" };
 		rb_dlink_node *ptr;
 
 		for (size_t i = 0; i < ARRAY_SIZE(lists); i++)

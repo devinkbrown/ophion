@@ -293,8 +293,14 @@ have an available auth{} block.
 .. note:: This snomask is only available if the ``sno_whois.so``
           extension is loaded.
 
-Opers with ``+W`` receive notices when a ``WHOIS`` is executed on them on their
-server (showing idle time).
+Opers and server admins with ``+W`` receive a server notice whenever a
+**non-operator** user performs a ``WHOIS`` on them.  Oper-to-oper ``WHOIS``
+queries and self-WHOIS are silently ignored, so the notice only fires
+when an ordinary user is inspecting your connection.
+
+The notice format is::
+
+    *** Notice -- nick (user@host) [server] is performing a WHOIS on you
 
 ``+x``, extra routing notices
 -----------------------------

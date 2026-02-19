@@ -315,10 +315,15 @@ IRC operators and server admins bypass ``+Z`` entirely when
 Non-operators cannot add a ``+Z`` entry that matches a current IRC operator
 or server admin on the channel when ``oper_kick_protection`` is enabled.
 
-``+Z`` entries can also be added and removed via the ``ACCESS`` command::
+``+Z`` entries can be managed via the ``ACCESS`` command::
 
-    ACCESS #channel ADD nick!user@host QUIET
-    ACCESS #channel DEL nick!user@host
+    ACCESS #channel ADD nick!user@host QUIET   (add quiet entry)
+    ACCESS #channel DEL nick!user@host         (remove by mask)
+    ACCESS #channel LIST QUIET                 (list all quiet entries)
+    ACCESS #channel CLEAR QUIET                (remove all quiet entries)
+
+``ACCESS DEL`` and ``MODE -Z`` are interchangeable — both remove the same
+underlying entry from the quiet list with no conflict between them.
 
 ``+z``, SERVICE (IRCX)
 -----------------------
