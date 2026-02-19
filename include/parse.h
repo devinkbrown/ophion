@@ -42,4 +42,9 @@ extern char *reconstruct_parv(int parc, const char *parv[]);
 extern rb_dictionary *alias_dict;
 extern rb_dictionary *cmd_dict;
 
+/* IRCv3 message-tags: pointer to the current incoming client MsgBuf.
+ * Set in parse() before command dispatch; cleared after.
+ * Used by cap_message_tags to forward client-only tags. */
+extern const struct MsgBuf *g_client_msgbuf;
+
 #endif /* INCLUDED_parse_h_h */

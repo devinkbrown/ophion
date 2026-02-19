@@ -42,6 +42,9 @@
 #include "s_assert.h"
 
 rb_dictionary *cmd_dict = NULL;
+
+/* IRCv3 message-tags: pointer to current client's incoming MsgBuf */
+const struct MsgBuf *g_client_msgbuf = NULL;
 rb_dictionary *alias_dict = NULL;
 
 static void cancel_clients(struct Client *, struct Client *);
@@ -155,6 +158,27 @@ parse(struct Client *client_p, char *pbuffer, char *bufend)
 		return;
 	}
 
+	/* IRCv3: set globals for labeled-response and message-tags before dispatch */
+	if (MyClient(from) && IsPerson(from))
+	{
+		/* message-tags: expose client's incoming msgbuf for tag forwarding */
+		if (IsCapable(from, CLICAP_MESSAGE_TAGS))
+			g_client_msgbuf = &msgbuf;
+
+		/* labeled-response: extract label tag if present */
+		for (size_t i = 0; i < msgbuf.n_tags; i++)
+		{
+			if (strcmp(msgbuf.tags[i].key, "label") == 0 &&
+			    msgbuf.tags[i].value != NULL &&
+			    IsCapable(from, CLICAP_LABELED_RESPONSE))
+			{
+				g_labeled_response_label = msgbuf.tags[i].value;
+				g_labeled_response_client = from;
+				break;
+			}
+		}
+	}
+
 	if(handle_command(mptr, &msgbuf, client_p, from) < -1)
 	{
 		char *p;
@@ -178,6 +202,11 @@ parse(struct Client *client_p, char *pbuffer, char *bufend)
 				     p[6], p[7], p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
 		}
 	}
+
+	/* IRCv3: clear globals after command dispatch (msgbuf is stack-local) */
+	g_client_msgbuf = NULL;
+	g_labeled_response_label = NULL;
+	g_labeled_response_client = NULL;
 
 }
 

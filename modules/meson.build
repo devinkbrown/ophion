@@ -4,6 +4,8 @@ subdir('core')
 
 modules = [
   'cap_account_tag',
+  'cap_batch',
+  'cap_message_tags',
   'cap_prop_notify',
   'cap_server_time',
   'cap_sts',
@@ -83,6 +85,7 @@ modules = [
   'm_resv',
   'm_sasl_core',
   'm_scan',
+  'm_setname',
   'm_services',
   'm_set',
   'm_signon',

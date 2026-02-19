@@ -227,6 +227,16 @@ m_invite(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 		sendto_one_prefix(target_p, source_p, "INVITE", "%s %lu",
 				  chptr->chname, (unsigned long) chptr->channelts);
 	}
+
+	/* IRCv3 invite-notify: notify all channel members who have the capability */
+	if (IsPerson(source_p))
+	{
+		sendto_channel_local_with_capability_butone(source_p, ALL_MEMBERS,
+			CLICAP_INVITE_NOTIFY, NOCAPS, chptr,
+			":%s!%s@%s INVITE %s :%s",
+			source_p->name, source_p->username, source_p->host,
+			target_p->name, chptr->chname);
+	}
 }
 
 /* add_invite()
