@@ -51,6 +51,10 @@ unsigned long current_serial = 0L;
 
 struct Client *remote_rehash_oper_p;
 
+/* IRCv3 labeled-response globals: set in parse.c before command dispatch */
+const char *g_labeled_response_label = NULL;
+struct Client *g_labeled_response_client = NULL;
+
 /* send_linebuf()
  *
  * inputs	- client to send to, linebuf to attach
@@ -303,6 +307,15 @@ sendto_one(struct Client *target_p, const char *pattern, ...)
 	rb_linebuf_newbuf(&linebuf);
 
 	build_msgbuf_tags(&msgbuf, &me);
+
+	/* IRCv3 labeled-response: inject label when responding to the labeled client */
+	if (g_labeled_response_client != NULL && g_labeled_response_label != NULL &&
+	    target_p == g_labeled_response_client &&
+	    IsCapable(target_p, CLICAP_LABELED_RESPONSE))
+	{
+		msgbuf_append_tag(&msgbuf, "label", g_labeled_response_label, CLICAP_LABELED_RESPONSE);
+	}
+
 	va_start(args, pattern);
 	linebuf_put_tags(&linebuf, &msgbuf, target_p, &strings);
 	va_end(args);
@@ -338,6 +351,14 @@ sendto_one_prefix(struct Client *target_p, struct Client *source_p,
 	}
 
 	build_msgbuf_tags(&msgbuf, source_p);
+
+	/* IRCv3 labeled-response: inject label when responding to the labeled client */
+	if (g_labeled_response_client != NULL && g_labeled_response_label != NULL &&
+	    dest_p == g_labeled_response_client &&
+	    IsCapable(target_p, CLICAP_LABELED_RESPONSE))
+	{
+		msgbuf_append_tag(&msgbuf, "label", g_labeled_response_label, CLICAP_LABELED_RESPONSE);
+	}
 
 	rb_linebuf_newbuf(&linebuf);
 	va_start(args, pattern);
@@ -377,6 +398,14 @@ sendto_one_notice(struct Client *target_p, const char *pattern, ...)
 
 	build_msgbuf_tags(&msgbuf, &me);
 
+	/* IRCv3 labeled-response: inject label when responding to the labeled client */
+	if (g_labeled_response_client != NULL && g_labeled_response_label != NULL &&
+	    dest_p == g_labeled_response_client &&
+	    IsCapable(target_p, CLICAP_LABELED_RESPONSE))
+	{
+		msgbuf_append_tag(&msgbuf, "label", g_labeled_response_label, CLICAP_LABELED_RESPONSE);
+	}
+
 	rb_linebuf_newbuf(&linebuf);
 	va_start(args, pattern);
 	linebuf_put_tagsf(&linebuf, &msgbuf, target_p, &strings,
@@ -415,6 +444,14 @@ sendto_one_numeric(struct Client *target_p, int numeric, const char *pattern, ..
 	}
 
 	build_msgbuf_tags(&msgbuf, &me);
+
+	/* IRCv3 labeled-response: inject label when responding to the labeled client */
+	if (g_labeled_response_client != NULL && g_labeled_response_label != NULL &&
+	    dest_p == g_labeled_response_client &&
+	    IsCapable(target_p, CLICAP_LABELED_RESPONSE))
+	{
+		msgbuf_append_tag(&msgbuf, "label", g_labeled_response_label, CLICAP_LABELED_RESPONSE);
+	}
 
 	rb_linebuf_newbuf(&linebuf);
 	va_start(args, pattern);
