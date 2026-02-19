@@ -189,6 +189,12 @@ h_prop_match(void *vdata)
 	bool new = false;
 	struct Account *target_p = account_find(prop_match->target_name + 8, true, &new);
 
+	if (target_p == NULL)
+	{
+		sendto_one_numeric(prop_match->source_p, ERR_NOSUCHNICK, form_str(ERR_NOSUCHNICK), prop_match->target_name);
+		return;
+	}
+
 	/* new record, and creation_ts is non-zero, so backdate the record */
 	if (new && prop_match->creation_ts)
 		target_p->creation_ts = prop_match->creation_ts;
@@ -196,12 +202,6 @@ h_prop_match(void *vdata)
 	{
 		target_p->creation_ts = prop_match->creation_ts;
 		propertyset_clear(&target_p->prop_list);
-	}
-
-	if (target_p == NULL)
-	{
-		sendto_one_numeric(prop_match->source_p, ERR_NOSUCHNICK, form_str(ERR_NOSUCHNICK), prop_match->target_name);
-		return;
 	}
 
 	if (prop_match->match_request == PROP_WRITE)
