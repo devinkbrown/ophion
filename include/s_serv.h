@@ -93,6 +93,7 @@ extern unsigned int CAP_EOPMOD;			/* supports EOPMOD (ext +z + ext topic) */
 extern unsigned int CAP_BAN;			/* supports propagated bans */
 extern unsigned int CAP_MLOCK;			/* supports MLOCK messages */
 extern unsigned int CAP_BPROP;			/* supports batched TPROP/TACCESS burst */
+extern unsigned int CAP_AUTOSID;		/* supports hub-assigned SID negotiation (SVSSID) */
 
 /* XXX: added for backwards compatibility. --nenolod */
 #define CAP_MASK	(capability_index_mask(serv_capindex) & ~(CAP_TS6 | CAP_CAP))

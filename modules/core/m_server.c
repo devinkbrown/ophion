@@ -45,6 +45,7 @@ static const char server_desc[] =
 static void mr_server(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void ms_server(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void ms_sid(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
+static void mr_svssid(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 
 static bool bogus_host(const char *host);
 static void set_server_gecos(struct Client *, const char *);
@@ -57,10 +58,44 @@ struct Message sid_msgtab = {
 	"SID", 0, 0, 0, 0,
 	{mg_ignore, mg_reg, mg_ignore, {ms_sid, 5}, mg_ignore, mg_reg}
 };
+struct Message svssid_msgtab = {
+	"SVSSID", 0, 0, 0, 0,
+	{{mr_svssid, 2}, mg_ignore, mg_ignore, mg_ignore, mg_ignore, mg_ignore}
+};
 
-mapi_clist_av1 server_clist[] = { &server_msgtab, &sid_msgtab, NULL };
+mapi_clist_av1 server_clist[] = { &server_msgtab, &sid_msgtab, &svssid_msgtab, NULL };
 
 DECLARE_MODULE_AV2(server, NULL, NULL, server_clist, NULL, NULL, NULL, NULL, server_desc);
+
+/*
+ * find_available_sid - scan for the first SID not currently registered
+ * in the ID hash.  Iterates all 10×36×36 = 12,960 valid TS6 SID values.
+ * Returns true and fills sid[4] on success; returns false if the space is
+ * exhausted (impossible in any real deployment).
+ */
+static bool
+find_available_sid(char sid[4])
+{
+	static const char chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+	int i, j, k;
+
+	for(i = 0; i < 10; i++)
+	{
+		for(j = 0; j < 36; j++)
+		{
+			for(k = 0; k < 36; k++)
+			{
+				sid[0] = chars[i];
+				sid[1] = chars[j];
+				sid[2] = chars[k];
+				sid[3] = '\0';
+				if(!find_id(sid))
+					return true;
+			}
+		}
+	}
+	return false;
+}
 
 /*
  * mr_server - SERVER message handler
@@ -308,6 +343,24 @@ mr_server(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 					EmptyString(client_p->name) ? name : "",
 					log_client_name(client_p, SHOW_IP),
 					target_p->name);
+
+			/*
+			 * If the remote supports AUTOSID negotiation, assign it an
+			 * available SID via SVSSID before disconnecting.  It will adopt
+			 * the new SID and retry the link automatically.
+			 */
+			if(IsCapable(client_p, CAP_AUTOSID))
+			{
+				char newsid[4];
+				if(find_available_sid(newsid))
+				{
+					sendto_one(client_p, "SVSSID :%s", newsid);
+					sendto_realops_snomask(SNO_GENERAL, L_ALL,
+						"Assigned SID %s to %s (SID %s was in use by %s)",
+						newsid, name,
+						client_p->preClient->id, target_p->name);
+				}
+			}
 
 			sendto_one(client_p, "ERROR :SID already exists.");
 			exit_client(client_p, client_p, client_p, "SID Exists");
@@ -788,4 +841,88 @@ bogus_host(const char *host)
 		return true;
 
 	return false;
+}
+
+/*
+ * mr_svssid - SVSSID :<newsid>
+ *
+ * Sent by a hub to a connecting server when its auto-generated SID
+ * conflicts with one already present on the network.  The connecting
+ * server (us) updates its local SID so the subsequent auto-reconnect
+ * succeeds without operator intervention.
+ *
+ * Only accepted while we are in the outgoing handshake state (i.e. we
+ * initiated the connection to the hub).  Ignored otherwise to prevent
+ * a rogue inbound connection from hijacking our SID.
+ *
+ * Safe to apply only when no local clients are online yet; if clients
+ * already have UIDs derived from the current SID we refuse the change
+ * and let the operator resolve the conflict manually.
+ */
+static void
+mr_svssid(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
+	  int parc, const char *parv[])
+{
+	const char *newsid;
+	char oldsid[4];
+
+	/* Only accept from a server we're connecting to (outgoing handshake). */
+	if(!IsHandshake(client_p))
+		return;
+
+	if(parc < 2 || EmptyString(parv[1]))
+		return;
+
+	newsid = parv[1];
+
+	/* Validate SID format: digit then two alphanumerics, exactly 3 chars. */
+	if(!IsDigit(newsid[0]) || !IsIdChar(newsid[1]) || !IsIdChar(newsid[2]) || newsid[3] != '\0')
+	{
+		ilog(L_SERVER, "SVSSID: invalid SID format '%s' from %s",
+		     newsid, log_client_name(client_p, SHOW_IP));
+		return;
+	}
+
+	/* Reject if the suggested SID is already in use (hub misconfigured). */
+	if(find_id(newsid) != NULL)
+	{
+		ilog(L_SERVER, "SVSSID: assigned SID %s is still in use — ignoring (from %s)",
+		     newsid, log_client_name(client_p, SHOW_IP));
+		return;
+	}
+
+	/*
+	 * If local clients are already connected their UIDs embed the current
+	 * SID.  Changing it mid-session would make those UIDs inconsistent.
+	 * Refuse and let the operator set an explicit sid= in serverinfo{}.
+	 */
+	if(rb_dlink_list_length(&lclient_list) > 0)
+	{
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+		    "Cannot adopt hub-assigned SID %s: %lu local client(s) already connected "
+		    "(current SID %s) — set sid = \"%s\"; in serverinfo{} to resolve",
+		    newsid, (unsigned long)rb_dlink_list_length(&lclient_list),
+		    me.id, newsid);
+		ilog(L_SERVER, "SVSSID: refusing SID change %s -> %s: %lu local clients present",
+		     me.id, newsid,
+		     (unsigned long)rb_dlink_list_length(&lclient_list));
+		return;
+	}
+
+	rb_strlcpy(oldsid, me.id, sizeof(oldsid));
+
+	/* Re-register our SID in the ID hash under the new value. */
+	del_from_id_hash(me.id, &me);
+	rb_strlcpy(me.id, newsid, sizeof(me.id));
+	rb_strlcpy(ServerInfo.sid, newsid, sizeof(ServerInfo.sid));
+	add_to_id_hash(me.id, &me);
+
+	/* Reset the UID counter so new clients get UIDs with the correct SID. */
+	init_uid();
+
+	inotice("SID changed from %s to hub-assigned %s (via %s) — reconnecting",
+	        oldsid, newsid, client_p->name);
+	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+	    "SID changed from %s to hub-assigned %s (assigned by %s)",
+	    oldsid, newsid, client_p->name);
 }
