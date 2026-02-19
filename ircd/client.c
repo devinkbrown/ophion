@@ -2053,6 +2053,8 @@ free_away(struct Client *client_p)
 	}
 }
 
+static int uid_flipped = 0;
+
 void
 init_uid(void)
 {
@@ -2065,13 +2067,13 @@ init_uid(void)
 		current_uid[i] = 'A';
 
 	current_uid[9] = '\0';
+	uid_flipped = 0;
 }
 
 
 char *
 generate_uid(void)
 {
-	static int flipped = 0;
 	int i;
 
 uid_restart:
@@ -2095,13 +2097,13 @@ uid_restart:
 	if(current_uid[3] == 'Z')
 	{
 		current_uid[i] = 'A';
-		flipped = 1;
+		uid_flipped = 1;
 	}
 	else
 		current_uid[i]++;
 out:
 	/* if this happens..well, i'm not sure what to say, but lets handle it correctly */
-	if(rb_unlikely(flipped))
+	if(rb_unlikely(uid_flipped))
 	{
 		/* this slows down uid generation a bit... */
 		if(find_id(current_uid) != NULL)
