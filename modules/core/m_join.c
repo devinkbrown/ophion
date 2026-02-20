@@ -83,6 +83,12 @@ static void remove_our_modes(struct Channel *chptr, struct Client *source_p);
 static void remove_ban_list(struct Channel *chptr, struct Client *source_p,
 			    rb_dlink_list * list, char c, int mems);
 
+static bool parse_sjoin_modes(struct Mode *mode, const char *modestr,
+			      int parc, const char **parv, int *args_out);
+static void append_membership_mode(char **mbuf_p, char *modebuf, const char **para,
+				   int *pargs, struct Client *source_p,
+				   struct Channel *chptr, char flag, const char *name);
+
 /*
  * check_cloneable - IRCX CLONEABLE (+d) channel redirect
  *
@@ -593,6 +599,89 @@ ms_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		      source_p->id, (long) chptr->channelts, chptr->chname);
 }
 
+/*
+ * parse_sjoin_modes - parse the mode-string and its parameter arguments from
+ * an incoming SJOIN.  parv[4..] are the per-mode parameters; parc is the
+ * total parameter count of the SJOIN.  On success *args_out is set to the
+ * number of mode-parameter slots consumed and true is returned; false means
+ * the message is truncated and the caller should discard it.
+ */
+static bool
+parse_sjoin_modes(struct Mode *mode, const char *modestr,
+		  int parc, const char **parv, int *args_out)
+{
+	int args = 0;
+	int joinc = 0, timeslice = 0;
+	const char *s = modestr;
+
+	while (*s)
+	{
+		switch (*(s++))
+		{
+		case 'y':
+			rb_strlcpy(mode->forward, parv[4 + args], sizeof(mode->forward));
+			args++;
+			if(parc < 5 + args)
+				return false;
+			break;
+		case 'j':
+			sscanf(parv[4 + args], "%d:%d", &joinc, &timeslice);
+			args++;
+			mode->join_num = joinc;
+			mode->join_time = timeslice;
+			if(parc < 5 + args)
+				return false;
+			break;
+		case 'k':
+			rb_strlcpy(mode->key, parv[4 + args], sizeof(mode->key));
+			args++;
+			if(parc < 5 + args)
+				return false;
+			break;
+		case 'l':
+			mode->limit = atoi(parv[4 + args]);
+			args++;
+			if(parc < 5 + args)
+				return false;
+			break;
+		default:
+			if(chmode_flags[(int) *s] != 0)
+				mode->mode |= chmode_flags[(int) *s];
+		}
+	}
+
+	*args_out = args;
+	return true;
+}
+
+/*
+ * append_membership_mode - append one membership mode flag (+q/+o/+v) and
+ * its target nick to the in-progress local MODE batch.  When the batch
+ * reaches MAXMODEPARAMS it is flushed to channel locals immediately and the
+ * buffer is reset ready for the next batch.
+ */
+static void
+append_membership_mode(char **mbuf_p, char *modebuf, const char **para, int *pargs,
+		       struct Client *source_p, struct Channel *chptr,
+		       char flag, const char *name)
+{
+	*(*mbuf_p)++ = flag;
+	para[(*pargs)++] = name;
+
+	if(*pargs < MAXMODEPARAMS)
+		return;
+
+	**mbuf_p = '\0';
+	sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+			     ":%s MODE %s %s %s %s %s %s",
+			     source_p->name, chptr->chname,
+			     modebuf, para[0], para[1], para[2], para[3]);
+	*mbuf_p = modebuf;
+	*(*mbuf_p)++ = '+';
+	para[0] = para[1] = para[2] = para[3] = NULL;
+	*pargs = 0;
+}
+
 static void
 ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
@@ -618,7 +707,6 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	const char *s;
 	char *ptr_uid;
 	char *p;
-	int joinc = 0, timeslice = 0;
 	static char empty[] = "";
 	rb_dlink_node *ptr, *next_ptr;
 	char *mbuf;
@@ -647,44 +735,8 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	mbuf = modebuf;
 	newts = atol(parv[1]);
 
-	s = parv[3];
-	while (*s)
-	{
-		switch (*(s++))
-		{
-		case 'y':
-			rb_strlcpy(mode.forward, parv[4 + args], sizeof(mode.forward));
-			args++;
-			if(parc < 5 + args)
-				return;
-			break;
-		case 'j':
-			sscanf(parv[4 + args], "%d:%d", &joinc, &timeslice);
-			args++;
-			mode.join_num = joinc;
-			mode.join_time = timeslice;
-			if(parc < 5 + args)
-				return;
-			break;
-		case 'k':
-			rb_strlcpy(mode.key, parv[4 + args], sizeof(mode.key));
-			args++;
-			if(parc < 5 + args)
-				return;
-			break;
-		case 'l':
-			mode.limit = atoi(parv[4 + args]);
-			args++;
-			if(parc < 5 + args)
-				return;
-			break;
-		default:
-			if(chmode_flags[(int) *s] != 0)
-			{
-				mode.mode |= chmode_flags[(int) *s];
-			}
-		}
-	}
+	if(!parse_sjoin_modes(&mode, parv[3], parc, parv, &args))
+		return;
 
 	if(parv[args + 4])
 	{
@@ -938,64 +990,14 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 		}
 
 		if(fl & CHFL_ADMIN)
-		{
-			*mbuf++ = 'q';
-			para[pargs++] = target_p->name;
-
-			if(pargs >= MAXMODEPARAMS)
-			{
-				*mbuf = '\0';
-				sendto_channel_local(fakesource_p, ALL_MEMBERS, chptr,
-						     ":%s MODE %s %s %s %s %s %s",
-						     fakesource_p->name,
-						     chptr->chname,
-						     modebuf, para[0], para[1], para[2], para[3]);
-				mbuf = modebuf;
-				*mbuf++ = '+';
-				para[0] = para[1] = para[2] = para[3] = NULL;
-				pargs = 0;
-			}
-		}
-
+			append_membership_mode(&mbuf, modebuf, para, &pargs,
+					       fakesource_p, chptr, 'q', target_p->name);
 		if(fl & CHFL_CHANOP)
-		{
-			*mbuf++ = 'o';
-			para[pargs++] = target_p->name;
-
-			if(pargs >= MAXMODEPARAMS)
-			{
-				*mbuf = '\0';
-				sendto_channel_local(fakesource_p, ALL_MEMBERS, chptr,
-						     ":%s MODE %s %s %s %s %s %s",
-						     fakesource_p->name,
-						     chptr->chname,
-						     modebuf, para[0], para[1], para[2], para[3]);
-				mbuf = modebuf;
-				*mbuf++ = '+';
-				para[0] = para[1] = para[2] = para[3] = NULL;
-				pargs = 0;
-			}
-		}
-
+			append_membership_mode(&mbuf, modebuf, para, &pargs,
+					       fakesource_p, chptr, 'o', target_p->name);
 		if(fl & CHFL_VOICE)
-		{
-			*mbuf++ = 'v';
-			para[pargs++] = target_p->name;
-
-			if(pargs >= MAXMODEPARAMS)
-			{
-				*mbuf = '\0';
-				sendto_channel_local(fakesource_p, ALL_MEMBERS, chptr,
-						     ":%s MODE %s %s %s %s %s %s",
-						     fakesource_p->name,
-						     chptr->chname,
-						     modebuf, para[0], para[1], para[2], para[3]);
-				mbuf = modebuf;
-				*mbuf++ = '+';
-				para[0] = para[1] = para[2] = para[3] = NULL;
-				pargs = 0;
-			}
-		}
+			append_membership_mode(&mbuf, modebuf, para, &pargs,
+					       fakesource_p, chptr, 'v', target_p->name);
 
 
 	      nextnick:
