@@ -128,6 +128,6 @@ IRCX Module List
 Standard Modes
 --------------
 
-User mode +x (hide hostname) is provided by contrib/ip_cloaking.so
-Server notice mask +F (far connects) is provided by contrib/sno_farconnect.so
+User mode +x (hide hostname) is provided by extensions/ip_cloaking_unified.so
+Server notice mask +F (far connects) is provided by extensions/sno_farconnect.so
 Information on the caller ID system can be found in doc/features/modeg.txt

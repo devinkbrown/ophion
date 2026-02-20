@@ -26,7 +26,7 @@ length for the relevant element.  Bans are also checked against the IP
 address, even if it resolved or is spoofed. CIDR is supported, like
 ``*!*@10.0.0.0/8``. This is most useful with IPv6. Bans are not
 checked against the real hostname behind any kind of spoof, except if
-host mangling is in use (e.g.  ``extensions/ip_cloaking.so``): if the
+host mangling is in use (e.g.  ``extensions/ip_cloaking_unified.so``): if the
 user's host is mangled, their real hostname is checked additionally,
 and if a user has no spoof but could enable mangling, the mangled form
 of their hostname is checked additionally. Hence, it is not possible

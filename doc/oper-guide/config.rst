@@ -37,10 +37,10 @@ loadmodule directive
 
    loadmodule "text";
 
-Loads a module into the IRCd. In charybdis 1.1, most modules are
-automatically loaded in. In future versions, it is intended to remove
-this behaviour as to allow for easy customization of the IRCd's
-featureset.
+Loads a module into the IRCd. Core modules are automatically loaded
+on startup. Extension modules in the ``extensions/`` directory must be
+loaded explicitly via ``loadmodule`` or ``modules { module = ...; }``
+directives to enable optional features.
 
 serverinfo {} block
 -------------------
@@ -56,6 +56,12 @@ serverinfo {} block
         hub = boolean;
         vhost = "text";
         vhost6 = "text";
+        ssl_cert = "path";
+        ssl_private_key = "path";
+        ssl_dh_params = "path";
+        ssl_cipher_list = "text";
+        ssl_client_cert = boolean;
+        ssld_count = number;
    };
 
 The serverinfo {} block defines the core operational parameters of the
@@ -93,6 +99,39 @@ vhost
 vhost6
     An optional text field which defines an IPv6 address from which
     to connect outward to other IRC servers.
+
+ssl\_cert
+    Path to the PEM-encoded TLS certificate (chain). The private key may be
+    included in the same file or placed in a separate ``ssl_private_key``
+    file. TLS is enabled when this is set and ``sslport`` lines are present
+    in ``listen {}`` blocks.
+
+ssl\_private\_key
+    Path to the PEM-encoded private key, if stored separately from the
+    certificate. Optional; omit if the key is included in ``ssl_cert``.
+
+ssl\_dh\_params
+    Path to a file containing Diffie-Hellman parameters for DHE cipher
+    suites. Optional but recommended; without it, clients may fall back to
+    weak built-in DH groups.  Generate with::
+
+        openssl dhparam -out etc/dh.pem 2048
+
+ssl\_cipher\_list
+    Restrict which TLS cipher suites are accepted. The default built-in list
+    already prefers AEAD and forward-secrecy ciphers. Only set this for
+    specific compliance requirements.
+
+ssl\_client\_cert
+    A boolean (yes/no). When enabled, the server requests a TLS client
+    certificate from connecting users. Enables certificate fingerprint
+    authentication for operators (see ``m_certfp``). May cause issues with
+    some Chromium-based WebSocket clients. Default: no.
+
+ssld\_count
+    The number of ssld helper processes to start. Each ssld uses two file
+    descriptors per TLS connection. For busy servers, set to
+    (number of CPU cores - 1). Default: 1.
 
 admin {} block
 --------------
@@ -507,6 +546,9 @@ listen {} block
    listen {
     	host = "text";
     	port = number;
+    	sslport = number;
+    	wsock = boolean;
+    	defer_accept = boolean;
    };
 
 A listen block specifies what ports a server should listen on.
@@ -515,12 +557,32 @@ A listen block specifies what ports a server should listen on.
 
 host
     An optional host to bind to. Otherwise, the ircd will listen on all
-    available hosts.
+    available hosts. Applies only to the immediately following port/sslport
+    lines.
 
 port
-    A port to listen on. You can specify multiple ports via commas, and
-    define a range by seperating the start and end ports with two dots
-    (..).
+    A plain-text IRC port to listen on. You can specify multiple ports via
+    commas, and define a range by separating the start and end ports with
+    two dots (``..``). Example: ``port = 6665 .. 6669, 6697;``
+
+sslport
+    A TLS-wrapped IRC port. Requires ``ssl_cert`` (and optionally
+    ``ssl_private_key``) to be set in ``serverinfo {}``. Clients connect
+    directly over TLS; no STARTTLS negotiation is needed. Standard port is
+    6697.
+
+wsock
+    A boolean (yes/no). When enabled, the listener accepts WebSocket
+    connections instead of plain IRC connections. WebSocket clients must
+    use the ``IRC`` subprotocol. Both plain (``ws://``) and TLS
+    (``wss://`` via ``sslport``) WebSocket listeners are supported.
+    Default: no.
+
+defer\_accept
+    A boolean (yes/no). When enabled, the server waits for the client to
+    send the first data before completing the TCP accept. This reduces load
+    from scanners. Disable if you use software that expects the server to
+    speak first (e.g. BOPM). Default: yes.
 
 modules {} block
 ----------------
@@ -876,15 +938,14 @@ name
 Hostname resolution (DNS)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Charybdis uses solely DNS for all hostname/address lookups (no
+Ophion uses solely DNS for all hostname/address lookups (no
 ``/etc/hosts`` or anything else). The DNS servers are taken from
 ``/etc/resolv.conf``. If this file does not exist or no valid IP
-addresses are listed in it, the local host (``127.0.0.1``) is used. (Note
-that the latter part did not work in older versions of Charybdis.)
+addresses are listed in it, the local host (``127.0.0.1``) is used.
 
 IPv4 as well as IPv6 DNS servers are supported, but it is not possible
 to use both IPv4 and IPv6 in ``/etc/resolv.conf``.
 
 For both security and performance reasons, it is recommended that a
-caching nameserver such as BIND be run on the same machine as Charybdis
+caching nameserver such as BIND be run on the same machine as Ophion
 and that ``/etc/resolv.conf`` only list ``127.0.0.1``.

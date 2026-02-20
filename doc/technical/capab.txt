@@ -85,3 +85,7 @@ Module capabilities:
   draft/chathistory      Message history retrieval (m_chathistory).
   draft/event-playback   Event playback in history batches (m_chathistory).
   draft/multiline        Multi-line message batches (m_multiline).
+  ophion.dev/prop-notify Property change notifications (cap_prop_notify).
+                         When negotiated, the server sends PROP NOTIFY messages
+                         to the client whenever a channel or user property
+                         (via the IRCX PROP system) changes. Ophion-specific.

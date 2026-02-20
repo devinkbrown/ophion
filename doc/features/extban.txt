@@ -29,46 +29,130 @@ The ability to send to a channel is cached; this cache may not be updated
 if a condition for an extended ban changes. To work around this, part and
 rejoin the channel, or add or remove a +b, +Z or +e entry.
 
-The extban types that come with charybdis are:
+CORE EXTENDED BAN TYPES
+-----------------------
 
-extb_account.so
+These are loaded with the core modules and always available.
+
+extb_account.so  ($a)
 	$a
-matches all logged in users
+matches all logged-in users (users with a services account)
 	$a:<mask>
-matches users logged in with a username matching the mask (* and ? wildcards)
+matches users logged in with an account name matching the mask (* and ?
+wildcards). Invalid if mask is empty.
 
-extb_channel.so
+extb_group.so  ($g)
+	$g:<mask>
+matches users whose MEMBER-OF property contains the given string. Requires
+the m_ircx_prop_member_of module and services that set the MEMBER-OF user
+property. The match is a case-insensitive substring search. Invalid if mask
+is missing.
+
+extb_ssl.so  ($z)
+	$z
+matches users connected via SSL/TLS (umode +Z set). Covers both TLS port
+connections and STARTTLS upgrades. Can be used with all ban list types.
+
+EXTENSION EXTENDED BAN TYPES
+-----------------------------
+
+These are located in the extensions/ directory and must be loaded explicitly.
+
+extb_canjoin.so  ($j)
+	$j:<channel>
+matches users who are banned from the given channel (i.e. would not be
+allowed to join it). Useful for mirroring a ban list from one channel to
+another. Invalid if the given channel does not exist, if the ban would
+create a circular reference (same channel), or if the recursion depth limit
+is exceeded. Can only be used with +b and +Z.
+
+extb_channel.so  ($c)
 	$c:<channel>
-matches users who are on the given channel; this is only valid if the channel
-exists and is not +s or +p. (The ops of the channel the ban is on cannot
-necessarily see whether the user is in the target channel, so it should not
-influence whether they can join either.)
+matches users who are currently on the given channel. This is only valid if
+the channel exists and is not +s or +p. The ops of the channel the ban is
+on cannot necessarily see whether the user is in the target channel, so it
+should not influence whether they can join either. Can only be used with
++b and +Z.
 
-extb_oper.so
+extb_combi.so  ($& and $|)
+	$&<ban1>,<ban2>[,<ban3>...]
+matches users who match ALL of the specified bans (logical AND).
+	$|<ban1>,<ban2>[,<ban3>...]
+matches users who match ANY of the specified bans (logical OR).
+
+Combination bans allow complex matching rules. The sub-bans may be any valid
+extended ban including other combination bans (up to a nesting depth limit).
+The ircd will not allow adding a combination ban that references an unknown
+extban type.
+
+Example: $&$z,$a  -- matches SSL users who are also logged in.
+Example: $|$a:TrustedBot,$z  -- matches all SSL users or the TrustedBot account.
+Example: $~$&$a,$z  -- negation: not (logged-in AND SSL).
+
+extb_extgecos.so  ($x)
+	$x:<nick!user@host:gecos>
+matches users whose full nick!user@host:realname string matches the mask.
+Supports * and ? wildcards in any field. If the user has a dynamic spoof,
+the real hostname is also checked. Invalid if mask is missing. Can only be
+used with +b and +Z.
+
+extb_hostmask.so  ($m)
+	$m:<nick!user@host>
+matches users whose nick!user@host matches the given mask. Designed
+primarily for use inside combination extbans ($& / $|) as a named hostmask
+check. Supports * and ? wildcards.
+
+extb_oper.so  ($o)
 	$o
-matches opers (most useful with +I)
+matches IRC operators (umode +o set). Most useful with +I (invite exception)
+to allow opers into an invite-only channel, or with +e to exempt opers from
++b bans.
 
-extb_realname.so
+extb_realname.so  ($r)
 	$r:<mask>
-matches users with a realname (gecos) matching the mask (* and ? wildcards);
-this can only be used with +b and +Z
+matches users with a realname (gecos) matching the mask (* and ? wildcards).
+Invalid if mask is missing. Can only be used with +b and +Z.
 
-extb_server.so
+extb_server.so  ($s)
 	$s:<mask>
-matches users connected to a server matching the mask (* and ? wildcards);
-this can only be used with +b and +Z
+matches users connected to a server whose name matches the mask (* and ?
+wildcards). Invalid if mask is missing. Can only be used with +b and +Z.
 
-Comparisons:
+extb_usermode.so  ($u)
+	$u:<modes>
+matches users who have (or do not have) the specified user modes. The modes
+parameter uses standard +/- prefix notation: modes after + must be set,
+modes after - must not be set. If no sign is given, + is assumed. Invalid
+if modes parameter is missing or contains unknown modes.
 
-+b $~a is similar to +r but also prevents not logged in users talking or
-changing their nick while on channel.
+Examples:
+  $u:+Z        -- matches SSL users (same as $z if extb_ssl loaded)
+  $u:-r        -- matches users without an account (+r not set)
+  $u:+Zi       -- matches users who are SSL and invisible
 
-+iI $o is the same as +O in dreamforge-derived ircds.
+COMMON USE CASES
+----------------
 
-Creating extban types:
++b $~a      Prevents non-logged-in users from joining (like +r).  Also
+            prevents non-logged-in users already on channel from talking or
+            changing their nick.
+
++b $~z      Bans users who are not using SSL/TLS.  Usually combined with
+            chm_sslonly or used in exceptions (+e $z to allow SSL users).
+
++iI $o      Same as +O in dreamforge-derived ircds: makes channel oper-only
+            by requiring an invite, but exempting all opers.
+
++b $s:*     Ban all users from any server (extreme case; not usually useful).
+
++b $&$~a,$~z  Require both account and SSL: ban anyone without both.
+
+CREATING CUSTOM EXTBAN TYPES
+-----------------------------
 
 extban_table, indexed by the extban character, contains function pointers
 of the following type:
+
 typedef int (*ExtbanFunc)(const char *data, struct Client *client_p,
 		struct Channel *chptr, long mode_type);
 
@@ -89,4 +173,3 @@ EXTBAN_MATCH: the client_p matches the mask
 The function is called whenever a (local) client needs to be checked against
 a +bZeI entry of the given extban type, and whenever a local client tries to
 add such an entry. (Clients are allowed to add bans matching themselves.)
-
