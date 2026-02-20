@@ -2,8 +2,6 @@ extension_dir = module_dir / 'extensions'
 
 extensions = [
   'chantype_dummy',
-  'chm_operonly',
-  'chm_sslonly',
   'createauthonly',
   'createoperonly',
   'force_user_invis',
@@ -18,7 +16,6 @@ extensions = [
   'sno_globalnickchange',
   'sno_globaloper',
   'sno_whois',
-  'umode_noctcp',
   'm_adminwall',
   'm_echotags',
   'm_extendchans',
