@@ -327,7 +327,6 @@ try_connections(void *unused)
 			next = tmp_p->hold;
 	}
 
-	/* TODO: change this to set active flag to 0 when added to event! --Habeeb */
 	if(GlobalSetOptions.autoconn == 0)
 		return;
 
@@ -557,7 +556,7 @@ burst_modes_TS6(struct Client *client_p, struct Channel *chptr,
 	int mlen;
 	int cur_len;
 
-	cur_len = mlen = sprintf(buf, ":%s BMASK %ld %s %c :",
+	cur_len = mlen = snprintf(buf, sizeof(buf), ":%s BMASK %ld %s %c :",
 				    me.id, (long) chptr->channelts, chptr->chname, flag);
 	t = buf + mlen;
 
@@ -585,9 +584,9 @@ burst_modes_TS6(struct Client *client_p, struct Channel *chptr,
 		}
 
 		if (banptr->forward)
-			sprintf(t, "%s$%s ", banptr->banstr, banptr->forward);
+			snprintf(t, buf + BUFSIZE - t, "%s$%s ", banptr->banstr, banptr->forward);
 		else
-			sprintf(t, "%s ", banptr->banstr);
+			snprintf(t, buf + BUFSIZE - t, "%s ", banptr->banstr);
 		t += tlen;
 		cur_len += tlen;
 	}
@@ -697,7 +696,7 @@ burst_TS6(struct Client *client_p)
 		if(*chptr->chname != '#')
 			continue;
 
-		cur_len = mlen = sprintf(buf, ":%s SJOIN %ld %s %s :", me.id,
+		cur_len = mlen = snprintf(buf, sizeof(buf), ":%s SJOIN %ld %s %s :", me.id,
 				(long) chptr->channelts, chptr->chname,
 				channel_modes(chptr, client_p));
 
@@ -723,7 +722,7 @@ burst_TS6(struct Client *client_p)
 				t = buf + mlen;
 			}
 
-			sprintf(t, "%s%s ", find_channel_status(msptr, 1),
+			snprintf(t, buf + BUFSIZE - t, "%s%s ", find_channel_status(msptr, 1),
 				   use_id(msptr->client_p));
 
 			cur_len += tlen;
@@ -1190,7 +1189,7 @@ serv_connect(struct server_conf *server_p, struct Client *by)
 	if(by && IsClient(by))
 		rb_strlcpy(client_p->serv->by, by->name, sizeof(client_p->serv->by));
 	else
-		strcpy(client_p->serv->by, "AutoConn.");
+		rb_strlcpy(client_p->serv->by, "AutoConn.", sizeof(client_p->serv->by));
 
 	SetConnecting(client_p);
 	rb_dlinkAddTail(client_p, &client_p->node, &global_client_list);
@@ -1307,7 +1306,7 @@ serv_connect_callback(rb_fde_t *F, int status, void *data)
 			sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
 					"Error connecting to %s[%s]: %s",
 					client_p->name,
-					"255.255.255.255",
+					client_p->sockhost,
 					rb_errstr(status));
 			ilog(L_SERVER, "Error connecting to %s[%s]: %s",
 				client_p->name, client_p->sockhost,
@@ -1319,7 +1318,7 @@ serv_connect_callback(rb_fde_t *F, int status, void *data)
 			sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
 					"Error connecting to %s[%s]: %s (%s)",
 					client_p->name,
-					"255.255.255.255",
+					client_p->sockhost,
 					rb_errstr(status), errstr);
 			ilog(L_SERVER, "Error connecting to %s[%s]: %s (%s)",
 				client_p->name, client_p->sockhost,
