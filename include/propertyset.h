@@ -52,6 +52,7 @@ enum PropMatchRequest {
 struct PropMatch {
 	const char *target_name;
 	const char *key;
+	const char *value;		/* proposed value for SET operations; NULL otherwise */
 	void *target;
 	rb_dlink_list *prop_list;
 	enum PropMatchRequest match_request;

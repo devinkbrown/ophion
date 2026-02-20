@@ -62,7 +62,7 @@ mapi_hfn_list_av1 ircx_prop_entity_user_hfnlist[] = {
 };
 
 static bool
-can_write_to_user_property(struct Client *source_p, struct Client *target_p, const char *key)
+can_write_to_user_property(struct Client *source_p, struct Client *target_p, const char *key, const char *value)
 {
 	/* external writes should be done via TPROP */
 	if (source_p != target_p)
@@ -74,6 +74,7 @@ can_write_to_user_property(struct Client *source_p, struct Client *target_p, con
 	prop_activity.target = target_p->name;
 	prop_activity.prop_list = &target_p->user->prop_list;
 	prop_activity.key = key;
+	prop_activity.value = value;
 	prop_activity.alevel = CHFL_ADMIN;
 	prop_activity.approved = true;
 	prop_activity.target_ptr = target_p;
@@ -181,7 +182,7 @@ h_prop_match(void *vdata)
 
 	if (prop_match->match_request == PROP_WRITE)
 		prop_match->match_grant =
-			can_write_to_user_property(prop_match->source_p, target_p, prop_match->key) ? PROP_WRITE : PROP_READ;
+			can_write_to_user_property(prop_match->source_p, target_p, prop_match->key, prop_match->value) ? PROP_WRITE : PROP_READ;
 	else
 		prop_match->match_grant = prop_match->match_request;
 

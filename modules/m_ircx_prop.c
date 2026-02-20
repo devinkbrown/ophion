@@ -273,11 +273,18 @@ handle_prop_clear(const struct PropMatch *prop_match, struct Client *source_p)
 static void
 m_prop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
+	/* CLEAR (parc==3, parv[2]=="CLEAR") is a write operation even though
+	 * it uses the three-parameter form; set match_request accordingly so
+	 * h_prop_match grants write access to channel operators and other
+	 * authorised writers. */
+	bool is_clear = parc == 3 && parv[2] != NULL && !rb_strcasecmp(parv[2], "CLEAR");
+
 	struct PropMatch prop_match = {
 		.target_name = parv[1],
-		.match_request = parc <= 3 ? PROP_READ : PROP_WRITE,
+		.match_request = (parc > 3 || is_clear) ? PROP_WRITE : PROP_READ,
 		.source_p = source_p,
 		.key = parv[2],
+		.value = (parc >= 4) ? parv[3] : NULL,
 		.alevel = CHFL_PEON,
 	};
 
