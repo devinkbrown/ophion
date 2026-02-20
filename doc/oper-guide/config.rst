@@ -619,34 +619,9 @@ oper\_auto\_op
     Both flags work independently; you may enable either, both, or
     neither.
 
-**Per-oper channel level privileges**
-
-These privileges are placed in a ``privset {}`` block and referenced
-from ``operator {}`` blocks via the ``privset`` field:
-
-``oper:auto_op``
-    Auto-join channels with ``+o`` (channel-operator).  The operator's
-    channel access ceiling is ``CHFL_CHANOP`` — they can perform chanop
-    operations (kick regular users, set ``+o``/``+v``/``+b``, etc.) but
-    cannot grant or remove ``+q`` status, and cannot exceed chanop level
-    in god mode.
-
-``oper:auto_admin``
-    Auto-join channels with ``+q`` (channel-admin).  Full
-    ``CHFL_ADMIN`` access.  Overrides ``oper:auto_op``.  Not needed
-    if ``oper_auto_op = yes`` without a per-oper ``oper:auto_op``
-    override, since the default level is already ``+q``.
-
-Example privset configuration::
-
-    privset "chanop_oper" {
-        privs = oper:local_kill, oper:routing, oper:auto_op;
-    };
-
-    privset "server_admin" {
-        extends = "chanop_oper";
-        privs = oper:god, oper:auto_admin;
-    };
+See ``doc/oper-guide/oprivs.rst`` for the full list of per-oper channel
+level privileges (``oper:auto_op``, ``oper:auto_admin``, ``oper:god``,
+etc.) and example ``privset {}`` configurations.
 
 channel {} block
 ----------------
