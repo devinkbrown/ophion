@@ -1,16 +1,24 @@
-/* doc/ircd.conf.example - brief example configuration file
+/* doc/ircd.conf.example - minimal working example configuration
  *
  * Copyright (C) 2000-2002 Hybrid Development Team
  * Copyright (C) 2002-2005 ircd-ratbox development team
  * Copyright (C) 2005-2006 charybdis development team
+ * Copyright (C) 2024-2026 Ophion development team
  *
- * See reference.conf for more information.
+ * This is a concise working example.  See reference.conf for full
+ * documentation of every available directive.
  */
 
-/* Extensions */
+/* Extensions
+ *
+ * See reference.conf for descriptions of each extension.
+ */
+#loadmodule "extensions/chm_adminonly";
 #loadmodule "extensions/chm_nonotice";
+#loadmodule "extensions/chm_operonly";
 #loadmodule "extensions/chm_operonly_compat";
 #loadmodule "extensions/chm_quietunreg_compat";
+#loadmodule "extensions/chm_sslonly";
 #loadmodule "extensions/chm_sslonly_compat";
 #loadmodule "extensions/chm_operpeace";
 #loadmodule "extensions/createauthonly";
@@ -25,6 +33,7 @@
 #loadmodule "extensions/extb_server";
 #loadmodule "extensions/extb_ssl";
 #loadmodule "extensions/extb_usermode";
+#loadmodule "extensions/helpops";
 #loadmodule "extensions/hurt";
 #loadmodule "extensions/m_extendchans";
 #loadmodule "extensions/m_findforwards";
@@ -40,21 +49,21 @@
 #loadmodule "extensions/no_kill_services";
 
 /*
- * IP cloaking extensions: use ip_cloaking_4.0
- * if you're linking 3.2 and later, otherwise use
- * ip_cloaking, for compatibility with older 3.x
- * releases.
+ * IP cloaking extensions: ip_cloaking_4.0 provides umode +x (new-style),
+ * ip_cloaking provides umode +h (legacy, for compatibility with older servers).
+ * Use only one at a time.
  */
 
 #loadmodule "extensions/ip_cloaking_4.0";
 #loadmodule "extensions/ip_cloaking";
 
 serverinfo {
-	name = "hades.arpa";
-	/* sid is optional: omit to auto-derive from server name */
-	#sid = "42X";
-	description = "charybdis test server";
-	network_name = "StaticBox";
+	name = "irc.example.net";
+	/* sid is optional: omit to auto-derive from server name via FNV-1a hash.
+	 * Set explicitly when linking multiple servers to guarantee uniqueness. */
+	#sid = "0AB";
+	description = "Ophion IRC server";
+	network_name = "ExampleNet";
 
 	/* On multi-homed hosts you may need the following. These define
 	 * the addresses we connect from to other servers. */
@@ -106,9 +115,9 @@ serverinfo {
 };
 
 admin {
-	name = "Lazy admin (lazya)";
-	description = "StaticBox client server";
-	email = "nobody@127.0.0.1";
+	name = "Your Name";
+	description = "ExampleNet client server";
+	email = "admin@example.net";
 };
 
 log {
@@ -413,38 +422,20 @@ serverhide {
 	disable_hidden = no;
 };
 
-/* These are the DNSBL settings.
- * You can have multiple combinations of host and rejection reasons.
- * They are used in pairs of one host/rejection reason.
+/* dnsbl {}: DNS blacklist settings.
+ * Multiple dnsbl{} blocks are supported.
+ * Do not use e-mail spam DNSBLs (SPEWS, etc.) for IRC connections.
  *
- * The default settings should be adequate for most networks.
- *
- * It is not recommended to use DNSBL services designed for e-mail spam
- * prevention, such as SPEWS for blocking IRC connections.
- *
- * As of charybdis 2.2, you can do some keyword substitution on the rejection
- * reason. The available keyword substitutions are:
- *
+ * Keyword substitutions in reject_reason:
  *   ${ip}           - the user's IP
  *   ${host}         - the user's canonical hostname
  *   ${dnsbl-host}   - the dnsbl hostname the lookup was done against
  *   ${nick}         - the user's nickname
  *   ${network-name} - the name of the network
  *
- * As of charybdis 3.4, a type parameter is supported, which specifies the
- * address families the blacklist supports. IPv4 and IPv6 are supported.
- * IPv4 is currently the default as few blacklists support IPv6 operation
- * as of this writing.
- *
- * As of charybdis 3.5, a matches parameter is allowed; if omitted, any result
- * is considered a match. If included, a comma-separated list of *quoted*
- * strings is allowed to match queries. They may be of the format "0" to "255"
- * to match the final octet (e.g. 127.0.0.1) or "127.x.y.z" to explicitly match
- * an A record. The DNSBL match is only applied if it matches anything in the
- * list. You may freely mix full IP's and final octets.
- *
- * Consult your DNSBL provider for the meaning of these parameters; they
- * are usually used to denote different block reasons.
+ * type: address families to query — "ipv4", "ipv6", or both.
+ * matches: optional list of quoted result octets/IPs to filter on.
+ * See reference.conf for full details.
  */
 dnsbl {
 	host = "rbl.efnetrbl.org";
@@ -469,7 +460,7 @@ dnsbl {
  *
  * WARNING:
  * These settings are considered experimental. Only the most common proxy types
- * are checked for (Charybdis is immune from POST and GET proxies). If you are
+ * are checked for (Ophion is immune from POST and GET proxies). If you are
  * not comfortable with experimental code, do not use this feature.
  */
 #opm {
@@ -655,6 +646,16 @@ general {
 	certfp_method = spki_sha256;
 	hide_opers_in_whois = no;
 	tls_ciphers_oper_only = no;
+
+	/* oper_kick_protection: protect IRC operators from being kicked or
+	 * deopped by non-opers.  See reference.conf for full details.
+	 */
+	oper_kick_protection = no;
+
+	/* oper_auto_op: automatically give IRC operators chanop (or higher)
+	 * when they join a channel.  See reference.conf for full details.
+	 */
+	oper_auto_op = no;
 };
 
 modules {
