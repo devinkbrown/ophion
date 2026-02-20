@@ -1,4 +1,4 @@
-Technical Documentation for Charybdis
+Technical Documentation for Ophion
 
 capab.txt                 - Description of server capabilities
 cluster.txt               - Technical description of the cluster system

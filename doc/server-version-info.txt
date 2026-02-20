@@ -4,12 +4,13 @@
    Copyright (c) 2001 by ircd-hybrid team
    Copyright (c) 2002 ircd-ratbox development team
    Copyright (c) 2016 Charybdis development team
+   Copyright (c) 2024-2026 Ophion development team
 
      ----------------------------------------------------------------------
 
    When you type /version, you will often see something like this:
 
- charybdis-3.5.0-rc1(20151011-d09bde1). joestar.interlinked.me :eIKMpSZ6 TS6ow 1US
+ ophion-0.8(20260220-78ab2a2). irc.example.net :eIKMp6 TS6ow 9WO
 
    Ever wondered what those funny chars mean after the version number? Well
    here they are:
