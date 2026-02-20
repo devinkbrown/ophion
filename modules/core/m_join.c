@@ -563,7 +563,7 @@ ms_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 				     (long) oldts, (long) newts);
 		/* Update capitalization in channel name, this makes the
 		 * capitalization timestamped like modes are -- jilles */
-		strcpy(chptr->chname, parv[2]);
+		rb_strlcpy(chptr->chname, parv[2], sizeof(chptr->chname));
 		if(*modebuf != '\0')
 			sendto_channel_local(source_p->servptr, ALL_MEMBERS, chptr,
 					     ":%s MODE %s %s %s",
@@ -877,7 +877,7 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 				     (long) oldts, (long) newts);
 		/* Update capitalization in channel name, this makes the
 		 * capitalization timestamped like modes are -- jilles */
-		strcpy(chptr->chname, parv[2]);
+		rb_strlcpy(chptr->chname, parv[2], sizeof(chptr->chname));
 
 		/* since we're dropping our modes, we want to clear the mlock as well. --nenolod */
 		set_channel_mlock(client_p, source_p, chptr, NULL, false);
@@ -894,7 +894,7 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	else
 		modes = empty_modes;
 
-	mlen_uid = sprintf(buf_uid, ":%s SJOIN %ld %s %s :",
+	mlen_uid = snprintf(buf_uid, sizeof(buf_uid), ":%s SJOIN %ld %s %s :",
 			      use_id(source_p), (long) chptr->channelts, parv[2], modes);
 	ptr_uid = buf_uid + mlen_uid;
 
@@ -975,7 +975,7 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 		}
 
 		/* copy the nick to the two buffers */
-		len = sprintf(ptr_uid, "%s ", use_id(target_p));
+		len = snprintf(ptr_uid, buf_uid + BUFSIZE - ptr_uid, "%s ", use_id(target_p));
 		ptr_uid += len;
 		len_uid += len;
 
@@ -1206,7 +1206,7 @@ set_final_mode(char *mbuf, char *parabuf, struct Mode *mode, struct Mode *oldmod
 			dir = MODE_DEL;
 		}
 		*mbuf++ = 'k';
-		len = sprintf(pbuf, "%s ", oldmode->key);
+		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%s ", oldmode->key);
 		pbuf += len;
 	}
 	if(oldmode->join_num && !mode->join_num)
@@ -1235,7 +1235,7 @@ set_final_mode(char *mbuf, char *parabuf, struct Mode *mode, struct Mode *oldmod
 			dir = MODE_ADD;
 		}
 		*mbuf++ = 'l';
-		len = sprintf(pbuf, "%d ", mode->limit);
+		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%d ", mode->limit);
 		pbuf += len;
 	}
 	if(mode->key[0] && strcmp(oldmode->key, mode->key))
@@ -1246,7 +1246,7 @@ set_final_mode(char *mbuf, char *parabuf, struct Mode *mode, struct Mode *oldmod
 			dir = MODE_ADD;
 		}
 		*mbuf++ = 'k';
-		len = sprintf(pbuf, "%s ", mode->key);
+		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%s ", mode->key);
 		pbuf += len;
 	}
 	if(mode->join_num && (oldmode->join_num != mode->join_num || oldmode->join_time != mode->join_time))
@@ -1257,7 +1257,7 @@ set_final_mode(char *mbuf, char *parabuf, struct Mode *mode, struct Mode *oldmod
 			dir = MODE_ADD;
 		}
 		*mbuf++ = 'j';
-		len = sprintf(pbuf, "%d:%d ", mode->join_num, mode->join_time);
+		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%d:%d ", mode->join_num, mode->join_time);
 		pbuf += len;
 	}
 	if(mode->forward[0] && strcmp(oldmode->forward, mode->forward) &&
@@ -1269,7 +1269,7 @@ set_final_mode(char *mbuf, char *parabuf, struct Mode *mode, struct Mode *oldmod
 			dir = MODE_ADD;
 		}
 		*mbuf++ = 'y';
-		len = sprintf(pbuf, "%s ", mode->forward);
+		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%s ", mode->forward);
 		pbuf += len;
 	}
 	*mbuf = '\0';
@@ -1431,7 +1431,7 @@ remove_ban_list(struct Channel *chptr, struct Client *source_p,
 
 	pbuf = lparabuf;
 
-	cur_len = mlen = sprintf(lmodebuf, ":%s MODE %s -", source_p->name, chptr->chname);
+	cur_len = mlen = snprintf(lmodebuf, sizeof(lmodebuf), ":%s MODE %s -", source_p->name, chptr->chname);
 	mbuf = lmodebuf + mlen;
 
 	RB_DLINK_FOREACH_SAFE(ptr, next_ptr, list->head)
@@ -1459,9 +1459,9 @@ remove_ban_list(struct Channel *chptr, struct Client *source_p,
 		*mbuf++ = c;
 		cur_len += plen;
 		if (banptr->forward)
-			pbuf += sprintf(pbuf, "%s$%s ", banptr->banstr, banptr->forward);
+			pbuf += snprintf(pbuf, lparabuf + BUFSIZE - pbuf, "%s$%s ", banptr->banstr, banptr->forward);
 		else
-			pbuf += sprintf(pbuf, "%s ", banptr->banstr);
+			pbuf += snprintf(pbuf, lparabuf + BUFSIZE - pbuf, "%s ", banptr->banstr);
 		count++;
 
 		free_ban(banptr);
