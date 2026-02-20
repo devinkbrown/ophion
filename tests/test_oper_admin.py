@@ -47,7 +47,17 @@ SERVER_PORT = 16667
 OPER_NAME = "testoper"
 OPER_PASS = "testpass123"
 IRCD_CONF = "/usr/local/etc/ircd.conf"
-IRCD_PID = 4182  # PID of the running ircd process
+IRCD_PID_FILE = "/usr/local/etc/ircd.pid"
+
+def _read_ircd_pid():
+    """Read the ircd PID from the pid file, falling back to a hardcoded value."""
+    try:
+        with open(IRCD_PID_FILE) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 4182  # fallback
+
+IRCD_PID = _read_ircd_pid()
 
 # Numeric constants (from include/numeric.h)
 RPL_YOUREOPER       = "381"

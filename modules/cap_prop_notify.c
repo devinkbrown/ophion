@@ -75,7 +75,14 @@ cap_prop_notify_change(hook_data_prop_activity *data)
 		struct Channel *chptr = (void *) data->target_ptr;
 		struct Client *client = (void *) data->client;
 
-		sendto_channel_local_with_capability(client, 0, CLICAP_PROP_NOTIFY, 0, chptr,
+		/*
+		 * Respect the visibility hierarchy: if the prop change set
+		 * min_broadcast_alevel, only send to members at that level or above.
+		 * For example, OWNERKEY changes are only sent to channel owners
+		 * (CHFL_ADMIN) to avoid leaking the key to regular members.
+		 */
+		sendto_channel_local_with_capability(client, data->min_broadcast_alevel,
+			CLICAP_PROP_NOTIFY, 0, chptr,
 			":%s PROP %s %s :%s", prefix, data->target, data->key, data->value);
 	}
 	else if (strncmp(data->target, "account:", 8))
