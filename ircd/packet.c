@@ -127,8 +127,11 @@ parse_client_queued(struct Client *client_p)
 			if(IsAnyDead(client_p))
 				return;
 
-			/* Client just completed registration — switch to the
-			 * registered-client path on the next recalc tick. */
+			/* Client just completed registration.  Reset the counter
+			 * and fall through to the registered-client path below so
+			 * the token-bucket clamp runs in this same call (matching
+			 * the original fall-through behaviour and ensuring
+			 * sent_parsed is primed correctly for the next read). */
 			if(!IsUnknown(client_p))
 			{
 				client_p->localClient->sent_parsed = 0;
@@ -136,8 +139,13 @@ parse_client_queued(struct Client *client_p)
 			}
 		}
 
-		clamp_sent_parsed(client_p, limit);
-		return;
+		/* Still pre-registered: clamp and exit. */
+		if(IsUnknown(client_p))
+		{
+			clamp_sent_parsed(client_p, limit);
+			return;
+		}
+		/* Otherwise fall through to the registered-client path. */
 	}
 
 	/* --- servers and flood-exempt clients: unlimited --- */
@@ -285,9 +293,11 @@ read_packet(rb_fde_t *F, void *data)
 			return;
 		}
 
-		/* Update the last-seen timestamp and clear the ping-sent flag. */
-		if(client_p->localClient->lasttime < rb_current_time())
-			client_p->localClient->lasttime = rb_current_time();
+		/* Update the last-seen timestamp and clear the ping-sent flag.
+		 * Cache the clock value so we only read it once per iteration. */
+		time_t now = rb_current_time();
+		if(client_p->localClient->lasttime < now)
+			client_p->localClient->lasttime = now;
 		client_p->flags &= ~FLAGS_PINGSENT;
 
 		/* Binary mode for clients still in handshake/unknown state:
