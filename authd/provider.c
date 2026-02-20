@@ -19,7 +19,7 @@
  */
 
 /* The basic design here is to have "authentication providers" that do things
- * like query ident and DNSBLs and even open proxies.
+ * like query DNSBLs and even open proxies.
  *
  * Providers are registered in the auth_providers linked list. It is planned to
  * use a bitmap to store provider ID's later.
@@ -92,11 +92,11 @@ init_providers(void)
 	auth_clients = rb_dictionary_create("pending auth clients", rb_uint32cmp);
 	timeout_ev = rb_event_addish("provider_timeout_event", provider_timeout_event, NULL, 1);
 
-	/* FIXME must be started before rdns/ident to receive completion notification from them */
+	/* Must be started before rdns to receive completion notification from it */
 	load_provider(&dnsbl_provider);
 	load_provider(&opm_provider);
 
-	/* FIXME must be started after dnsbl/opm in case of early completion notifications */
+	/* Must be started after dnsbl/opm in case of early completion notifications */
 	load_provider(&rdns_provider);
 }
 

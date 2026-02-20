@@ -28,87 +28,156 @@
 
 #define SELF_PID (rdns_provider.id)
 
+/* ---------- result cache ------------------------------------------------
+ * Keyed by IP string.  Entries survive RDNS_CACHE_TTL seconds; excess
+ * entries are evicted LRU-style.  A hostname of "" means "use the raw IP".
+ * The cache is written on EVERY exit path (success, failure, timeout) so
+ * that a second connection from the same IP is never blocked waiting for
+ * DNS. */
+
+#define RDNS_CACHE_TTL  300
+#define RDNS_CACHE_MAX  4096
+
+struct rdns_cache_entry
+{
+	char ip[HOSTIPLEN + 1];		/* dictionary key — stable pointer */
+	char hostname[HOSTLEN + 1];	/* "" → use IP */
+	time_t expires;
+	rb_dlink_node node;
+};
+
+static rb_dictionary *rdns_cache;
+static rb_dlink_list  rdns_cache_list;
+
 struct user_query
 {
-	struct dns_query *query;		/* Pending DNS query */
+	struct dns_query *query;
 };
-
-/* Goinked from old s_auth.c --Elizabeth */
-static const char *messages[] =
-{
-	"*** Looking up your hostname...",
-	"*** Couldn't look up your hostname",
-	"*** Your hostname is too long, ignoring hostname",
-};
-
-typedef enum
-{
-	REPORT_LOOKUP,
-	REPORT_FAIL,
-	REPORT_TOOLONG,
-} dns_message;
-
-static void client_fail(struct auth_client *auth, dns_message message);
-static void client_success(struct auth_client *auth);
-static void dns_answer_callback(const char *res, bool status, query_type type, void *data);
 
 static int rdns_timeout = RDNS_TIMEOUT_DEFAULT;
 static bool rdns_enabled = true;
 
+/* ---------- cache -------------------------------------------------------- */
+
+static struct rdns_cache_entry *
+rdns_cache_get(const char *ip)
+{
+	struct rdns_cache_entry *e = rb_dictionary_retrieve(rdns_cache, ip);
+
+	if(e == NULL)
+		return NULL;
+
+	if(e->expires < rb_current_time())
+	{
+		rb_dlinkDelete(&e->node, &rdns_cache_list);
+		rb_dictionary_delete(rdns_cache, e->ip);
+		rb_free(e);
+		return NULL;
+	}
+
+	return e;
+}
+
+/* Write (or update) a cache entry.  hostname=NULL → negative (use IP). */
 static void
-dns_answer_callback(const char *res, bool status, query_type type, void *data)
+rdns_cache_put(const char *ip, const char *hostname)
+{
+	struct rdns_cache_entry *e;
+
+	e = rb_dictionary_retrieve(rdns_cache, ip);
+	if(e != NULL)
+	{
+		rb_dlinkDelete(&e->node, &rdns_cache_list);
+		rb_dictionary_delete(rdns_cache, e->ip);
+		rb_free(e);
+	}
+	else if(rb_dlink_list_length(&rdns_cache_list) >= RDNS_CACHE_MAX)
+	{
+		struct rdns_cache_entry *oldest = rdns_cache_list.head->data;
+		rb_dlinkDelete(&oldest->node, &rdns_cache_list);
+		rb_dictionary_delete(rdns_cache, oldest->ip);
+		rb_free(oldest);
+	}
+
+	e = rb_malloc(sizeof(*e));
+	rb_strlcpy(e->ip, ip, sizeof(e->ip));
+	rb_strlcpy(e->hostname, hostname != NULL ? hostname : "", sizeof(e->hostname));
+	e->expires = rb_current_time() + RDNS_CACHE_TTL;
+
+	rb_dictionary_add(rdns_cache, e->ip, e);
+	rb_dlinkAddTail(e, &e->node, &rdns_cache_list);
+}
+
+/* ---------- resolution finish ------------------------------------------- */
+
+/* Finish with a known good hostname (may be cached or freshly resolved). */
+static void
+rdns_finish_host(struct auth_client *auth, const char *hostname)
+{
+	rb_strlcpy(auth->hostname, hostname, sizeof(auth->hostname));
+	notice_client(auth->cid, "*** Found your hostname: %s", hostname);
+}
+
+/* Complete the provider, optionally freeing a pending query. */
+static void
+rdns_finish(struct auth_client *auth, struct user_query *query)
+{
+	if(query != NULL)
+	{
+		cancel_query(query->query);
+		rb_free(query);
+		set_provider_data(auth, SELF_PID, NULL);
+		set_provider_timeout_absolute(auth, SELF_PID, 0);
+		auth_client_unref(auth);	/* paired with ref in rdns_start */
+	}
+
+	provider_done(auth, SELF_PID);
+}
+
+/* DNS answer callback — called by the resolver for both hits and misses. */
+static void
+dns_answer_callback(const char *res, bool status __unused, query_type type __unused, void *data)
 {
 	struct auth_client *auth = data;
+	struct user_query *query = get_provider_data(auth, SELF_PID);
 
-	if(res == NULL || status == false)
-		client_fail(auth, REPORT_FAIL);
-	else if(strlen(res) > HOSTLEN)
-		client_fail(auth, REPORT_TOOLONG);
+	if(res != NULL && *res != '\0' && strlen(res) <= HOSTLEN)
+	{
+		/* Success: cache and apply the hostname. */
+		rdns_cache_put(auth->c_ip, res);
+		rdns_finish_host(auth, res);
+	}
 	else
 	{
-		rb_strlcpy(auth->hostname, res, HOSTLEN + 1);
-		client_success(auth);
+		/* Failure / fcrdns mismatch / name too long: cache negative,
+		 * hostname stays as the raw IP (set in rdns_start). */
+		rdns_cache_put(auth->c_ip, NULL);
 	}
+
+	rdns_finish(auth, query);
 }
 
+/* Timeout or cancel: cache a negative entry so the next connection from
+ * this IP skips the wait entirely. */
 static void
-client_fail(struct auth_client *auth, dns_message report)
+rdns_cancel(struct auth_client *auth)
 {
 	struct user_query *query = get_provider_data(auth, SELF_PID);
 
-	lrb_assert(query != NULL);
+	if(query == NULL)
+		return;
 
-	rb_strlcpy(auth->hostname, "*", sizeof(auth->hostname));
-
-	notice_client(auth->cid, messages[report]);
-	cancel_query(query->query);
-
-	rb_free(query);
-
-	set_provider_data(auth, SELF_PID, NULL);
-	set_provider_timeout_absolute(auth, SELF_PID, 0);
-	provider_done(auth, SELF_PID);
-
-	auth_client_unref(auth);
+	rdns_cache_put(auth->c_ip, NULL);
+	rdns_finish(auth, query);
 }
 
-static void
-client_success(struct auth_client *auth)
+/* ---------- provider lifecycle ------------------------------------------ */
+
+static bool
+rdns_init(void)
 {
-	struct user_query *query = get_provider_data(auth, SELF_PID);
-
-	lrb_assert(query != NULL);
-
-	notice_client(auth->cid, "*** Found your hostname: %s", auth->hostname);
-	cancel_query(query->query);
-
-	rb_free(query);
-
-	set_provider_data(auth, SELF_PID, NULL);
-	set_provider_timeout_absolute(auth, SELF_PID, 0);
-	provider_done(auth, SELF_PID);
-
-	auth_client_unref(auth);
+	rdns_cache = rb_dictionary_create("rdns cache", strcasecmp);
+	return true;
 }
 
 static void
@@ -116,63 +185,73 @@ rdns_destroy(void)
 {
 	struct auth_client *auth;
 	rb_dictionary_iter iter;
+	rb_dlink_node *ptr, *nptr;
 
 	RB_DICTIONARY_FOREACH(auth, &iter, auth_clients)
 	{
-		if(get_provider_data(auth, SELF_PID) != NULL)
-			client_fail(auth, REPORT_FAIL);
-		/* auth is now invalid as we have no reference */
+		rdns_cancel(auth);
 	}
+
+	RB_DLINK_FOREACH_SAFE(ptr, nptr, rdns_cache_list.head)
+	{
+		struct rdns_cache_entry *e = ptr->data;
+		rb_dlinkDelete(ptr, &rdns_cache_list);
+		rb_free(e);
+	}
+
+	rb_dictionary_destroy(rdns_cache, NULL, NULL);
+	rdns_cache = NULL;
 }
 
 static bool
 rdns_start(struct auth_client *auth)
 {
+	/* Default hostname to the client IP; a successful lookup overrides it. */
+	rb_strlcpy(auth->hostname, auth->c_ip, sizeof(auth->hostname));
+
 	if(!rdns_enabled)
 	{
-		/* Skip rDNS — hostname stays as IP address */
 		provider_done(auth, SELF_PID);
 		return true;
 	}
 
-	struct user_query *query = rb_malloc(sizeof(struct user_query));
+	/* Fast path: serve from cache (hits and negative entries alike). */
+	const struct rdns_cache_entry *cached = rdns_cache_get(auth->c_ip);
+	if(cached != NULL)
+	{
+		if(cached->hostname[0] != '\0')
+			rdns_finish_host(auth, cached->hostname);
+		provider_done(auth, SELF_PID);
+		return true;
+	}
 
+	/* Slow path: issue the DNS lookup. */
+	struct user_query *query = rb_malloc(sizeof(*query));
 	auth_client_ref(auth);
-
 	set_provider_data(auth, SELF_PID, query);
 	set_provider_timeout_relative(auth, SELF_PID, rdns_timeout);
-
 	query->query = lookup_hostname(auth->c_ip, dns_answer_callback, auth);
-
-	notice_client(auth->cid, messages[REPORT_LOOKUP]);
 	return true;
 }
 
-static void
-rdns_cancel(struct auth_client *auth)
-{
-	struct user_query *query = get_provider_data(auth, SELF_PID);
-
-	if(query != NULL)
-		client_fail(auth, REPORT_FAIL);
-}
+/* ---------- config handlers --------------------------------------------- */
 
 static void
-add_conf_dns_timeout(const char *key, int parc, const char **parv)
+add_conf_dns_timeout(const char *key __unused, int parc __unused, const char **parv)
 {
-	int timeout = atoi(parv[0]);
+	int t = atoi(parv[0]);
 
-	if(timeout < 0)
+	if(t < 0)
 	{
-		warn_opers(L_CRIT, "rDNS: DNS timeout < 0 (value: %d)", timeout);
+		warn_opers(L_CRIT, "rDNS: DNS timeout < 0 (value: %d)", t);
 		exit(EX_PROVIDER_ERROR);
 	}
 
-	rdns_timeout = timeout;
+	rdns_timeout = t;
 }
 
 static void
-set_rdns_enabled(const char *key, int parc, const char **parv)
+set_rdns_enabled(const char *key __unused, int parc __unused, const char **parv)
 {
 	rdns_enabled = atoi(parv[0]) != 0;
 }
@@ -186,11 +265,12 @@ struct auth_opts_handler rdns_options[] =
 
 struct auth_provider rdns_provider =
 {
-	.name = "rdns",
-	.letter = 'R',
+	.name    = "rdns",
+	.letter  = 'R',
+	.init    = rdns_init,
 	.destroy = rdns_destroy,
-	.start = rdns_start,
-	.cancel = rdns_cancel,
+	.start   = rdns_start,
+	.cancel  = rdns_cancel,
 	.timeout = rdns_cancel,
 	.opt_handlers = rdns_options,
 };

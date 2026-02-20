@@ -76,9 +76,9 @@ extern const char *ircd_paths[IRCD_PATH_COUNT];
 #define CLIENT_FLOOD_MIN		10
 #define LINKS_DELAY_DEFAULT		300
 #define MAX_TARGETS_DEFAULT		4		/* default for max_targets */
-#define DNSBL_TIMEOUT_DEFAULT		5
-#define OPM_TIMEOUT_DEFAULT		5
-#define RDNS_TIMEOUT_DEFAULT		3
+#define DNSBL_TIMEOUT_DEFAULT		3
+#define OPM_TIMEOUT_DEFAULT		3
+#define RDNS_TIMEOUT_DEFAULT		2
 #define MIN_JOIN_LEAVE_TIME		60
 #define MAX_JOIN_LEAVE_COUNT		25
 #define OPER_SPAM_COUNTDOWN		5

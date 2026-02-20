@@ -314,10 +314,6 @@ init_authd(void)
 void
 configure_authd(void)
 {
-	/* Timeouts */
-	set_authd_timeout("rdns_timeout", ConfigFileEntry.connect_timeout);
-	set_authd_timeout("rbl_timeout", ConfigFileEntry.connect_timeout);
-
 	/* rDNS */
 	rdns_check_enable(ConfigFileEntry.rdns_lookups);
 
