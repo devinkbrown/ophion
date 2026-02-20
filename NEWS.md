@@ -1,7 +1,46 @@
 # News
 
-This is charybdis 4.1.3-dev, Copyright (c) 2005-2018 Charybdis team.
+Ophion is a fork of charybdis. Copyright (c) 2024-2026 Ophion development team.
 See LICENSE for licensing details (GPL v2).
+
+## Ophion
+
+### Ophion-specific additions (since charybdis fork)
+
+#### user
+- `oper_kick_protection`: IRC operators cannot be kicked or deopped by non-opers.
+- `oper_auto_op`: IRC operators are automatically given chanop (+q) or higher on join.
+  Configurable per-oper via `oper:auto_op` / `oper:auto_admin` privset privileges.
+- God mode (`+G`) via `modules/m_ircx_oper_godmode.c`: full channel override for
+  opers with the `oper:god` privilege.
+- `rdns_lookups = yes|no`: reverse-DNS lookups can be disabled for fast deployments.
+- SID auto-generation: if `sid` is omitted from `serverinfo{}`, a unique SID is
+  derived deterministically from the server name via FNV-1a hash, logged at startup.
+- Zero-config server linking via SVSSID collision negotiation.
+- WebSocket transport support via `listen { wsock = yes; }`.
+
+#### IRCX channel modes (m_ircx_modes module)
+- `+a` AUTHONLY — only services-authenticated users may join.
+- `+d` CLONEABLE — channel creates numbered clones when full.
+- `+f` NOFORMAT — raw text only; clients should not apply formatting.
+- `+x` NOEXTERN — stricter no-external-messages than `+n`.
+- `+P` PERMANENT — channel persists with no members (replaces charybdis +P semantics).
+
+#### conf
+- `client_flood_burst_max`, `client_flood_burst_rate`, `client_flood_message_time`,
+  `client_flood_message_num`: fine-grained flood control knobs.
+- `post_registration_delay`: delay before processing commands from newly registered users.
+- `dnsbl {}` block name (replaces old `blacklist {}` block name).
+- `certfp_method = spki_sha256` (or spki_sha512): SPKI-based certificate fingerprints
+  that survive certificate renewal.
+
+#### code
+- `make_conf(void)`, `temp_conf_bucket()` helper in `ircd/s_conf.c`.
+- Removed all static-local buffers in `modules/core/m_join.c`.
+- `set_final_mode` uses `SETDIR` macro; `remove_our_modes` uses `mode_strip_table`.
+- `parse_sjoin_modes` bounds check ordering fixed.
+
+---
 
 ## charybdis-4.1.2
 

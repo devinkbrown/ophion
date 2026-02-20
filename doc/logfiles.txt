@@ -1,4 +1,4 @@
-Charybdis logfiles - Lee H <lee -at- leeh.co.uk>
+Ophion logfiles (originally written by Lee H <lee -at- leeh.co.uk> for charybdis)
 ---------------------------
 
 fname_killlog
