@@ -46,11 +46,13 @@ static const char ircx_prop_ownerkey_desc[] = "Provides support for the OWNERKEY
 
 static void h_prop_channel_join(void *);
 static void h_prop_authorize(void *);
+static void h_prop_change_ownerkey(void *);
 
 mapi_hfn_list_av1 ircx_prop_ownerkey_hfnlist[] = {
 	{ "channel_join", (hookfn) h_prop_channel_join },
 	{ "prop_show", (hookfn) h_prop_authorize },
 	{ "prop_chan_write", (hookfn) h_prop_authorize },
+	{ "prop_change", (hookfn) h_prop_change_ownerkey },
 	{ NULL, NULL }
 };
 
@@ -93,4 +95,27 @@ h_prop_authorize(void *vdata)
 
 	if (!rb_strcasecmp(data->key, "OWNERKEY"))
 		data->approved = data->alevel >= CHFL_ADMIN;
+}
+
+/*
+ * h_prop_change_ownerkey - restrict broadcast of OWNERKEY prop changes
+ *
+ * OWNERKEY is a sensitive property (it is effectively a channel password
+ * granting owner status).  Only channel owners/admins should receive
+ * prop_change notifications for it; broadcasting it to all members would
+ * leak the key to regular users via the ophion.dev/prop-notify capability.
+ *
+ * Set min_broadcast_alevel = CHFL_ADMIN so that cap_prop_notify only
+ * delivers the change notification to members with admin (owner) level.
+ */
+static void
+h_prop_change_ownerkey(void *vdata)
+{
+	hook_data_prop_activity *data = vdata;
+
+	if (!IsChanPrefix(*data->target))
+		return;
+
+	if (!rb_strcasecmp(data->key, "OWNERKEY"))
+		data->min_broadcast_alevel = CHFL_ADMIN;
 }

@@ -158,7 +158,8 @@ typedef int (*ExtbanFunc)(const char *data, struct Client *client_p,
 #define CHFL_PEON		0x0000	/* normal member of channel */
 #define CHFL_VOICE      	0x0001	/* the power to speak */
 #define CHFL_CHANOP	     	0x0002	/* Channel operator */
-#define CHFL_ADMIN		0x0004	/* channel admin */
+#define CHFL_ADMIN		0x0004	/* channel owner (IRCX ~, legacy name kept for compatibility) */
+#define CHFL_OWNER		CHFL_ADMIN	/* preferred alias for channel owner */
 
 #define CHFL_BANNED		0x0008  /* cached as banned */
 #define ONLY_SERVERS		0x0020
@@ -168,6 +169,7 @@ typedef int (*ExtbanFunc)(const char *data, struct Client *client_p,
 #define ONLY_CHANOPSVOICED	(ONLY_CHANOPS|CHFL_VOICE)
 
 #define is_admin(x)	((x) && (x)->flags & CHFL_ADMIN)
+#define is_owner(x)	((x) && (x)->flags & CHFL_OWNER)	/* preferred alias for is_admin */
 #define is_chanop(x)	((x) && (x)->flags & CHFL_CHANOP)
 #define is_voiced(x)	((x) && (x)->flags & CHFL_VOICE)
 #define is_chanop_voiced(x) ((x) && (x)->flags & (CHFL_CHANOP|CHFL_VOICE|CHFL_ADMIN))

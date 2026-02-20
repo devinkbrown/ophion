@@ -1082,13 +1082,26 @@ chm_admin(struct Client *source_p, struct Channel *chptr,
 		if(targ_p == source_p && mstptr->flags & CHFL_ADMIN)
 			return;
 
+		/* IRCX: +q (owner) implies +o (chanop); track prior chanop state */
+		bool was_chanop = !!(mstptr->flags & CHFL_CHANOP);
+
 		mode_changes[mode_count].letter = c;
 		mode_changes[mode_count].dir = MODE_ADD;
 		mode_changes[mode_count].mems = ALL_MEMBERS;
 		mode_changes[mode_count].id = targ_p->id;
 		mode_changes[mode_count++].arg = targ_p->name;
 
-		mstptr->flags |= CHFL_ADMIN;
+		mstptr->flags |= CHFL_ADMIN | CHFL_CHANOP;
+
+		/* +o companion: emit separately if target wasn't already a chanop */
+		if(!was_chanop)
+		{
+			mode_changes[mode_count].letter = 'o';
+			mode_changes[mode_count].dir = MODE_ADD;
+			mode_changes[mode_count].mems = ALL_MEMBERS;
+			mode_changes[mode_count].id = targ_p->id;
+			mode_changes[mode_count++].arg = targ_p->name;
+		}
 	}
 	else
 	{
@@ -1124,6 +1137,19 @@ chm_admin(struct Client *source_p, struct Channel *chptr,
 		mode_changes[mode_count++].arg = targ_p->name;
 
 		mstptr->flags &= ~CHFL_ADMIN;
+
+		/*
+		 * IRCX: -q (remove owner) demotes to chanop level (+o).
+		 * Emit an explicit +o so the demotion is visible and the
+		 * target retains operator status.
+		 */
+		mstptr->flags |= CHFL_CHANOP;
+
+		mode_changes[mode_count].letter = 'o';
+		mode_changes[mode_count].dir = MODE_ADD;
+		mode_changes[mode_count].mems = ALL_MEMBERS;
+		mode_changes[mode_count].id = targ_p->id;
+		mode_changes[mode_count++].arg = targ_p->name;
 	}
 }
 
@@ -1219,6 +1245,21 @@ chm_op(struct Client *source_p, struct Channel *chptr,
 		mode_changes[mode_count++].arg = targ_p->name;
 
 		mstptr->flags &= ~CHFL_CHANOP;
+
+		/*
+		 * IRCX: -o on an owner (-q) strips ownership too.
+		 * Owner status requires chanop; removing chanop removes ownership.
+		 */
+		if(mstptr->flags & CHFL_ADMIN)
+		{
+			mode_changes[mode_count].letter = 'q';
+			mode_changes[mode_count].dir = MODE_DEL;
+			mode_changes[mode_count].mems = ALL_MEMBERS;
+			mode_changes[mode_count].id = targ_p->id;
+			mode_changes[mode_count++].arg = targ_p->name;
+
+			mstptr->flags &= ~CHFL_ADMIN;
+		}
 	}
 }
 

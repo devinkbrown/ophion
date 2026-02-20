@@ -110,6 +110,8 @@ typedef struct
 	const char *value;
 	int approved;
 	const void *target_ptr;
+	int min_broadcast_alevel;	/* minimum channel membership level to receive prop_change notifications;
+					 * 0 (CHFL_PEON) = all members; CHFL_CHANOP = ops+; CHFL_ADMIN = owners only */
 } hook_data_prop_activity;
 
 typedef struct
