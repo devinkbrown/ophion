@@ -2822,6 +2822,33 @@ static struct ConfEntry conf_channel_table[] =
 	{ "\0", 		0, 	  NULL, 0, NULL }
 };
 
+static struct ConfEntry conf_features_table[] =
+{
+	/* channel modes */
+	{ "channel_nocolour",	CF_YESNO, NULL, 0, &ConfigFeatures.channel_nocolour	},
+	{ "channel_noctcp",	CF_YESNO, NULL, 0, &ConfigFeatures.channel_noctcp	},
+	{ "channel_operonly",	CF_YESNO, NULL, 0, &ConfigFeatures.channel_operonly	},
+	{ "channel_sslonly",	CF_YESNO, NULL, 0, &ConfigFeatures.channel_sslonly	},
+	/* user modes */
+	{ "umode_callerid",	CF_YESNO, NULL, 0, &ConfigFeatures.umode_callerid	},
+	{ "umode_regonlymsg",	CF_YESNO, NULL, 0, &ConfigFeatures.umode_regonlymsg	},
+	{ "umode_noctcp",	CF_YESNO, NULL, 0, &ConfigFeatures.umode_noctcp	},
+	/* extended ban types */
+	{ "extban_account",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_account	},
+	{ "extban_ssl",		CF_YESNO, NULL, 0, &ConfigFeatures.extban_ssl		},
+	{ "extban_oper",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_oper		},
+	{ "extban_realname",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_realname	},
+	{ "extban_server",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_server	},
+	{ "extban_hostmask",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_hostmask	},
+	{ "extban_extgecos",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_extgecos	},
+	{ "extban_usermode",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_usermode	},
+	{ "extban_group",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_group	},
+	{ "extban_canjoin",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_canjoin	},
+	{ "extban_channel",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_channel	},
+	{ "extban_combi",	CF_YESNO, NULL, 0, &ConfigFeatures.extban_combi	},
+	{ "\0",			0,	  NULL, 0, NULL }
+};
+
 static struct ConfEntry conf_serverhide_table[] =
 {
 	{ "disable_hidden",	CF_YESNO, NULL, 0, &ConfigServerHide.disable_hidden	},
@@ -2954,6 +2981,7 @@ newconf_init()
 
 	add_top_conf("general", NULL, NULL, conf_general_table);
 	add_top_conf("channel", NULL, NULL, conf_channel_table);
+	add_top_conf("features", NULL, NULL, conf_features_table);
 	add_top_conf("serverhide", NULL, NULL, conf_serverhide_table);
 
 	add_top_conf("service", NULL, NULL, NULL);

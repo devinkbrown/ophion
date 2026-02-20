@@ -28,6 +28,7 @@
 #include "match.h"
 #include "privilege.h"
 #include "propertyset.h"
+#include "s_conf.h"
 #include "s_newconf.h"
 #include "s_user.h"
 
@@ -111,6 +112,36 @@ get_extban_string(void)
 	return e;
 }
 
+/*
+ * extban_is_enabled - returns non-zero if the extban type character is both
+ * registered and enabled by ConfigFeatures.  Used when validating ban masks
+ * before they are stored (e.g. the ACCESS command).
+ */
+int
+extban_is_enabled(unsigned char type_char)
+{
+	type_char = (unsigned char)irctolower((int)type_char);
+	if (extban_table[type_char] == NULL)
+		return 0;
+	switch (type_char)
+	{
+	case 'a': return ConfigFeatures.extban_account;
+	case 'z': return ConfigFeatures.extban_ssl;
+	case 'o': return ConfigFeatures.extban_oper;
+	case 'r': return ConfigFeatures.extban_realname;
+	case 's': return ConfigFeatures.extban_server;
+	case 'm': return ConfigFeatures.extban_hostmask;
+	case 'x': return ConfigFeatures.extban_extgecos;
+	case 'u': return ConfigFeatures.extban_usermode;
+	case 'g': return ConfigFeatures.extban_group;
+	case 'j': return ConfigFeatures.extban_canjoin;
+	case 'c': return ConfigFeatures.extban_channel;
+	case '&':
+	case '|': return ConfigFeatures.extban_combi;
+	default:  return 1;
+	}
+}
+
 /* -----------------------------------------------------------------------
  * Built-in extban handlers.  These cover the common client-attribute
  * checks and are always available without loading a module.  Optional
@@ -123,6 +154,8 @@ static int
 eb_account(const char *data, struct Client *client_p,
            struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_account)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	(void)mode_type;
 	if (data == NULL)
@@ -135,6 +168,8 @@ static int
 eb_ssl(const char *data, struct Client *client_p,
        struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_ssl)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	(void)mode_type;
 	if (!IsSSLClient(client_p))
@@ -154,6 +189,8 @@ static int
 eb_oper(const char *data, struct Client *client_p,
         struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_oper)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	(void)mode_type;
 	if (data != NULL)
@@ -171,6 +208,8 @@ static int
 eb_realname(const char *data, struct Client *client_p,
             struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_realname)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	if (mode_type == CHFL_EXCEPTION || mode_type == CHFL_INVEX)
 		return EXTBAN_INVALID;
@@ -184,6 +223,8 @@ static int
 eb_server(const char *data, struct Client *client_p,
           struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_server)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	if (mode_type == CHFL_EXCEPTION || mode_type == CHFL_INVEX)
 		return EXTBAN_INVALID;
@@ -197,6 +238,8 @@ static int
 eb_hostmask(const char *data, struct Client *client_p,
             struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_hostmask)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	(void)mode_type;
 	if (data == NULL)
@@ -211,6 +254,8 @@ eb_extgecos(const char *data, struct Client *client_p,
 {
 	char buf[BUFSIZE];
 
+	if (!ConfigFeatures.extban_extgecos)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	(void)mode_type;
 	if (data == NULL)
@@ -241,6 +286,8 @@ eb_usermode(const char *data, struct Client *client_p,
 	unsigned int modes_ack = 0, modes_nak = 0;
 	const char *p;
 
+	if (!ConfigFeatures.extban_usermode)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	(void)mode_type;
 	if (data == NULL)
@@ -271,6 +318,8 @@ static int
 eb_group(const char *data, struct Client *client_p,
          struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_group)
+		return EXTBAN_INVALID;
 	(void)chptr;
 	(void)mode_type;
 	if (data == NULL)
@@ -290,6 +339,8 @@ eb_canjoin(const char *data, struct Client *client_p,
 	int ret;
 	static int recurse = 0;
 
+	if (!ConfigFeatures.extban_canjoin)
+		return EXTBAN_INVALID;
 	(void)mode_type;
 	if (recurse)
 		return EXTBAN_INVALID;
@@ -313,6 +364,8 @@ eb_channel(const char *data, struct Client *client_p,
 {
 	struct Channel *chptr2;
 
+	if (!ConfigFeatures.extban_channel)
+		return EXTBAN_INVALID;
 	(void)mode_type;
 	if (data == NULL)
 		return EXTBAN_INVALID;
@@ -334,12 +387,16 @@ static int eb_combi(const char *data, struct Client *client_p, struct Channel *c
 static int
 eb_and(const char *data, struct Client *client_p, struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_combi)
+		return EXTBAN_INVALID;
 	return eb_combi(data, client_p, chptr, mode_type, true);
 }
 
 static int
 eb_or(const char *data, struct Client *client_p, struct Channel *chptr, long mode_type)
 {
+	if (!ConfigFeatures.extban_combi)
+		return EXTBAN_INVALID;
 	return eb_combi(data, client_p, chptr, mode_type, false);
 }
 

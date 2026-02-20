@@ -295,6 +295,32 @@ struct config_channel_entry
 	int max_listx;
 };
 
+struct config_features_entry
+{
+	/* channel modes */
+	int channel_nocolour;	/* +c: strip colour/formatting codes */
+	int channel_noctcp;	/* +C: block CTCP to channel (except ACTION) */
+	int channel_operonly;	/* +O: oper-only join restriction */
+	int channel_sslonly;	/* +S: SSL/TLS-only join restriction */
+	/* user modes */
+	int umode_callerid;	/* +g/+B: callerid allow-list filtering */
+	int umode_regonlymsg;	/* +R: registered-only messages */
+	int umode_noctcp;	/* +C: block CTCP requests to user */
+	/* extended ban types */
+	int extban_account;	/* $a: account name match */
+	int extban_ssl;		/* $z: SSL/TLS (+ cert fingerprint) match */
+	int extban_oper;	/* $o: IRC operator / privilege match */
+	int extban_realname;	/* $r: realname/gecos match */
+	int extban_server;	/* $s: server name match */
+	int extban_hostmask;	/* $m: hostmask (nick!user@host) match */
+	int extban_extgecos;	/* $x: extended mask including gecos */
+	int extban_usermode;	/* $u: user mode match */
+	int extban_group;	/* $g: MEMBER-OF group membership match */
+	int extban_canjoin;	/* $j: banned-from-channel match */
+	int extban_channel;	/* $c: member-of-channel match */
+	int extban_combi;	/* $& / $|: combination (AND/OR) extbans */
+};
+
 struct config_server_hide
 {
 	int flatten_links;
@@ -348,6 +374,7 @@ struct sts_info
 /* All variables are GLOBAL */
 extern struct config_file_entry ConfigFileEntry;	/* defined in ircd.c */
 extern struct config_channel_entry ConfigChannel;	/* defined in channel.c */
+extern struct config_features_entry ConfigFeatures;	/* defined in ircd.c */
 extern struct config_server_hide ConfigServerHide;	/* defined in s_conf.c */
 extern struct server_info ServerInfo;	/* defined in ircd.c */
 extern struct admin_info AdminInfo;	/* defined in ircd.c */

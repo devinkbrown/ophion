@@ -75,6 +75,8 @@ struct SetOptions GlobalSetOptions;
 
 /* configuration set from ircd.conf */
 struct config_file_entry ConfigFileEntry;
+/* built-in feature flags set from ircd.conf features {} block */
+struct config_features_entry ConfigFeatures;
 /* server info set from ircd.conf */
 struct server_info ServerInfo;
 /* admin info set from ircd.conf */
@@ -373,6 +375,28 @@ initialize_global_set_options(void)
 {
 	memset(&GlobalSetOptions, 0, sizeof(GlobalSetOptions));
 	/* memset( &ConfigFileEntry, 0, sizeof(ConfigFileEntry)); */
+
+	/* All built-in features default to enabled; ircd.conf features {}
+	 * can disable individual ones.  Must be set before read_conf_files(). */
+	ConfigFeatures.channel_nocolour = 1;
+	ConfigFeatures.channel_noctcp   = 1;
+	ConfigFeatures.channel_operonly = 1;
+	ConfigFeatures.channel_sslonly  = 1;
+	ConfigFeatures.umode_callerid   = 1;
+	ConfigFeatures.umode_regonlymsg = 1;
+	ConfigFeatures.umode_noctcp     = 1;
+	ConfigFeatures.extban_account   = 1;
+	ConfigFeatures.extban_ssl       = 1;
+	ConfigFeatures.extban_oper      = 1;
+	ConfigFeatures.extban_realname  = 1;
+	ConfigFeatures.extban_server    = 1;
+	ConfigFeatures.extban_hostmask  = 1;
+	ConfigFeatures.extban_extgecos  = 1;
+	ConfigFeatures.extban_usermode  = 1;
+	ConfigFeatures.extban_group     = 1;
+	ConfigFeatures.extban_canjoin   = 1;
+	ConfigFeatures.extban_channel   = 1;
+	ConfigFeatures.extban_combi     = 1;
 
 	GlobalSetOptions.maxclients = ServerInfo.default_max_clients;
 
