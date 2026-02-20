@@ -1,6 +1,8 @@
 /*
  * ophion: a slightly less ancient ircd.
- * sendbuf.c: Byte-block send queue implementation.
+ * sendbuf.c: Zero-copy chunk-based outgoing send queue.
+ *
+ * See rb_sendbuf.h for the design overview.
  *
  * Copyright (C) 2026 ophion development team
  *
@@ -14,31 +16,44 @@
 #include <rb_lib.h>
 #include <commio-int.h>
 
-static rb_bh *rb_sendbuf_heap;
+static rb_bh *rb_sendbuf_block_heap;
+static rb_bh *rb_sendbuf_chunk_heap;
 
 void
 rb_sendbuf_init(size_t heap_size)
 {
-	rb_sendbuf_heap = rb_bh_create(sizeof(rb_sendbuf_block_t), heap_size,
-	                                "librb_sendbuf_heap");
+	rb_sendbuf_block_heap = rb_bh_create(sizeof(rb_sendbuf_block_t),
+	                                     heap_size,
+	                                     "librb_sendbuf_block_heap");
+	rb_sendbuf_chunk_heap = rb_bh_create(sizeof(rb_sendbuf_chunk_t),
+	                                     heap_size * 4,
+	                                     "librb_sendbuf_chunk_heap");
 }
 
-/* Free all blocks and reset the queue to empty. */
+/* Free all chunks.  LINE chunks release their buf_line_t ref; BLOCK chunks
+ * free their block back to the pool. */
 void
 rb_sendbuf_donebuf(rb_sendbuf_t *sb)
 {
-	while(sb->blocks.head != NULL)
+	while(sb->chunks.head != NULL)
 	{
-		rb_dlink_node *node = sb->blocks.head;
-		rb_sendbuf_block_t *blk = node->data;
-		rb_dlinkDestroy(node, &sb->blocks);
-		rb_bh_free(rb_sendbuf_heap, blk);
+		rb_dlink_node *node = sb->chunks.head;
+		rb_sendbuf_chunk_t *chunk = node->data;
+
+		if(chunk->type == SENDBUF_CHUNK_LINE)
+			rb_linebuf_unref(chunk->line);
+		else
+			rb_bh_free(rb_sendbuf_block_heap, chunk->block);
+
+		rb_dlinkDestroy(node, &sb->chunks);
+		rb_bh_free(rb_sendbuf_chunk_heap, chunk);
 	}
 	sb->len = 0;
 }
 
-/* Append len bytes from data to the send queue, allocating blocks as needed.
- * Returns 0 on success, -1 on allocation failure. */
+/* Append len bytes from data into block storage (copy path, used for raw
+ * writes and SSL).  Multiple calls are packed into the same tail block
+ * before a new block is allocated. */
 int
 rb_sendbuf_write(rb_sendbuf_t *sb, const void *data, size_t len)
 {
@@ -47,24 +62,38 @@ rb_sendbuf_write(rb_sendbuf_t *sb, const void *data, size_t len)
 
 	while(remaining > 0)
 	{
+		rb_sendbuf_chunk_t *chunk = NULL;
 		rb_sendbuf_block_t *blk = NULL;
 
-		/* Reuse the tail block if it has space. */
-		if(sb->blocks.tail != NULL)
+		/* Pack into the tail block if it has space and is a BLOCK chunk. */
+		if(sb->chunks.tail != NULL)
 		{
-			blk = sb->blocks.tail->data;
-			if(blk->wpos == RB_SENDBUF_BLOCK_SIZE)
-				blk = NULL;
+			rb_sendbuf_chunk_t *tail = sb->chunks.tail->data;
+			if(tail->type == SENDBUF_CHUNK_BLOCK &&
+			   tail->block->wpos < RB_SENDBUF_BLOCK_SIZE)
+			{
+				chunk = tail;
+				blk = chunk->block;
+			}
 		}
 
 		if(blk == NULL)
 		{
-			blk = rb_bh_alloc(rb_sendbuf_heap);
+			blk = rb_bh_alloc(rb_sendbuf_block_heap);
 			if(rb_unlikely(blk == NULL))
 				return -1;
-			blk->rpos = 0;
 			blk->wpos = 0;
-			rb_dlinkAddTailAlloc(blk, &sb->blocks);
+
+			chunk = rb_bh_alloc(rb_sendbuf_chunk_heap);
+			if(rb_unlikely(chunk == NULL))
+			{
+				rb_bh_free(rb_sendbuf_block_heap, blk);
+				return -1;
+			}
+			chunk->type  = SENDBUF_CHUNK_BLOCK;
+			chunk->rpos  = 0;
+			chunk->block = blk;
+			rb_dlinkAddTailAlloc(chunk, &sb->chunks);
 		}
 
 		size_t space = RB_SENDBUF_BLOCK_SIZE - blk->wpos;
@@ -79,8 +108,9 @@ rb_sendbuf_write(rb_sendbuf_t *sb, const void *data, size_t len)
 	return 0;
 }
 
-/* Copy all lines from a temporary buf_head_t into sb.
- * Called by _send_linebuf() in ircd/send.c. */
+/* Zero-copy enqueue: for each terminated buf_line_t in linebuf, take a
+ * reference and add a CHUNK_LINE.  The caller may destroy the buf_head_t
+ * immediately; the bytes stay alive via the refs until fully flushed. */
 int
 rb_sendbuf_write_linebuf(rb_sendbuf_t *sb, buf_head_t *linebuf)
 {
@@ -89,20 +119,64 @@ rb_sendbuf_write_linebuf(rb_sendbuf_t *sb, buf_head_t *linebuf)
 	RB_DLINK_FOREACH(ptr, linebuf->list.head)
 	{
 		buf_line_t *line = ptr->data;
-		if(rb_sendbuf_write(sb, line->buf, line->len) < 0)
+
+		if(line->len <= 0 || !line->terminated)
+			continue;
+
+		rb_sendbuf_chunk_t *chunk = rb_bh_alloc(rb_sendbuf_chunk_heap);
+		if(rb_unlikely(chunk == NULL))
 			return -1;
+
+		rb_linebuf_ref(line);      /* keep alive past buf_head_t destruction */
+		chunk->type = SENDBUF_CHUNK_LINE;
+		chunk->rpos = 0;
+		chunk->line = line;
+		rb_dlinkAddTailAlloc(chunk, &sb->chunks);
+		sb->len += (size_t)line->len;
 	}
+
 	return 0;
 }
 
-/* Attempt to flush queued bytes to socket F.
- *
- * Non-SSL: builds an iovec over all blocks and calls writev(), then
- *   advances/frees consumed blocks.
- * SSL / no writev: writes the first contiguous block segment only.
- *
- * Returns bytes written on success, 0 on EOF, -1 with errno set on error
- * (EWOULDBLOCK if nothing to write). */
+/* ---- internal helpers ---------------------------------------------------- */
+
+/* Advance chunks by `consumed` bytes, freeing fully-sent ones. */
+static void
+sendbuf_advance(rb_sendbuf_t *sb, ssize_t consumed)
+{
+	sb->len -= (size_t)consumed;
+
+	while(consumed > 0 && sb->chunks.head != NULL)
+	{
+		rb_dlink_node *node = sb->chunks.head;
+		rb_sendbuf_chunk_t *chunk = node->data;
+		size_t avail;
+
+		if(chunk->type == SENDBUF_CHUNK_LINE)
+			avail = (size_t)chunk->line->len - chunk->rpos;
+		else
+			avail = (size_t)chunk->block->wpos - chunk->rpos;
+
+		if((size_t)consumed >= avail)
+		{
+			consumed -= (ssize_t)avail;
+			if(chunk->type == SENDBUF_CHUNK_LINE)
+				rb_linebuf_unref(chunk->line);
+			else
+				rb_bh_free(rb_sendbuf_block_heap, chunk->block);
+			rb_dlinkDestroy(node, &sb->chunks);
+			rb_bh_free(rb_sendbuf_chunk_heap, chunk);
+		}
+		else
+		{
+			chunk->rpos += (uint16_t)consumed;
+			consumed = 0;
+		}
+	}
+}
+
+/* ---- flush --------------------------------------------------------------- */
+
 ssize_t
 rb_sendbuf_flush(rb_sendbuf_t *sb, rb_fde_t *F)
 {
@@ -120,13 +194,27 @@ rb_sendbuf_flush(rb_sendbuf_t *sb, rb_fde_t *F)
 		rb_dlink_node *ptr;
 		ssize_t total;
 
-		RB_DLINK_FOREACH(ptr, sb->blocks.head)
+		RB_DLINK_FOREACH(ptr, sb->chunks.head)
 		{
-			rb_sendbuf_block_t *blk = ptr->data;
-			size_t avail = blk->wpos - blk->rpos;
+			rb_sendbuf_chunk_t *chunk = ptr->data;
+			size_t avail;
+			const char *base;
+
+			if(chunk->type == SENDBUF_CHUNK_LINE)
+			{
+				avail = (size_t)chunk->line->len - chunk->rpos;
+				base  = chunk->line->buf + chunk->rpos;
+			}
+			else
+			{
+				avail = (size_t)chunk->block->wpos - chunk->rpos;
+				base  = chunk->block->buf + chunk->rpos;
+			}
+
 			if(avail == 0)
 				continue;
-			vec[nvec].iov_base = blk->buf + blk->rpos;
+
+			vec[nvec].iov_base = (void *)base;
 			vec[nvec].iov_len  = avail;
 			if(++nvec == RB_UIO_MAXIOV)
 				break;
@@ -142,35 +230,17 @@ rb_sendbuf_flush(rb_sendbuf_t *sb, rb_fde_t *F)
 		if(total <= 0)
 			return total;
 
-		/* Advance/free consumed blocks. */
-		ssize_t remain = total;
-		while(remain > 0 && sb->blocks.head != NULL)
-		{
-			rb_dlink_node *node = sb->blocks.head;
-			rb_sendbuf_block_t *blk = node->data;
-			size_t avail = blk->wpos - blk->rpos;
-
-			if((size_t)remain >= avail)
-			{
-				remain -= (ssize_t)avail;
-				rb_dlinkDestroy(node, &sb->blocks);
-				rb_bh_free(rb_sendbuf_heap, blk);
-			}
-			else
-			{
-				blk->rpos += (uint16_t)remain;
-				remain = 0;
-			}
-		}
-		sb->len -= total;
+		sendbuf_advance(sb, total);
 		return total;
 	}
 #endif /* HAVE_WRITEV */
 
-	/* SSL or no-writev fallback: write the first contiguous segment. */
+	/* SSL or no-writev fallback: write the first contiguous segment only. */
 	{
-		rb_dlink_node *node = sb->blocks.head;
-		rb_sendbuf_block_t *blk;
+		rb_dlink_node *node = sb->chunks.head;
+		rb_sendbuf_chunk_t *chunk;
+		const char *base;
+		size_t avail;
 		ssize_t written;
 
 		if(node == NULL)
@@ -179,19 +249,23 @@ rb_sendbuf_flush(rb_sendbuf_t *sb, rb_fde_t *F)
 			return -1;
 		}
 
-		blk     = node->data;
-		written = rb_write(F, blk->buf + blk->rpos, blk->wpos - blk->rpos);
+		chunk = node->data;
+		if(chunk->type == SENDBUF_CHUNK_LINE)
+		{
+			base  = chunk->line->buf + chunk->rpos;
+			avail = (size_t)chunk->line->len - chunk->rpos;
+		}
+		else
+		{
+			base  = chunk->block->buf + chunk->rpos;
+			avail = (size_t)chunk->block->wpos - chunk->rpos;
+		}
+
+		written = rb_write(F, base, avail);
 		if(written <= 0)
 			return written;
 
-		blk->rpos += (uint16_t)written;
-		sb->len   -= written;
-
-		if(blk->rpos == blk->wpos)
-		{
-			rb_dlinkDestroy(node, &sb->blocks);
-			rb_bh_free(rb_sendbuf_heap, blk);
-		}
+		sendbuf_advance(sb, written);
 		return written;
 	}
 }

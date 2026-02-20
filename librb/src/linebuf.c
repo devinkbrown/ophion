@@ -524,6 +524,65 @@ rb_linebuf_put(buf_head_t *bufhead, const rb_strf_t *strings)
 }
 
 /*
+ * rb_linebuf_unref
+ *
+ * Drop one reference to a buf_line_t.  Used by rb_sendbuf when it is done
+ * with a zero-copy TX reference.  If the refcount reaches zero the line is
+ * freed back to the linebuf heap.
+ */
+void
+rb_linebuf_unref(buf_line_t *line)
+{
+	line->refcount--;
+	if(line->refcount <= 0)
+	{
+		--bufline_count;
+		rb_linebuf_free(line);
+	}
+}
+
+/*
+ * rb_linebuf_peek
+ *
+ * Return a read-only pointer to the first complete (terminated) line in
+ * bufhead without copying or consuming it.  Returns NULL if there is no
+ * complete line.
+ *
+ * The pointer is valid until rb_linebuf_consume() or rb_linebuf_donebuf()
+ * is called on bufhead.
+ */
+const buf_line_t *
+rb_linebuf_peek(buf_head_t *bufhead)
+{
+	if(bufhead->list.head == NULL)
+		return NULL;
+
+	buf_line_t *line = bufhead->list.head->data;
+	if(!line->terminated)
+		return NULL;
+
+	return line;
+}
+
+/*
+ * rb_linebuf_consume
+ *
+ * Remove and free the first line from bufhead.  Designed to pair with
+ * rb_linebuf_peek: peek to get a direct pointer, process the data, then
+ * consume to advance the queue.
+ */
+void
+rb_linebuf_consume(buf_head_t *bufhead)
+{
+	if(bufhead->list.head == NULL)
+		return;
+
+	rb_linebuf_done_line(bufhead,
+		(buf_line_t *)bufhead->list.head->data,
+		bufhead->list.head);
+}
+
+/*
  * rb_linebuf_flush
  *
  * Flush data to the buffer. It tries to write as much data as possible

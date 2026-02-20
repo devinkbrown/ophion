@@ -72,10 +72,30 @@ void rb_linebuf_newbuf(buf_head_t *);
 void rb_linebuf_donebuf(buf_head_t *);
 int rb_linebuf_parse(buf_head_t *, char *, int, int);
 int rb_linebuf_get(buf_head_t *, char *, int, int, int);
+
+/* Zero-copy RX: return a direct pointer into the first complete line without
+ * copying.  The returned pointer is valid until rb_linebuf_consume() is
+ * called.  Returns NULL if no complete line is available. */
+const buf_line_t *rb_linebuf_peek(buf_head_t *bufhead);
+
+/* Consume (remove) the first line from bufhead.  Pair with rb_linebuf_peek. */
+void rb_linebuf_consume(buf_head_t *bufhead);
+
 void rb_linebuf_put(buf_head_t *, const rb_strf_t *);
 void rb_linebuf_attach(buf_head_t *, buf_head_t *);
 void rb_count_rb_linebuf_memory(size_t *, size_t *);
 int rb_linebuf_flush(rb_fde_t *F, buf_head_t *);
+
+/* Reference-counting helpers for buf_line_t (used by rb_sendbuf for
+ * zero-copy TX: sendbuf holds a ref so the line outlives its buf_head_t). */
+static inline void
+rb_linebuf_ref(buf_line_t *line)
+{
+	line->refcount++;
+}
+
+/* Drop one reference; the line is freed when refcount reaches zero. */
+void rb_linebuf_unref(buf_line_t *line);
 
 
 #endif
