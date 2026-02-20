@@ -1216,7 +1216,7 @@ stats_servers (struct Client *source_p)
 				   target_p->name,
 				   (target_p->serv->by[0] ? target_p->serv->by : "Remote."),
 				   (int) (rb_current_time() - target_p->localClient->lasttime),
-				   (int) rb_linebuf_len (&target_p->localClient->buf_sendq),
+				   (int) rb_sendbuf_len (&target_p->localClient->buf_sendq),
 				   days, (days == 1) ? "" : "s", hours, minutes,
 				   (int) seconds);
 	}
@@ -1510,7 +1510,7 @@ stats_servlinks (struct Client *source_p)
 		sendto_one(source_p, Sformat,
 			get_id(&me, source_p), RPL_STATSLINKINFO, get_id(source_p, source_p),
 			target_p->name,
-			(int) rb_linebuf_len (&target_p->localClient->buf_sendq),
+			(int) rb_sendbuf_len (&target_p->localClient->buf_sendq),
 			target_p->localClient->sendM,
 			target_p->localClient->sendK,
 			target_p->localClient->receiveM,
@@ -1670,7 +1670,7 @@ stats_l_client(struct Client *source_p, struct Client *target_p,
 	{
 		sendto_one_numeric(source_p, RPL_STATSLINKINFO, Lformat,
 				target_p->name,
-				(int) rb_linebuf_len(&target_p->localClient->buf_sendq),
+				(int) rb_sendbuf_len(&target_p->localClient->buf_sendq),
 				target_p->localClient->sendM,
 				target_p->localClient->sendK,
 				target_p->localClient->receiveM,
@@ -1689,7 +1689,7 @@ stats_l_client(struct Client *source_p, struct Client *target_p,
 				     get_client_name(target_p, SHOW_IP) :
 				     get_client_name(target_p, HIDE_IP)) :
 				    get_client_name(target_p, MASK_IP),
-				    (int) rb_linebuf_len(&target_p->localClient->buf_sendq),
+				    (int) rb_sendbuf_len(&target_p->localClient->buf_sendq),
 				    target_p->localClient->sendM,
 				    target_p->localClient->sendK,
 				    target_p->localClient->receiveM,

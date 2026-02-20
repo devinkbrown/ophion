@@ -327,7 +327,7 @@ static void list_one_channel(struct Client *source_p, struct Channel *chptr,
  */
 static bool safelist_sendq_exceeded(struct Client *client_p)
 {
-	return rb_linebuf_len(&client_p->localClient->buf_sendq) > (get_sendq(client_p) / 2);
+	return rb_sendbuf_len(&client_p->localClient->buf_sendq) > (get_sendq(client_p) / 2);
 }
 
 /*

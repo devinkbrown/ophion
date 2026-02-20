@@ -189,9 +189,9 @@ struct LocalUser
 	time_t lasttime;	/* last time we parsed something */
 	time_t firsttime;	/* time client was created */
 
-	/* Send and receive linebuf queues .. */
-	buf_head_t buf_sendq;
-	buf_head_t buf_recvq;
+	/* Send queue (byte-block, see rb_sendbuf.h) and receive linebuf queue. */
+	rb_sendbuf_t buf_sendq;
+	buf_head_t   buf_recvq;
 
 	/*
 	 * we want to use unsigned int here so the sizes have a better chance of

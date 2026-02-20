@@ -2178,7 +2178,7 @@ close_connection(struct Client *client_p)
 		client_p->localClient->F = NULL;
 	}
 
-	rb_linebuf_donebuf(&client_p->localClient->buf_sendq);
+	rb_sendbuf_donebuf(&client_p->localClient->buf_sendq);
 	rb_linebuf_donebuf(&client_p->localClient->buf_recvq);
 	detach_conf(client_p);
 
