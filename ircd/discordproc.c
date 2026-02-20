@@ -536,6 +536,239 @@ discord_exit_all_phantoms(void)
  * Parsing replies from discordd
  * ---------------------------------------------------------------------- */
 
+typedef void (*discord_handler_fn)(char **argv, int parc);
+
+/* G <guild_name_pct>
+ * Gateway READY — Discord connection established. */
+static void
+handle_discordd_G(char **argv, int parc)
+{
+	if(parc < 2) return;
+	pct_decode(argv[1]);
+	ilog(L_MAIN, "discord: gateway ready (guild: %s)", argv[1]);
+	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+		"Discord bridge: connected to guild \"%s\"", argv[1]);
+}
+
+/* P <channel_id> <user_id> <nick> <msgid> :<text_pct>
+ * Discord message received. */
+static void
+handle_discordd_P(char **argv, int parc)
+{
+	struct Client *phantom;
+	const char *channel_id, *user_id, *nick, *text;
+	const char *irc_channel;
+	struct Channel *chptr;
+	char decoded[BUFSIZE];
+
+	if(parc < 6) return;
+	channel_id = argv[1];
+	user_id    = argv[2];
+	nick       = argv[3];
+	/* argv[4] is the Discord msgid — reserved for future use */
+	text       = argv[5];
+
+	irc_channel = rb_dictionary_retrieve(discord_to_irc, channel_id);
+	if(irc_channel == NULL) return;
+
+	phantom = discord_find_or_create_phantom(nick, user_id);
+	if(phantom == NULL) return;
+
+	discord_phantom_join_channel(phantom, irc_channel);
+
+	rb_strlcpy(decoded, text, sizeof(decoded));
+	pct_decode(decoded);
+
+	chptr = find_channel(irc_channel);
+	if(chptr == NULL) return;
+
+	sendto_channel_local(NULL, ALL_MEMBERS, chptr,
+		":%s!%s@%s PRIVMSG %s :%s",
+		phantom->name, phantom->username,
+		phantom->host, chptr->chname, decoded);
+
+	sendto_server(phantom, chptr, CAP_TS6, NOCAPS,
+		":%s PRIVMSG %s :%s",
+		phantom->id, chptr->chname, decoded);
+}
+
+/* Y <channel_id> <user_id> <nick_pct>
+ * Discord user started typing — relay as draft/typing TAGMSG. */
+static void
+handle_discordd_Y(char **argv, int parc)
+{
+	struct Client *phantom;
+	const char *channel_id, *user_id, *nick;
+	const char *irc_channel;
+	struct Channel *chptr;
+
+	if(parc < 4) return;
+	channel_id = argv[1];
+	user_id    = argv[2];
+	nick       = argv[3];
+
+	irc_channel = rb_dictionary_retrieve(discord_to_irc, channel_id);
+	if(irc_channel == NULL) return;
+
+	chptr = find_channel(irc_channel);
+	if(chptr == NULL) return;
+
+	phantom = discord_find_or_create_phantom(nick, user_id);
+	if(phantom == NULL) return;
+
+	discord_phantom_join_channel(phantom, irc_channel);
+
+	/* Deliver "@+draft/typing=active :nick!user@host TAGMSG #chan"
+	 * to every local member that negotiated message-tags. */
+	sendto_channel_local_with_capability(NULL, ALL_MEMBERS,
+		CLICAP_MESSAGE_TAGS, 0, chptr,
+		"@+draft/typing=active :%s!%s@%s TAGMSG %s",
+		phantom->name, phantom->username,
+		phantom->host, chptr->chname);
+}
+
+/* D <channel_id> <msgid>
+ * Discord message deleted — emit a NOTICE to the IRC channel. */
+static void
+handle_discordd_D(char **argv, int parc)
+{
+	const char *irc_channel;
+	struct Channel *chptr;
+
+	if(parc < 3) return;
+	irc_channel = rb_dictionary_retrieve(discord_to_irc, argv[1]);
+	if(irc_channel == NULL) return;
+
+	chptr = find_channel(irc_channel);
+	if(chptr == NULL) return;
+
+	sendto_channel_local(NULL, ALL_MEMBERS, chptr,
+		":%s NOTICE %s :[Discord] (a message was deleted)",
+		me.name, chptr->chname);
+}
+
+/* E <channel_id> <msgid> <user_id> <nick_pct> :<new_text_pct>
+ * Discord message edited — emit a NOTICE showing the new text. */
+static void
+handle_discordd_E(char **argv, int parc)
+{
+	struct Client *phantom;
+	const char *channel_id, *user_id, *nick, *new_text;
+	const char *irc_channel;
+	struct Channel *chptr;
+	char decoded[BUFSIZE];
+
+	if(parc < 6) return;
+	channel_id = argv[1];
+	/* argv[2] is the msgid */
+	user_id    = argv[3];
+	nick       = argv[4];
+	new_text   = argv[5];
+
+	irc_channel = rb_dictionary_retrieve(discord_to_irc, channel_id);
+	if(irc_channel == NULL) return;
+
+	chptr = find_channel(irc_channel);
+	if(chptr == NULL) return;
+
+	phantom = discord_find_or_create_phantom(nick, user_id);
+	if(phantom == NULL) return;
+
+	rb_strlcpy(decoded, new_text, sizeof(decoded));
+	pct_decode(decoded);
+
+	sendto_channel_local(NULL, ALL_MEMBERS, chptr,
+		":%s!%s@%s NOTICE %s :[edit] %s",
+		phantom->name, phantom->username,
+		phantom->host, chptr->chname, decoded);
+}
+
+/* I <channel_id> <user_id> <nick_pct> :<identify_args_pct>
+ * Discord user issued "!identify [account] password".
+ * Relay the args to NickServ as PRIVMSG IDENTIFY.
+ * Services are optional: silently dropped if NickServ is absent. */
+static void
+handle_discordd_I(char **argv, int parc)
+{
+	struct Client *phantom;
+	struct Client *ns_p;
+	const char *channel_id, *user_id, *nick, *identify_args;
+	const char *irc_channel;
+	char decoded_args[BUFSIZE];
+
+	if(parc < 5) return;
+	channel_id    = argv[1];
+	user_id       = argv[2];
+	nick          = argv[3];
+	identify_args = argv[4];
+
+	irc_channel = rb_dictionary_retrieve(discord_to_irc, channel_id);
+	if(irc_channel == NULL) return;
+
+	phantom = discord_find_or_create_phantom(nick, user_id);
+	if(phantom == NULL) return;
+
+	discord_phantom_join_channel(phantom, irc_channel);
+
+	ns_p = find_named_client("NickServ");
+	if(ns_p == NULL)
+	{
+		ilog(L_MAIN,
+		     "discord: !identify from %s ignored: NickServ not present",
+		     user_id);
+		return;
+	}
+
+	rb_strlcpy(decoded_args, identify_args, sizeof(decoded_args));
+	pct_decode(decoded_args);
+
+	sendto_one(ns_p->from, ":%s PRIVMSG %s :IDENTIFY %s",
+		   use_id(phantom), use_id(ns_p), decoded_args);
+}
+
+/* W <level> :<message_pct>
+ * Warning/log message from discordd. */
+static void
+handle_discordd_W(char **argv, int parc)
+{
+	char msg[BUFSIZE];
+
+	if(parc < 3) return;
+	rb_strlcpy(msg, argv[2], sizeof(msg));
+	pct_decode(msg);
+	switch(argv[1][0])
+	{
+	case 'C':
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+			"Discord bridge [CRIT]: %s", msg);
+		ilog(L_MAIN, "discord [CRIT]: %s", msg);
+		break;
+	case 'W':
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+			"Discord bridge [WARN]: %s", msg);
+		ilog(L_MAIN, "discord [warn]: %s", msg);
+		break;
+	case 'I':
+		ilog(L_MAIN, "discord [info]: %s", msg);
+		break;
+	default:
+		ilog(L_MAIN, "discord [debug]: %s", msg);
+		break;
+	}
+}
+
+/* Dispatch table indexed by the first character of the command token.
+ * All unset entries are NULL (zero-initialised). */
+static const discord_handler_fn discord_handlers[256] = {
+	['D'] = handle_discordd_D,
+	['E'] = handle_discordd_E,
+	['G'] = handle_discordd_G,
+	['I'] = handle_discordd_I,
+	['P'] = handle_discordd_P,
+	['W'] = handle_discordd_W,
+	['Y'] = handle_discordd_Y,
+};
+
 static void
 parse_discordd_reply(rb_helper *helper)
 {
@@ -546,276 +779,18 @@ parse_discordd_reply(rb_helper *helper)
 	{
 		char *argv[MAXPARA + 1];
 		int parc;
+		discord_handler_fn fn;
 
 		buf[len] = '\0';
 		parc = rb_string_to_array(buf, argv, MAXPARA);
 		if(parc < 1 || argv[0] == NULL || argv[0][0] == '\0')
 			continue;
 
-		switch(argv[0][0])
-		{
-		/*
-		 * G <guild_name_pct>
-		 * Gateway READY — Discord connection established.
-		 */
-		case 'G':
-			if(parc < 2) break;
-			pct_decode(argv[1]);
-			ilog(L_MAIN, "discord: gateway ready (guild: %s)",
-			     argv[1]);
-			sendto_realops_snomask(SNO_GENERAL, L_ALL,
-				"Discord bridge: connected to guild \"%s\"",
-				argv[1]);
-			break;
-
-		/*
-		 * P <channel_id> <user_id> <nick> <msgid> :<text_pct>
-		 * Discord message received.
-		 */
-		case 'P':
-		{
-			struct Client *phantom;
-			const char *channel_id, *user_id, *nick, *text;
-			const char *irc_channel;
-
-			if(parc < 6) break;
-			channel_id = argv[1];
-			user_id    = argv[2];
-			nick       = argv[3];
-			/* argv[4] is the Discord msgid — reserved for future use */
-			text       = argv[5];
-
-			irc_channel = rb_dictionary_retrieve(discord_to_irc,
-							     channel_id);
-			if(irc_channel == NULL)
-				break; /* not a bridged channel */
-
-			phantom = discord_find_or_create_phantom(nick, user_id);
-			if(phantom == NULL)
-				break;
-
-			discord_phantom_join_channel(phantom, irc_channel);
-
-			/* Deliver the message. */
-			{
-				char decoded[BUFSIZE];
-				struct Channel *chptr;
-
-				rb_strlcpy(decoded, text, sizeof(decoded));
-				pct_decode(decoded);
-
-				chptr = find_channel(irc_channel);
-				if(chptr == NULL)
-					break;
-
-				sendto_channel_local(NULL, ALL_MEMBERS, chptr,
-					":%s!%s@%s PRIVMSG %s :%s",
-					phantom->name,
-					phantom->username,
-					phantom->host,
-					chptr->chname,
-					decoded);
-
-				sendto_server(phantom, chptr, CAP_TS6, NOCAPS,
-					":%s PRIVMSG %s :%s",
-					phantom->id, chptr->chname, decoded);
-			}
-			break;
-		}
-
-		/*
-		 * Y <channel_id> <user_id> <nick_pct>
-		 * Discord user started typing — relay as draft/typing TAGMSG.
-		 */
-		case 'Y':
-		{
-			struct Client *phantom;
-			const char *channel_id, *user_id, *nick;
-			const char *irc_channel;
-			struct Channel *chptr;
-
-			if(parc < 4) break;
-			channel_id = argv[1];
-			user_id    = argv[2];
-			nick       = argv[3];
-
-			irc_channel = rb_dictionary_retrieve(discord_to_irc,
-							     channel_id);
-			if(irc_channel == NULL) break;
-
-			chptr = find_channel(irc_channel);
-			if(chptr == NULL) break;
-
-			phantom = discord_find_or_create_phantom(nick, user_id);
-			if(phantom == NULL) break;
-
-			discord_phantom_join_channel(phantom, irc_channel);
-
-			/*
-			 * Deliver "@+draft/typing=active :nick!user@host TAGMSG #chan"
-			 * to every local member that negotiated message-tags.
-			 */
-			sendto_channel_local_with_capability(NULL, ALL_MEMBERS,
-				CLICAP_MESSAGE_TAGS, 0, chptr,
-				"@+draft/typing=active :%s!%s@%s TAGMSG %s",
-				phantom->name, phantom->username,
-				phantom->host, chptr->chname);
-			break;
-		}
-
-		/*
-		 * D <channel_id> <msgid>
-		 * Discord message deleted — emit a NOTICE to the IRC channel.
-		 */
-		case 'D':
-		{
-			const char *irc_channel;
-			struct Channel *chptr;
-
-			if(parc < 3) break;
-			irc_channel = rb_dictionary_retrieve(discord_to_irc,
-							     argv[1]);
-			if(irc_channel == NULL) break;
-
-			chptr = find_channel(irc_channel);
-			if(chptr == NULL) break;
-
-			sendto_channel_local(NULL, ALL_MEMBERS, chptr,
-				":%s NOTICE %s :[Discord] (a message was deleted)",
-				me.name, chptr->chname);
-			break;
-		}
-
-		/*
-		 * E <channel_id> <msgid> <user_id> <nick_pct> :<new_text_pct>
-		 * Discord message edited — emit a NOTICE showing the new text.
-		 */
-		case 'E':
-		{
-			struct Client *phantom;
-			const char *channel_id, *user_id, *nick, *new_text;
-			const char *irc_channel;
-			struct Channel *chptr;
-			char decoded[BUFSIZE];
-
-			if(parc < 6) break;
-			channel_id = argv[1];
-			/* argv[2] is the msgid */
-			user_id    = argv[3];
-			nick       = argv[4];
-			new_text   = argv[5];
-
-			irc_channel = rb_dictionary_retrieve(discord_to_irc,
-							     channel_id);
-			if(irc_channel == NULL) break;
-
-			chptr = find_channel(irc_channel);
-			if(chptr == NULL) break;
-
-			phantom = discord_find_or_create_phantom(nick, user_id);
-			if(phantom == NULL) break;
-
-			rb_strlcpy(decoded, new_text, sizeof(decoded));
-			pct_decode(decoded);
-
-			sendto_channel_local(NULL, ALL_MEMBERS, chptr,
-				":%s!%s@%s NOTICE %s :[edit] %s",
-				phantom->name, phantom->username,
-				phantom->host, chptr->chname, decoded);
-			break;
-		}
-
-		/*
-		 * I <channel_id> <user_id> <nick_pct> :<identify_args_pct>
-		 * Discord user issued "!identify [account] password".
-		 *
-		 * Find or create the phantom for this user, join them to the
-		 * bridged channel, then relay the args to NickServ as a
-		 * PRIVMSG IDENTIFY.  Services are optional: if NickServ is not
-		 * present the line is silently dropped.
-		 */
-		case 'I':
-		{
-			struct Client *phantom;
-			struct Client *ns_p;
-			const char *channel_id, *user_id, *nick, *identify_args;
-			const char *irc_channel;
-			char decoded_args[BUFSIZE];
-
-			if(parc < 5) break;
-			channel_id    = argv[1];
-			user_id       = argv[2];
-			nick          = argv[3];
-			identify_args = argv[4];
-
-			irc_channel = rb_dictionary_retrieve(discord_to_irc,
-							     channel_id);
-			if(irc_channel == NULL) break;
-
-			phantom = discord_find_or_create_phantom(nick, user_id);
-			if(phantom == NULL) break;
-
-			discord_phantom_join_channel(phantom, irc_channel);
-
-			/*
-			 * Services are optional.  If NickServ is not connected
-			 * (no Atheme or other services), just drop the request.
-			 */
-			ns_p = find_named_client("NickServ");
-			if(ns_p == NULL)
-			{
-				ilog(L_MAIN,
-				     "discord: !identify from %s ignored: NickServ not present",
-				     user_id);
-				break;
-			}
-
-			rb_strlcpy(decoded_args, identify_args, sizeof(decoded_args));
-			pct_decode(decoded_args);
-
-			/* Route PRIVMSG NickServ :IDENTIFY <args> from phantom. */
-			sendto_one(ns_p->from, ":%s PRIVMSG %s :IDENTIFY %s",
-				   use_id(phantom), use_id(ns_p), decoded_args);
-			break;
-		}
-
-		/*
-		 * W <level> :<message_pct>
-		 * Warning/log message from discordd.
-		 */
-		case 'W':
-		{
-			if(parc < 3) break;
-			char msg[BUFSIZE];
-			rb_strlcpy(msg, argv[2], sizeof(msg));
-			pct_decode(msg);
-			switch(argv[1][0])
-			{
-			case 'C':
-				sendto_realops_snomask(SNO_GENERAL, L_ALL,
-					"Discord bridge [CRIT]: %s", msg);
-				ilog(L_MAIN, "discord [CRIT]: %s", msg);
-				break;
-			case 'W':
-				sendto_realops_snomask(SNO_GENERAL, L_ALL,
-					"Discord bridge [WARN]: %s", msg);
-				ilog(L_MAIN, "discord [warn]: %s", msg);
-				break;
-			case 'I':
-				ilog(L_MAIN, "discord [info]: %s", msg);
-				break;
-			default:
-				ilog(L_MAIN, "discord [debug]: %s", msg);
-				break;
-			}
-			break;
-		}
-
-		default:
-			ilog(L_MAIN, "discord: unknown reply '%c'",
-			     argv[0][0]);
-			break;
-		}
+		fn = discord_handlers[(unsigned char)argv[0][0]];
+		if(fn != NULL)
+			fn(argv, parc);
+		else
+			ilog(L_MAIN, "discord: unknown reply '%c'", argv[0][0]);
 	}
 }
 

@@ -99,13 +99,16 @@ rb_lib_loop
 rb_lib_restart
 rb_lib_version
 rb_linebuf_attach
+rb_linebuf_consume
 rb_linebuf_donebuf
 rb_linebuf_flush
 rb_linebuf_get
 rb_linebuf_init
 rb_linebuf_newbuf
 rb_linebuf_parse
+rb_linebuf_peek
 rb_linebuf_put
+rb_linebuf_unref
 rb_listen
 rb_sendbuf_donebuf
 rb_sendbuf_flush
