@@ -31,6 +31,8 @@ h_chm_nocolour(void *vdata)
 {
 	hook_data_privmsg_channel *data = vdata;
 
+	if (!ConfigFeatures.channel_nocolour)
+		return;
 	if (data->approved)
 		return;
 
@@ -48,6 +50,8 @@ h_chm_noctcp(void *vdata)
 {
 	hook_data_privmsg_channel *data = vdata;
 
+	if (!ConfigFeatures.channel_noctcp)
+		return;
 	if (data->approved || data->msgtype == MESSAGE_TYPE_NOTICE)
 		return;
 
@@ -74,6 +78,8 @@ h_chm_operonly(void *vdata)
 	struct Client *source_p = data->client;
 	struct Channel *chptr = data->chptr;
 
+	if (!ConfigFeatures.channel_operonly)
+		return;
 	if (data->approved)
 		return;
 
@@ -94,6 +100,8 @@ h_chm_sslonly(void *vdata)
 	struct Client *source_p = data->client;
 	struct Channel *chptr = data->chptr;
 
+	if (!ConfigFeatures.channel_sslonly)
+		return;
 	if (data->approved)
 		return;
 

@@ -120,6 +120,8 @@ h_callerid_invite(void *vdata)
 	hook_data_channel_approval *data = vdata;
 	static char errorbuf[BUFSIZE];
 
+	if (!ConfigFeatures.umode_callerid)
+		return;
 	if (data->approved)
 		return;
 	if (!callerid_add_accept(MESSAGE_TYPE_PRIVMSG, data->client, data->target))
@@ -142,6 +144,8 @@ h_callerid_privmsg_user(void *vdata)
 {
 	hook_data_privmsg_user *data = vdata;
 
+	if (!ConfigFeatures.umode_callerid)
+		return;
 	if (data->approved)
 		return;
 	if (!callerid_add_accept(data->msgtype, data->source_p, data->target_p))
@@ -184,6 +188,8 @@ h_regonlymsg_invite(void *vdata)
 	hook_data_channel_approval *data = vdata;
 	static char errorbuf[BUFSIZE];
 
+	if (!ConfigFeatures.umode_regonlymsg)
+		return;
 	if (data->approved)
 		return;
 	if (regonlymsg_allow_message(data->client, data->target))
@@ -200,6 +206,8 @@ h_regonlymsg_privmsg_user(void *vdata)
 {
 	hook_data_privmsg_user *data = vdata;
 
+	if (!ConfigFeatures.umode_regonlymsg)
+		return;
 	if (data->approved)
 		return;
 	if (regonlymsg_allow_message(data->source_p, data->target_p))
@@ -221,6 +229,8 @@ h_umode_noctcp_privmsg_user(void *vdata)
 {
 	hook_data_privmsg_user *data = vdata;
 
+	if (!ConfigFeatures.umode_noctcp)
+		return;
 	if (!MyClient(data->target_p))
 		return;
 	if (data->approved || data->msgtype == MESSAGE_TYPE_NOTICE)

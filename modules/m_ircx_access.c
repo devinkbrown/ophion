@@ -585,7 +585,7 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 		if (*p == '~')
 			p++;
 		unsigned char type_char = (unsigned char) irctolower((unsigned char)*p);
-		if (type_char == '\0' || extban_table[type_char] == NULL)
+		if (type_char == '\0' || !extban_is_enabled(type_char))
 		{
 			sendto_one_numeric(source_p, ERR_INVALIDBAN, form_str(ERR_INVALIDBAN),
 				chptr->chname, 'b', mask);
