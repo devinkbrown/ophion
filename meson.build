@@ -43,11 +43,16 @@ bison_gen = generator(bison,
 
 cdata = configuration_data()
 
-# tls: we prefer mbedtls if we can find it, else gnutls and then openssl
-libcrypto_dep = dependency('libcrypto', required: false)
-
-if libcrypto_dep.found()
+# TLS: wolfSSL (OpenSSL-compatible) is preferred, then mbedtls, then gnutls.
+# wolfSSL provides both the crypto (libcrypto equivalent) and TLS layers.
+wolfssl_dep = dependency('wolfssl', required: false)
+if wolfssl_dep.found()
   cdata.set('HAVE_LIBCRYPTO', true)
+  # Make wolfSSL's OpenSSL compatibility headers visible as <openssl/...>
+  add_project_arguments('-I/usr/include/wolfssl', language: 'c')
+  # Force-include wolfssl/options.h so OPENSSL_EXTRA and related macros are
+  # defined before any wolfSSL or wolfSSL-OpenSSL-compat header is seen.
+  add_project_arguments('-include', 'wolfssl/options.h', language: 'c')
 endif
 
 # grr, mbedtls has no pc file so we have to do this ourselves.  gross.
@@ -55,7 +60,7 @@ mbedtls_lib = cc.find_library('mbedtls', has_headers: ['mbedtls/ssl.h'], require
 mbedcrypto_lib = cc.find_library('mbedcrypto', required: false)
 mbedx509_lib = cc.find_library('mbedx509', required: false)
 
-if mbedtls_lib.found() and mbedcrypto_lib.found() and mbedx509_lib.found()
+if not wolfssl_dep.found() and mbedtls_lib.found() and mbedcrypto_lib.found() and mbedx509_lib.found()
   mbedtls_dep = declare_dependency(include_directories: '/usr/include',
     dependencies: [mbedtls_lib, mbedcrypto_lib, mbedx509_lib])
 
@@ -64,7 +69,7 @@ else
   mbedtls_dep = disabler()
 endif
 
-if not mbedtls_dep.found()
+if not wolfssl_dep.found() and not mbedtls_dep.found()
   gnutls_dep = dependency('gnutls', required: false)
 
   if gnutls_dep.found()
@@ -74,12 +79,12 @@ else
   gnutls_dep = disabler()
 endif
 
-if not mbedtls_dep.found() and not gnutls_dep.found() and libcrypto_dep.found()
-  libssl_dep = dependency('libssl', required: false)
-
-  if libssl_dep.found()
-    cdata.set('HAVE_OPENSSL', true)
-  endif
+if wolfssl_dep.found()
+  # wolfSSL is our OpenSSL replacement; use its compat layer.
+  libssl_dep = wolfssl_dep
+  cdata.set('HAVE_OPENSSL', true)
+elif not mbedtls_dep.found() and not gnutls_dep.found()
+  libssl_dep = disabler()
 else
   libssl_dep = disabler()
 endif

@@ -56,7 +56,7 @@ ircd_lib = shared_library('ircd',
   'wsproc.c',
   serno_h,
   ircd_version_c,
-  dependencies: [libcrypto_dep, libdl_dep],
+  dependencies: [wolfssl_dep, libdl_dep],
   include_directories: [librb_inc, base_inc],
   install: true,
   link_with: [librb_lib])

@@ -1,8 +1,6 @@
-openssl_dep = dependency('openssl', required: true)
-
 discordd_exe = executable('discordd',
   'discordd.c',
-  dependencies: [openssl_dep],
+  dependencies: [wolfssl_dep],
   install: true,
   install_rpath: get_option('libdir'))
 
@@ -13,7 +11,7 @@ discordd_exe = executable('discordd',
 test_discord_codec = executable('test_discord_codec',
   'tests/test_codec.c',
   c_args: ['-DDISCORD_NO_MAIN'],
-  dependencies: [openssl_dep],
+  dependencies: [wolfssl_dep],
   include_directories: [])
 
 test('discord_codec', test_discord_codec)

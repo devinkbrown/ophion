@@ -24,6 +24,12 @@
 #ifndef LRB_OPENSSL_H_INC
 #define LRB_OPENSSL_H_INC 1
 
+/* When building against wolfSSL, options.h must be included before any
+ * wolfSSL or its OpenSSL-compat headers so OPENSSL_EXTRA et al. are set. */
+#if __has_include(<wolfssl/options.h>)
+#  include <wolfssl/options.h>
+#endif
+
 #include <openssl/dh.h>
 #include <openssl/ec.h>
 #include <openssl/err.h>
