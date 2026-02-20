@@ -46,6 +46,24 @@
 
 #define SELF_PID (dnsbl_provider.id)
 
+/* DNSBL result cache: maps client IP → pass/block outcome.
+ * Avoids repeating DNS lookups for IPs seen recently. */
+#define DNSBL_CACHE_TTL  60	/* seconds before a cache entry expires */
+#define DNSBL_CACHE_MAX  4096	/* max entries; evict oldest beyond this */
+
+struct dnsbl_cache_entry
+{
+	char ip[HOSTIPLEN + 1];			/* key — owned by entry */
+	bool blocked;				/* true if this IP was rejected */
+	char bl_host[IRCD_RES_HOSTLEN + 1];	/* DNSBL that blocked it */
+	char reason[BUFSIZE];			/* rejection reason template */
+	time_t expires;
+	rb_dlink_node node;
+};
+
+static rb_dictionary *dnsbl_cache;
+static rb_dlink_list  dnsbl_cache_list;
+
 typedef enum filter_t
 {
 	FILTER_ALL = 1,
@@ -117,6 +135,65 @@ static void initiate_dnsbl_dnsquery(struct dnsbl *, struct auth_client *);
 /* Variables */
 static rb_dlink_list dnsbl_list = { NULL, NULL, 0 };
 static int dnsbl_timeout = DNSBL_TIMEOUT_DEFAULT;
+
+/* ---------- cache helpers ------------------------------------------------ */
+
+static struct dnsbl_cache_entry *
+dnsbl_cache_get(const char *ip)
+{
+	struct dnsbl_cache_entry *entry = rb_dictionary_retrieve(dnsbl_cache, ip);
+
+	if(entry == NULL)
+		return NULL;
+
+	if(entry->expires < rb_current_time())
+	{
+		rb_dlinkDelete(&entry->node, &dnsbl_cache_list);
+		rb_dictionary_delete(dnsbl_cache, entry->ip);
+		rb_free(entry);
+		return NULL;
+	}
+
+	return entry;
+}
+
+static void
+dnsbl_cache_put(const char *ip, bool blocked, const char *bl_host, const char *reason)
+{
+	struct dnsbl_cache_entry *entry;
+
+	/* Replace existing entry if present */
+	entry = rb_dictionary_retrieve(dnsbl_cache, ip);
+	if(entry != NULL)
+	{
+		rb_dlinkDelete(&entry->node, &dnsbl_cache_list);
+		rb_dictionary_delete(dnsbl_cache, entry->ip);
+		rb_free(entry);
+	}
+	else if(rb_dlink_list_length(&dnsbl_cache_list) >= DNSBL_CACHE_MAX)
+	{
+		struct dnsbl_cache_entry *oldest = dnsbl_cache_list.head->data;
+		rb_dlinkDelete(&oldest->node, &dnsbl_cache_list);
+		rb_dictionary_delete(dnsbl_cache, oldest->ip);
+		rb_free(oldest);
+	}
+
+	entry = rb_malloc(sizeof(struct dnsbl_cache_entry));
+	rb_strlcpy(entry->ip, ip, sizeof(entry->ip));
+	entry->blocked = blocked;
+	if(bl_host != NULL)
+		rb_strlcpy(entry->bl_host, bl_host, sizeof(entry->bl_host));
+	else
+		entry->bl_host[0] = '\0';
+	if(reason != NULL)
+		rb_strlcpy(entry->reason, reason, sizeof(entry->reason));
+	else
+		entry->reason[0] = '\0';
+	entry->expires = rb_current_time() + DNSBL_CACHE_TTL;
+
+	rb_dictionary_add(dnsbl_cache, entry->ip, entry);
+	rb_dlinkAddTail(entry, &entry->node, &dnsbl_cache_list);
+}
 
 /* private interfaces */
 
@@ -249,8 +326,9 @@ dnsbl_dns_callback(const char *result, bool status, query_type type, void *data)
 
 	if (result != NULL && status && dnsbl_check_reply(bllookup, result))
 	{
-		/* Match found, so proceed no further */
+		/* Match found — cache the block and reject */
 		bl->hits++;
+		dnsbl_cache_put(auth->c_ip, true, bl->host, bl->reason);
 		reject_client(auth, SELF_PID, bl->host, bl->reason);
 		dnsbls_cancel(auth);
 		return;
@@ -263,8 +341,8 @@ dnsbl_dns_callback(const char *result, bool status, query_type type, void *data)
 
 	if(!rb_dlink_list_length(&bluser->queries))
 	{
-		/* Done here */
-		notice_client(auth->cid, "*** No DNSBL entry found for this IP");
+		/* All DNSBLs checked, IP is clean — cache the pass */
+		dnsbl_cache_put(auth->c_ip, false, NULL, NULL);
 		rb_free(bluser);
 		set_provider_data(auth, SELF_PID, NULL);
 		set_provider_timeout_absolute(auth, SELF_PID, 0);
@@ -316,7 +394,6 @@ lookup_all_dnsbls(struct auth_client *auth)
 		return false;
 
 	bluser->started = true;
-	notice_client(auth->cid, "*** Checking your IP against DNSBLs");
 
 	RB_DLINK_FOREACH(ptr, dnsbl_list.head)
 	{
@@ -368,6 +445,17 @@ dnsbls_start(struct auth_client *auth)
 		/* Nothing to do... */
 		provider_done(auth, SELF_PID);
 		return true;
+	}
+
+	/* Fast path: serve from cache */
+	const struct dnsbl_cache_entry *cached = dnsbl_cache_get(auth->c_ip);
+	if(cached != NULL)
+	{
+		if(cached->blocked)
+			reject_client(auth, SELF_PID, cached->bl_host, "%s", cached->reason);
+		else
+			provider_done(auth, SELF_PID);
+		return !cached->blocked;
 	}
 
 	auth_client_ref(auth);
@@ -457,6 +545,13 @@ dnsbls_cancel_none(struct auth_client *auth)
 	dnsbls_generic_cancel(auth, "*** Could not check DNSBLs");
 }
 
+static bool
+dnsbls_init(void)
+{
+	dnsbl_cache = rb_dictionary_create("dnsbl cache", strcasecmp);
+	return true;
+}
+
 static void
 dnsbls_destroy(void)
 {
@@ -470,6 +565,16 @@ dnsbls_destroy(void)
 	}
 
 	delete_all_dnsbls();
+
+	rb_dlink_node *ptr, *nptr;
+	RB_DLINK_FOREACH_SAFE(ptr, nptr, dnsbl_cache_list.head)
+	{
+		struct dnsbl_cache_entry *entry = ptr->data;
+		rb_dlinkDelete(ptr, &dnsbl_cache_list);
+		rb_free(entry);
+	}
+	rb_dictionary_destroy(dnsbl_cache, NULL, NULL);
+	dnsbl_cache = NULL;
 }
 
 static void
@@ -598,6 +703,7 @@ struct auth_provider dnsbl_provider =
 {
 	.name = "dnsbl",
 	.letter = 'B',
+	.init = dnsbls_init,
 	.destroy = dnsbls_destroy,
 	.start = dnsbls_start,
 	.cancel = dnsbls_cancel,
