@@ -1,5 +1,5 @@
 /*
- * modules/m_ircx_prop_adminkey.c
+ * modules/m_ircx_prop_ownerkey.c
  * Copyright (c) 2020 Ariadne Conill <ariadne@dereferenced.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,21 +42,21 @@
 #include "hash.h"
 #include "propertyset.h"
 
-static const char ircx_prop_adminkey_desc[] = "Provides support for the ADMINKEY channel property";
+static const char ircx_prop_ownerkey_desc[] = "Provides support for the OWNERKEY channel property";
 
 static void h_prop_channel_join(void *);
 static void h_prop_authorize(void *);
 
-mapi_hfn_list_av1 ircx_prop_adminkey_hfnlist[] = {
+mapi_hfn_list_av1 ircx_prop_ownerkey_hfnlist[] = {
 	{ "channel_join", (hookfn) h_prop_channel_join },
 	{ "prop_show", (hookfn) h_prop_authorize },
 	{ "prop_chan_write", (hookfn) h_prop_authorize },
 	{ NULL, NULL }
 };
 
-DECLARE_MODULE_AV2(ircx_prop_adminkey, NULL, NULL, NULL, NULL, ircx_prop_adminkey_hfnlist, NULL, NULL, ircx_prop_adminkey_desc);
+DECLARE_MODULE_AV2(ircx_prop_ownerkey, NULL, NULL, NULL, NULL, ircx_prop_ownerkey_hfnlist, NULL, NULL, ircx_prop_ownerkey_desc);
 
-/* handle ADMINKEY property on channel join */
+/* handle OWNERKEY property on channel join: grants +q (channel-admin) */
 static void
 h_prop_channel_join(void *vdata)
 {
@@ -72,9 +72,6 @@ h_prop_channel_join(void *vdata)
 
 	rb_dlink_list *prop_list = &chptr->prop_list;
 	struct Property *prop = propertyset_find(prop_list, "OWNERKEY");
-
-	if (prop == NULL)
-		prop = propertyset_find(prop_list, "ADMINKEY");
 
 	if (prop == NULL)
 		return;
@@ -94,6 +91,6 @@ h_prop_authorize(void *vdata)
 	if (!IsChanPrefix(*data->target))
 		return;
 
-	if (!rb_strcasecmp(data->key, "ADMINKEY") || !rb_strcasecmp(data->key, "OWNERKEY"))
+	if (!rb_strcasecmp(data->key, "OWNERKEY"))
 		data->approved = data->alevel >= CHFL_ADMIN;
 }
