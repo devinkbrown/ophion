@@ -49,13 +49,10 @@
 #loadmodule "extensions/no_kill_services";
 
 /*
- * IP cloaking extensions: ip_cloaking_4.0 provides umode +x (new-style),
- * ip_cloaking provides umode +h (legacy, for compatibility with older servers).
- * Use only one at a time.
+ * IP cloaking extension: ip_cloaking_unified provides umode +x and supports
+ * multiple cloaking styles.  See the cloaking_style option in general{}.
  */
-
-#loadmodule "extensions/ip_cloaking_4.0";
-#loadmodule "extensions/ip_cloaking";
+#loadmodule "extensions/ip_cloaking_unified";
 
 serverinfo {
 	name = "irc.example.net";
@@ -72,33 +69,35 @@ serverinfo {
 	/* for IPv6 */
 	#vhost6 = "2001:db8:2::6";
 
-	/* ssl_cert: certificate (and optionally key) for our ssl server */
+	/*
+	 * TLS/SSL setup (managed by the ssld helper; uses wolfSSL)
+	 *
+	 * Quick setup — run these commands once to generate a self-signed cert:
+	 *   openssl req -x509 -newkey rsa:4096 -keyout etc/ssl.key \
+	 *               -out etc/ssl.pem -days 3650 -nodes \
+	 *               -subj "/CN=irc.example.net"
+	 *   openssl dhparam -out etc/dh.pem 2048   # optional, for DHE ciphers
+	 *
+	 * For a CA-signed cert, replace the self-signed cert with one from
+	 * Let's Encrypt (certbot) or another CA.
+	 */
+
+	/* Path to the PEM certificate (may also contain the private key). */
 	ssl_cert = "etc/ssl.pem";
 
-	/* ssl_private_key: our ssl private key (if not contained in ssl_cert file) */
+	/* Private key file, if not bundled with ssl_cert above. */
 	#ssl_private_key = "etc/ssl.key";
 
-	/* ssl_dh_params: DH parameters, generate with openssl dhparam -out dh.pem 2048
-	 * In general, the DH parameters size should be the same as your key's size.
-	 * However it has been reported that some clients have broken TLS implementations which may
-	 * choke on keysizes larger than 2048-bit, so we would recommend using 2048-bit DH parameters
-	 * for now if your keys are larger than 2048-bit.
-	 *
-	 * If you do not provide parameters, some TLS backends will fail on DHE- ciphers,
-	 * and some will succeed but use weak, common DH groups! */
-	ssl_dh_params = "etc/dh.pem";
+	/* DH parameters for DHE cipher suites (optional but recommended).
+	 * Generate with: openssl dhparam -out etc/dh.pem 2048 */
+	#ssl_dh_params = "etc/dh.pem";
 
-	/* ssld_count: number of ssld processes you want to start, if you
-	 * have a really busy server, using N-1 where N is the number of
-	 * cpu/cpu cores you have might be useful. A number greater than one
-	 * can also be useful in case of bugs in ssld and because ssld needs
-	 * two file descriptors per SSL connection.
-	 */
+	/* Number of ssld helper processes.  For busy servers set to
+	 * (number of CPU cores - 1).  Each ssld uses 2 fds per TLS connection. */
 	ssld_count = 1;
 
-	/* ssl_client_cert: whether SSL client certificates should be enabled.  this causes
-	 * problems with Chromium-based browsers using WebSocket at the moment.
-	 */
+	/* Enable TLS client certificate authentication (used by m_certfp).
+	 * May cause issues with Chromium-based WebSocket clients. */
 	ssl_client_cert = no;
 
 	/* default max clients: the default maximum number of clients
@@ -559,15 +558,17 @@ general {
 
 	/*
 	 * default_umodes: umodes to enable on connect.
-	 * If you have enabled the new ip_cloaking_4.0 module, and you want
-	 * to make use of it, add +x to this option, i.e.:
+	 * If you have loaded ip_cloaking_unified (see top of file), add +x
+	 * here so all users get a cloaked host on connect:
 	 *      default_umodes = "+ix";
-	 *
-	 * If you have enabled the old ip_cloaking module, and you want
-	 * to make use of it, add +h to this option, i.e.:
-	 *	default_umodes = "+ih";
 	 */
 	default_umodes = "+i";
+
+	/*
+	 * cloaking_style: algorithm used by ip_cloaking_unified for umode +x.
+	 * Options: "ircx" (default), "4.0", "3.0", "oldhost".
+	 */
+	#cloaking_style = "ircx";
 
 	default_operstring = "is an IRC Operator";
 	default_adminstring = "is a Server Administrator";
