@@ -293,9 +293,11 @@ read_packet(rb_fde_t *F, void *data)
 			return;
 		}
 
-		/* Update the last-seen timestamp and clear the ping-sent flag. */
-		if(client_p->localClient->lasttime < rb_current_time())
-			client_p->localClient->lasttime = rb_current_time();
+		/* Update the last-seen timestamp and clear the ping-sent flag.
+		 * Cache the clock value so we only read it once per iteration. */
+		time_t now = rb_current_time();
+		if(client_p->localClient->lasttime < now)
+			client_p->localClient->lasttime = now;
 		client_p->flags &= ~FLAGS_PINGSENT;
 
 		/* Binary mode for clients still in handshake/unknown state:
