@@ -147,6 +147,44 @@ COMMON USE CASES
 
 +b $&$~a,$~z  Require both account and SSL: ban anyone without both.
 
+EXTBANS IN THE ACCESS COMMAND
+------------------------------
+
+Extended bans can be used as mask arguments in the IRCX ACCESS command
+for all membership levels (VOICE, HOST/OP, OWNER/ADMIN). This lets
+administrators grant channel access based on account name, SSL status,
+group membership, and other extban criteria rather than just
+nick!user@host masks.
+
+ACCESS #channel ADD VOICE $a
+    Grant VOICE to any logged-in user.
+
+ACCESS #channel ADD HOST $a:TrustedOps
+    Grant HOST (chanop) to any user logged in as "TrustedOps".
+
+ACCESS #channel ADD OWNER $o
+    Grant OWNER to any IRC operator.
+
+ACCESS #channel ADD VOICE $z
+    Grant VOICE to all SSL/TLS connected users.
+
+ACCESS #channel ADD HOST $&$a,$z
+    Grant HOST only to logged-in SSL users (both conditions).
+
+ACCESS #channel ADD VOICE $g:Staff
+    Grant VOICE to users in the "Staff" group (via MEMBER-OF property,
+    requires m_ircx_prop_member_of and supporting services).
+
+DENY and GRANT levels still route through the channel mode lists (+b and
++I respectively) and accept any extban that the mode system accepts.
+
+QUIET entries route through the quiet list (+Z) and also accept extbans.
+
+The server validates that any mask starting with '$' uses a registered
+extban type. State-dependent extbans (e.g. $j with a channel that does
+not yet exist) can still be added; they simply will not match until their
+preconditions are met.
+
 CREATING CUSTOM EXTBAN TYPES
 -----------------------------
 
