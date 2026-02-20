@@ -24,289 +24,255 @@
 #include "match.h"
 #include "s_assert.h"
 
+
+/* -----------------------------------------------------------------------
+ * Compiled NFA for IRC wildcard matching.
+ *
+ * The compile step converts a mask into an array of atoms, collapsing
+ * consecutive STARs.  The execute step simulates the NFA with a single
+ * saved backtrack point (the most-recently-seen STAR), scanning the input
+ * once per star per backtrack attempt.  This is equivalent to the classic
+ * backtracking algorithm but structured without goto.
+ *
+ * Time complexity: O(|name| * |mask|) worst case, O(|name|) typical.
+ *
+ * Three wildcard sets are supported:
+ *   compile_simple  —  * and ? only (match, mask_match)
+ *   compile_esc     —  * ? @ # \s \X escapes (match_esc)
+ *
+ * mask_mode: A_QUEST does not match '*' in the input (mask_match).
+ * ----------------------------------------------------------------------- */
+
+#define MAX_ATOMS 1024
+
+typedef enum
+{
+	A_STAR,     /* * – match zero or more characters  */
+	A_QUEST,    /* ? – match any single character      */
+	A_LETTER,   /* @ – match any letter  (match_esc)   */
+	A_DIGIT,    /* # – match any digit   (match_esc)   */
+	A_SPACE,    /* \s – match a space    (match_esc)   */
+	A_LITERAL,  /* exact character (case-folded)        */
+} atom_type_t;
+
+typedef struct
+{
+	atom_type_t   type;
+	unsigned char ch;   /* A_LITERAL: the case-folded byte */
+} atom_t;
+
+/* Compile a simple IRC wildcard pattern (* and ?) into atoms[]. */
+static int
+compile_simple(atom_t *atoms, int cap, const char *mask)
+{
+	int n = 0;
+	for(const char *m = mask; *m && n < cap; m++)
+	{
+		if(*m == '*')
+		{
+			if(n > 0 && atoms[n - 1].type == A_STAR) continue; /* collapse */
+			atoms[n++] = (atom_t){ A_STAR, 0 };
+		}
+		else if(*m == '?')
+		{
+			atoms[n++] = (atom_t){ A_QUEST, 0 };
+		}
+		else
+		{
+			atoms[n++] = (atom_t){ A_LITERAL,
+			                       irctolower((unsigned char)*m) };
+		}
+	}
+	return n;
+}
+
+/* Compile a match_esc extended-wildcard pattern into atoms[]. */
+static int
+compile_esc(atom_t *atoms, int cap, const char *mask)
+{
+	int n = 0;
+	const unsigned char *m = (const unsigned char *)mask;
+
+	while(*m && n < cap)
+	{
+		if(*m == '*')
+		{
+			while(*(m + 1) == '*') m++;   /* collapse */
+			if(n > 0 && atoms[n - 1].type == A_STAR) { m++; continue; }
+			atoms[n++] = (atom_t){ A_STAR, 0 };
+		}
+		else if(*m == '?') atoms[n++] = (atom_t){ A_QUEST,  0 };
+		else if(*m == '@') atoms[n++] = (atom_t){ A_LETTER, 0 };
+		else if(*m == '#') atoms[n++] = (atom_t){ A_DIGIT,  0 };
+		else if(*m == '\\')
+		{
+			m++;
+			if(!*m) break;                /* trailing backslash: ignore */
+			if(*m == 's')
+				atoms[n++] = (atom_t){ A_SPACE, 0 };
+			else
+				atoms[n++] = (atom_t){ A_LITERAL, irctolower(*m) };
+		}
+		else
+		{
+			atoms[n++] = (atom_t){ A_LITERAL, irctolower(*m) };
+		}
+		m++;
+	}
+	return n;
+}
+
 /*
- * Compare if a given string (name) matches the given
- * mask (which can contain wild cards: '*' - match any
- * number of chars, '?' - match any single character.
+ * exec_nfa — simulate the compiled NFA against `name`.
  *
- * return  1, if match
- *         0, if no match
+ * mask_mode: if non-zero, A_QUEST does not match '*' in the input.
  *
- *  Originally by Douglas A Lewis (dalewis@acsu.buffalo.edu)
- *  Rewritten by Timothy Vogelsang (netski), net@astrolink.org
+ * Returns 1 on match, 0 on no match.
  */
+static int
+exec_nfa(const atom_t *atoms, int natoms, const char *name, int mask_mode)
+{
+	int ai = 0;             /* index into atoms[] */
+	const char *n = name;   /* current position in input string */
+	int star_ai = -1;       /* atom index after the most-recent STAR */
+	const char *star_n = name; /* input position at the most-recent STAR */
+
+	for(;;)
+	{
+		/* Absorb any consecutive STAR atoms, updating the backtrack point. */
+		while(ai < natoms && atoms[ai].type == A_STAR)
+		{
+			star_ai = ai + 1;
+			star_n  = n;
+			ai++;
+		}
+
+		if(!*n)
+		{
+			/*
+			 * Input exhausted.  Eat any trailing STARs (they match
+			 * the empty suffix) and succeed iff pattern is also done.
+			 */
+			while(ai < natoms && atoms[ai].type == A_STAR) ai++;
+			return ai >= natoms;
+		}
+
+		if(ai >= natoms)
+		{
+			/* Pattern exhausted but input remains — only a STAR can help. */
+			if(star_ai < 0) return 0;
+			ai = star_ai;
+			n  = ++star_n;
+			continue;
+		}
+
+		/* Attempt to match the current atom against *n. */
+		int ok;
+		unsigned char c = (unsigned char)*n;
+		switch(atoms[ai].type)
+		{
+		case A_QUEST:
+			ok = !mask_mode || (c != (unsigned char)'*');
+			break;
+		case A_LETTER:
+			ok = IsLetter(c);
+			break;
+		case A_DIGIT:
+			ok = IsDigit(c);
+			break;
+		case A_SPACE:
+			ok = (c == (unsigned char)' ');
+			break;
+		case A_LITERAL:
+			ok = (irctolower(c) == atoms[ai].ch);
+			break;
+		default: /* A_STAR: handled above */
+			ok = 0;
+			break;
+		}
+
+		if(ok)
+		{
+			ai++;
+			n++;
+		}
+		else
+		{
+			/* Current atom failed — backtrack to the last STAR. */
+			if(star_ai < 0) return 0;
+			ai = star_ai;
+			n  = ++star_n;
+		}
+	}
+}
 
 /** Check a string against a mask.
- * This test checks using traditional IRC wildcards only: '*' means
- * match zero or more characters of any type; '?' means match exactly
- * one character of any type.
+ * Traditional IRC wildcards: '*' matches zero or more characters,
+ * '?' matches exactly one character.
  *
- * @param[in] mask Wildcard-containing mask.
- * @param[in] name String to check against \a mask.
- * @return Zero if \a mask matches \a name, non-zero if no match.
+ * @param[in] mask  Wildcard-containing mask.
+ * @param[in] name  String to check against mask.
+ * @return 1 if mask matches name, 0 otherwise.
  */
-int match(const char *mask, const char *name)
+int
+match(const char *mask, const char *name)
 {
-	const char *m = mask, *n = name;
-	const char *m_tmp = mask, *n_tmp = name;
-	int star_p;
+	atom_t atoms[MAX_ATOMS];
+	int    natoms;
 
 	s_assert(mask != NULL);
 	s_assert(name != NULL);
 
-	for (;;)
-	{
-		switch (*m)
-		{
-		  case '\0':
-			  if (!*n)
-				  return 1;
-		  backtrack:
-			  if (m_tmp == mask)
-				  return 0;
-			  m = m_tmp;
-			  n = ++n_tmp;
-			  break;
-		  case '*':
-		  case '?':
-			  for (star_p = 0;; m++)
-			  {
-				  if (*m == '*')
-					  star_p = 1;
-				  else if (*m == '?')
-				  {
-					  if (!*n++)
-						  goto backtrack;
-				  }
-				  else
-					  break;
-			  }
-			  if (star_p)
-			  {
-				  if (!*m)
-					  return 1;
-				  else
-				  {
-					  m_tmp = m;
-					  for (n_tmp = n; *n && irctolower(*n) != irctolower(*m); n++);
-				  }
-			  }
-			  /* and fall through */
-		  default:
-			  if (!*n)
-				  return (*m != '\0' ? 0 : 1);
-			  if (irctolower(*m) != irctolower(*n))
-				  goto backtrack;
-			  m++;
-			  n++;
-			  break;
-		}
-	}
+	natoms = compile_simple(atoms, MAX_ATOMS, mask);
+	return exec_nfa(atoms, natoms, name, 0);
 }
 
 /** Check a mask against a mask.
- * This test checks using traditional IRC wildcards only: '*' means
- * match zero or more characters of any type; '?' means match exactly
- * one character of any type.
- * The difference between mask_match() and match() is that in mask_match()
- * a '?' in mask does not match a '*' in name.
+ * Same as match(), but '?' in the pattern does not match '*' in the
+ * input.  Used when comparing two wildcard masks for specificity.
  *
- * @param[in] mask Existing wildcard-containing mask.
- * @param[in] name New wildcard-containing mask.
- * @return 1 if \a name is equal to or more specific than \a mask, 0 otherwise.
+ * @param[in] mask  Existing wildcard-containing mask.
+ * @param[in] name  New wildcard-containing mask.
+ * @return 1 if name is equal to or more specific than mask, 0 otherwise.
  */
-int mask_match(const char *mask, const char *name)
+int
+mask_match(const char *mask, const char *name)
 {
-	const char *m = mask, *n = name;
-	const char *m_tmp = mask, *n_tmp = name;
-	int star_p;
+	atom_t atoms[MAX_ATOMS];
+	int    natoms;
 
 	s_assert(mask != NULL);
 	s_assert(name != NULL);
 
-	for (;;)
-	{
-		switch (*m)
-		{
-		  case '\0':
-			  if (!*n)
-				  return 1;
-		  backtrack:
-			  if (m_tmp == mask)
-				  return 0;
-			  m = m_tmp;
-			  n = ++n_tmp;
-			  break;
-		  case '*':
-		  case '?':
-			  for (star_p = 0;; m++)
-			  {
-				  if (*m == '*')
-					  star_p = 1;
-				  else if (*m == '?')
-				  {
-					  /* changed for mask_match() */
-					  if (*n == '*' || !*n)
-						  goto backtrack;
-					  n++;
-				  }
-				  else
-					  break;
-			  }
-			  if (star_p)
-			  {
-				  if (!*m)
-					  return 1;
-				  else
-				  {
-					  m_tmp = m;
-					  for (n_tmp = n; *n && irctolower(*n) != irctolower(*m); n++);
-				  }
-			  }
-			  /* and fall through */
-		  default:
-			  if (!*n)
-				  return (*m != '\0' ? 0 : 1);
-			  if (irctolower(*m) != irctolower(*n))
-				  goto backtrack;
-			  m++;
-			  n++;
-			  break;
-		}
-	}
+	natoms = compile_simple(atoms, MAX_ATOMS, mask);
+	return exec_nfa(atoms, natoms, name, 1);
 }
 
-
-#define MATCH_MAX_CALLS 512	/* ACK! This dies when it's less that this
-				   and we have long lines to parse */
-/** Check a string against a mask.
- * This test checks using extended wildcards: '*' means match zero
- * or more characters of any type; '?' means match exactly one
- * character of any type; '#' means match exactly one character that
- * is a number; '@' means match exactly one character that is a
- * letter; '\s' means match a space.
+/** Check a string against an extended-wildcard mask.
+ * Wildcards: '*' – zero or more chars; '?' – any char; '@' – any letter;
+ * '#' – any digit; '\s' – space; '\X' – literal X.
  *
- * This function supports escaping, so that a wildcard may be matched
- * exactly.
- *
- * @param[in] mask Wildcard-containing mask.
- * @param[in] name String to check against \a mask.
- * @return Zero if \a mask matches \a name, non-zero if no match.
+ * @param[in] mask  Extended wildcard mask.
+ * @param[in] name  String to check.
+ * @return 1 if mask matches name, 0 otherwise.
  */
 int
 match_esc(const char *mask, const char *name)
 {
-	const unsigned char *m = (const unsigned char *)mask;
-	const unsigned char *n = (const unsigned char *)name;
-	const unsigned char *ma = (const unsigned char *)mask;
-	const unsigned char *na = (const unsigned char *)name;
-	int wild = 0;
-	int calls = 0;
-	int quote = 0;
-	int match1 = 0;
-
-	s_assert(mask != NULL);
-	s_assert(name != NULL);
+	atom_t atoms[MAX_ATOMS];
+	int    natoms;
 
 	if(!mask || !name)
 		return 0;
 
-	/* if the mask is "*", it matches everything */
-	if((*m == '*') && (*(m + 1) == '\0'))
+	/* Fast path: bare "*" matches everything. */
+	if(mask[0] == '*' && mask[1] == '\0')
 		return 1;
 
-	while(calls++ < MATCH_MAX_CALLS)
-	{
-		if(quote)
-			quote++;
-		if(quote == 3)
-			quote = 0;
-		if(*m == '\\' && !quote)
-		{
-			m++;
-			quote = 1;
-			continue;
-		}
-		if(!quote && *m == '*')
-		{
-			/*
-			 * XXX - shouldn't need to spin here, the mask should have been
-			 * collapsed before match is called
-			 */
-			while(*m == '*')
-				m++;
-
-			wild = 1;
-			ma = m;
-			na = n;
-
-			if(*m == '\\')
-			{
-				m++;
-				/* This means it is an invalid mask -A1kmm. */
-				if(!*m)
-					return 0;
-				quote++;
-				continue;
-			}
-		}
-
-		if(!*m)
-		{
-			if(!*n)
-				return 1;
-			if(quote)
-				return 0;
-			for(m--; (m > (const unsigned char *)mask) && (*m == '?'); m--)
-				;
-
-			if(*m == '*' && (m > (const unsigned char *)mask))
-				return 1;
-			if(!wild)
-				return 0;
-			m = ma;
-			n = ++na;
-		}
-		else if(!*n)
-		{
-			/*
-			 * XXX - shouldn't need to spin here, the mask should have been
-			 * collapsed before match is called
-			 */
-			if(quote)
-				return 0;
-			while(*m == '*')
-				m++;
-			return (*m == 0);
-		}
-
-		if(quote)
-			match1 = *m == 's' ? *n == ' ' : irctolower(*m) == irctolower(*n);
-		else if(*m == '?')
-			match1 = 1;
-		else if(*m == '@')
-			match1 = IsLetter(*n);
-		else if(*m == '#')
-			match1 = IsDigit(*n);
-		else
-			match1 = irctolower(*m) == irctolower(*n);
-		if(match1)
-		{
-			if(*m)
-				m++;
-			if(*n)
-				n++;
-		}
-		else
-		{
-			if(!wild)
-				return 0;
-			m = ma;
-			n = ++na;
-		}
-	}
-	return 0;
+	natoms = compile_esc(atoms, MAX_ATOMS, mask);
+	return exec_nfa(atoms, natoms, name, 0);
 }
+
 
 int comp_with_mask(void *addr, void *dest, unsigned int mask)
 {
