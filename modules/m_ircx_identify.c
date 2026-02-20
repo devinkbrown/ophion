@@ -6,7 +6,7 @@
  * IDENTIFY #channel <key>
  *
  * Checks the provided key against channel properties:
- *   OWNERKEY/ADMINKEY  -> grants +q (channel owner)
+ *   OWNERKEY           -> grants +q (channel owner)
  *   HOSTKEY/OPKEY      -> grants +o (channel operator)
  *   MEMBERKEY (+k key) -> grants +v (voice)
  *
@@ -83,10 +83,8 @@ m_identify(struct MsgBuf *msgbuf_p, struct Client *client_p,
 
 	key = parv[2];
 
-	/* Check OWNERKEY/ADMINKEY -> +q */
+	/* Check OWNERKEY -> +q */
 	prop = propertyset_find(&chptr->prop_list, "OWNERKEY");
-	if (prop == NULL)
-		prop = propertyset_find(&chptr->prop_list, "ADMINKEY");
 
 	if (prop != NULL && !rb_strcasecmp(prop->value, key))
 	{

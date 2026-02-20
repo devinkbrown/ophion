@@ -231,7 +231,7 @@ When ``oper_auto_op = yes`` is set in ``ircd.conf``, IRC operators and
 server admins automatically receive ``+q`` on channel join (unless they have
 the ``oper:auto_op`` privilege, which limits them to ``+o`` instead).
 
-In most clients channel admins are marked with a ``~`` (tilde) prefix.
+In most clients channel admins are marked with a ``.`` (dot) prefix.
 
 The privilege is lost if the user leaves the channel or server.
 

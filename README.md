@@ -182,8 +182,8 @@ The PROP command provides a key-value property system for channels and users:
 **Channel built-in properties** (m_ircx_prop_channel_builtins):
 `TOPIC`, `MEMBERCOUNT`, `CREATION` (read-only computed properties)
 
-**Channel keys** (m_ircx_prop_adminkey, m_ircx_prop_opkey):
-`ADMINKEY`, `OPKEY`
+**Channel keys** (m_ircx_prop_ownerkey, m_ircx_prop_opkey):
+`OWNERKEY`, `OPKEY` -- grant channel-admin (+q) or chanop (+o) on join
 
 **Entity properties**: Account, channel, and user entity properties
 via m_ircx_prop_entity_account, m_ircx_prop_entity_channel,
@@ -211,7 +211,7 @@ All IRCX functionality is provided by loadable modules in `modules/`:
 | m_ircx_modes | Core IRCX channel modes (+u/+h/+a/+d/+E/+f/+z) |
 | m_ircx_oper | GAG user mode (+z) and OPFORCE command |
 | m_ircx_prop | PROP command core |
-| m_ircx_prop_adminkey | ADMINKEY channel property |
+| m_ircx_prop_ownerkey | OWNERKEY channel property |
 | m_ircx_prop_channel_builtins | TOPIC/MEMBERCOUNT/CREATION properties |
 | m_ircx_prop_entity_account | Account entity properties |
 | m_ircx_prop_entity_channel | Channel entity properties |

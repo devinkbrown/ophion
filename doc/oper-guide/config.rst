@@ -600,7 +600,7 @@ oper\_auto\_op
         applies in god mode (``+G``).
 
     ``oper:auto_admin``
-        The oper joins with ``+q`` (channel-admin, prefix ``~``).
+        The oper joins with ``+q`` (channel-admin, prefix ``.``).
         Full ``CHFL_ADMIN`` access; no ceiling.  This privilege
         overrides ``oper:auto_op`` if both are present.
 

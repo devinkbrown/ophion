@@ -113,7 +113,7 @@ IRCX Module List
   m_ircx_oper             - GAG mode (+z) and OPFORCE command
   m_ircx_oper_godmode     - God mode (+G), oper auto-promote, kick/ban protection
   m_ircx_prop             - PROP command core
-  m_ircx_prop_adminkey    - ADMINKEY channel property
+  m_ircx_prop_ownerkey    - OWNERKEY channel property
   m_ircx_prop_channel_builtins - OID/NAME/CREATION/TOPIC/MEMBERCOUNT/MEMBERKEY
   m_ircx_prop_entity_account   - Account entity properties
   m_ircx_prop_entity_channel   - Channel entity properties

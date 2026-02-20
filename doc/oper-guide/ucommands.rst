@@ -397,8 +397,9 @@ on channels and users.
     max 64 chars), ``MCCEX`` (expression/gesture data). These enable
     Microsoft Comic Chat/Microsoft Chat character metadata support.
 
-**Channel keys** (via ``m_ircx_prop_adminkey`` / ``m_ircx_prop_opkey``):
-    ``ADMINKEY`` and ``OPKEY`` -- special channel access properties.
+**Channel keys** (via ``m_ircx_prop_ownerkey`` / ``m_ircx_prop_opkey``):
+    ``OWNERKEY`` and ``OPKEY`` -- special channel access properties that grant
+    channel-admin (+q) or chanop (+o) on join when the correct key is supplied.
 
 Provided by the ``m_ircx_prop`` module and its sub-modules.
 

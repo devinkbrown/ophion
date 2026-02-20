@@ -56,7 +56,7 @@ mapi_hfn_list_av1 ircx_prop_opkey_hfnlist[] = {
 
 DECLARE_MODULE_AV2(ircx_prop_opkey, NULL, NULL, NULL, NULL, ircx_prop_opkey_hfnlist, NULL, NULL, ircx_prop_opkey_desc);
 
-/* handle ADMINKEY property on channel join */
+/* handle OPKEY/HOSTKEY property on channel join: grants +o (chanop) */
 static void
 h_prop_channel_join(void *vdata)
 {

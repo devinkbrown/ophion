@@ -47,7 +47,7 @@ modules = [
   'm_ircx_listx',
   'm_ircx_modes',
   'm_ircx_prop',
-  'm_ircx_prop_adminkey',
+  'm_ircx_prop_ownerkey',
   'm_ircx_prop_channel_builtins',
   'm_ircx_prop_entity_account',
   'm_ircx_prop_entity_channel',
