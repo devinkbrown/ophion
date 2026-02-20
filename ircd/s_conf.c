@@ -121,13 +121,13 @@ init_s_conf(void)
  * side effects	- none
  */
 struct ConfItem *
-make_conf()
+make_conf(void)
 {
 	struct ConfItem *aconf;
 
 	aconf = rb_bh_alloc(confitem_heap);
 	aconf->status = CONF_ILLEGAL;
-	return (aconf);
+	return aconf;
 }
 
 /*
@@ -141,10 +141,8 @@ void
 free_conf(struct ConfItem *aconf)
 {
 	s_assert(aconf != NULL);
-	if(aconf == NULL)
-		return;
 
-	/* security.. */
+	/* zero password fields before freeing */
 	if(aconf->passwd)
 		memset(aconf->passwd, 0, strlen(aconf->passwd));
 	if(aconf->spasswd)
@@ -247,7 +245,7 @@ check_client(struct Client *client_p, struct Client *source_p, const char *usern
 				"I-line is full for %s!%s%s@%s (%s).",
 				source_p->name, IsGotId(source_p) ? "" : "~",
 				source_p->username, source_p->host,
-				show_ip(NULL, source_p) && !IsIPSpoof(source_p) ? source_p->sockhost : "255.255.255.255");
+				show_ip(NULL, source_p) && !IsIPSpoof(source_p) ? source_p->sockhost : source_p->host);
 
 		ilog(L_FUSER, "Too many connections from %s!%s%s@%s.",
 			source_p->name, IsGotId(source_p) ? "" : "~",
@@ -260,17 +258,9 @@ check_client(struct Client *client_p, struct Client *source_p, const char *usern
 
 	case NOT_AUTHORISED:
 		{
-			int port = -1;
-			port = ntohs(GET_SS_PORT(&source_p->localClient->listener->addr[0]));
+			int port = ntohs(GET_SS_PORT(&source_p->localClient->listener->addr[0]));
 
 			ServerStats.is_ref++;
-			/* jdc - lists server name & port connections are on */
-			/*       a purely cosmetical change */
-			/* why ipaddr, and not just source_p->sockhost? --fl */
-#if 0
-			static char ipaddr[HOSTIPLEN];
-			rb_inet_ntop_sock(&source_p->localClient->ip, ipaddr, sizeof(ipaddr));
-#endif
 			sendto_realops_snomask(SNO_UNAUTH, L_ALL,
 					"Unauthorised client connection from "
 					"%s!%s%s@%s [%s] on [%s/%u].",
@@ -297,7 +287,7 @@ check_client(struct Client *client_p, struct Client *source_p, const char *usern
 	default:
 		break;
 	}
-	return (i);
+	return i;
 }
 
 /*
@@ -323,7 +313,7 @@ verify_access(struct Client *client_p, const char *username)
 		{
 			sendto_one_numeric(client_p, RPL_REDIR, form_str(RPL_REDIR),
 					aconf->info.name ? aconf->info.name : "", aconf->port);
-			return (NOT_AUTHORISED);
+			return NOT_AUTHORISED;
 		}
 
 		/* Thanks for spoof idea amm */
@@ -358,7 +348,7 @@ verify_access(struct Client *client_p, const char *username)
 			else
 				rb_strlcpy(client_p->host, aconf->info.name, sizeof(client_p->host));
 		}
-		return (attach_iline(client_p, aconf));
+		return attach_iline(client_p, aconf);
 	}
 	else if(aconf->status & CONF_KILL)
 	{
@@ -368,7 +358,7 @@ verify_access(struct Client *client_p, const char *username)
 					me.name, client_p->name,
 					get_user_ban_reason(aconf));
 		add_reject(client_p, aconf->user, aconf->host, aconf, NULL);
-		return (BANNED_CLIENT);
+		return BANNED_CLIENT;
 	}
 
 	return NOT_AUTHORISED;
@@ -438,20 +428,15 @@ add_ip_limit(struct Client *client_p, struct ConfItem *aconf)
 
 	s_assert(pnode != NULL);
 
-	if(pnode != NULL)
+	if(((intptr_t)pnode->data) >= ConfCidrAmount(aconf) && !IsConfExemptLimits(aconf))
 	{
-		if(((intptr_t)pnode->data) >= ConfCidrAmount(aconf) && !IsConfExemptLimits(aconf))
-		{
-			/* This should only happen if the limits are set to 0 */
-			if((intptr_t)pnode->data == 0)
-			{
-				rb_patricia_remove(ConfIpLimits(aconf), pnode);
-			}
-			return (0);
-		}
-
-		pnode->data = (void *)(((intptr_t)pnode->data) + 1);
+		/* This should only happen if the limits are set to 0 */
+		if((intptr_t)pnode->data == 0)
+			rb_patricia_remove(ConfIpLimits(aconf), pnode);
+		return 0;
 	}
+
+	pnode->data = (void *)(((intptr_t)pnode->data) + 1);
 	return 1;
 }
 
@@ -496,7 +481,7 @@ attach_iline(struct Client *client_p, struct ConfItem *aconf)
 	int unidented;
 
 	if(IsConfExemptLimits(aconf))
-		return (attach_conf(client_p, aconf));
+		return attach_conf(client_p, aconf);
 
 	unidented = !IsGotId(client_p) && !IsNoTilde(aconf) &&
 		(!IsConfDoSpoofIp(aconf) || !strchr(aconf->info.name, '@'));
@@ -523,15 +508,14 @@ attach_iline(struct Client *client_p, struct ConfItem *aconf)
 			ident_count++;
 
 		if(ConfMaxLocal(aconf) && local_count >= ConfMaxLocal(aconf))
-			return (TOO_MANY_LOCAL);
-		else if(ConfMaxGlobal(aconf) && global_count >= ConfMaxGlobal(aconf))
-			return (TOO_MANY_GLOBAL);
-		else if(ConfMaxIdent(aconf) && ident_count >= ConfMaxIdent(aconf))
-			return (TOO_MANY_IDENT);
+			return TOO_MANY_LOCAL;
+		if(ConfMaxGlobal(aconf) && global_count >= ConfMaxGlobal(aconf))
+			return TOO_MANY_GLOBAL;
+		if(ConfMaxIdent(aconf) && ident_count >= ConfMaxIdent(aconf))
+			return TOO_MANY_IDENT;
 	}
 
-
-	return (attach_conf(client_p, aconf));
+	return attach_conf(client_p, aconf);
 }
 
 /*
@@ -559,36 +543,31 @@ deref_conf(struct ConfItem *aconf)
 int
 detach_conf(struct Client *client_p)
 {
-	struct ConfItem *aconf;
+	struct ConfItem *aconf = client_p->localClient->att_conf;
 
-	aconf = client_p->localClient->att_conf;
+	if(aconf == NULL)
+		return -1;
 
-	if(aconf != NULL)
+	if(ClassPtr(aconf))
 	{
-		if(ClassPtr(aconf))
+		remove_ip_limit(client_p, aconf);
+
+		if(ConfCurrUsers(aconf) > 0)
+			--ConfCurrUsers(aconf);
+
+		if(ConfMaxUsers(aconf) == -1 && ConfCurrUsers(aconf) == 0)
 		{
-			remove_ip_limit(client_p, aconf);
-
-			if(ConfCurrUsers(aconf) > 0)
-				--ConfCurrUsers(aconf);
-
-			if(ConfMaxUsers(aconf) == -1 && ConfCurrUsers(aconf) == 0)
-			{
-				free_class(ClassPtr(aconf));
-				ClassPtr(aconf) = NULL;
-			}
-
+			free_class(ClassPtr(aconf));
+			ClassPtr(aconf) = NULL;
 		}
-
-		aconf->clients--;
-		if(!aconf->clients && IsIllegal(aconf))
-			free_conf(aconf);
-
-		client_p->localClient->att_conf = NULL;
-		return 0;
 	}
 
-	return -1;
+	aconf->clients--;
+	if(!aconf->clients && IsIllegal(aconf))
+		free_conf(aconf);
+
+	client_p->localClient->att_conf = NULL;
+	return 0;
 }
 
 /*
@@ -606,26 +585,20 @@ int
 attach_conf(struct Client *client_p, struct ConfItem *aconf)
 {
 	if(IsIllegal(aconf))
-		return (NOT_AUTHORISED);
+		return NOT_AUTHORISED;
 
 	if(s_assert(ClassPtr(aconf)))
-		return (NOT_AUTHORISED);
+		return NOT_AUTHORISED;
 
 	if(!add_ip_limit(client_p, aconf))
-		return (TOO_MANY_LOCAL);
+		return TOO_MANY_LOCAL;
 
 	if((aconf->status & CONF_CLIENT) &&
 	   ConfCurrUsers(aconf) >= ConfMaxUsers(aconf) && ConfMaxUsers(aconf) > 0)
 	{
 		if(!IsConfExemptLimits(aconf))
-		{
-			return (I_LINE_FULL);
-		}
-		else
-		{
-			sendto_one_notice(client_p, ":*** I: line is full, but you have an >I: line!");
-		}
-
+			return I_LINE_FULL;
+		sendto_one_notice(client_p, ":*** I: line is full, but you have an >I: line!");
 	}
 
 	if(client_p->localClient->att_conf != NULL)
@@ -635,7 +608,7 @@ attach_conf(struct Client *client_p, struct ConfItem *aconf)
 
 	aconf->clients++;
 	ConfCurrUsers(aconf)++;
-	return (0);
+	return 0;
 }
 
 /*
@@ -827,7 +800,7 @@ set_default_conf(void)
 	ConfigFileEntry.default_floodcount = 8;
 	ConfigFileEntry.tkline_expire_notices = 0;
 
-        ConfigFileEntry.reject_after_count = 5;
+	ConfigFileEntry.reject_after_count = 5;
 	ConfigFileEntry.reject_ban_time = 300;
 	ConfigFileEntry.reject_duration = 120;
 	ConfigFileEntry.throttle_count = 4;
@@ -899,7 +872,9 @@ validate_conf(void)
 	{
 		ilog(L_MAIN, "WARNING: Unable to setup SSL.");
 		ircd_ssl_ok = false;
-	} else {
+	}
+	else
+	{
 		ircd_ssl_ok = true;
 		ssld_update_config();
 	}
@@ -969,30 +944,25 @@ validate_conf(void)
  * Side effects  - links in given struct ConfItem into
  *                 temporary kline link list
  */
+/* Select the TEMP_* bucket for a ban based on its hold time */
+static int
+temp_conf_bucket(time_t hold)
+{
+	time_t now = rb_current_time();
+
+	if(hold >= now + (10080 * 60)) return TEMP_WEEK;
+	if(hold >= now + (1440 * 60))  return TEMP_DAY;
+	if(hold >= now + (60 * 60))    return TEMP_HOUR;
+	return TEMP_MIN;
+}
+
 void
 add_temp_kline(struct ConfItem *aconf)
 {
-	if(aconf->hold >= rb_current_time() + (10080 * 60))
-	{
-		rb_dlinkAddAlloc(aconf, &temp_klines[TEMP_WEEK]);
-		aconf->port = TEMP_WEEK;
-	}
-	else if(aconf->hold >= rb_current_time() + (1440 * 60))
-	{
-		rb_dlinkAddAlloc(aconf, &temp_klines[TEMP_DAY]);
-		aconf->port = TEMP_DAY;
-	}
-	else if(aconf->hold >= rb_current_time() + (60 * 60))
-	{
-		rb_dlinkAddAlloc(aconf, &temp_klines[TEMP_HOUR]);
-		aconf->port = TEMP_HOUR;
-	}
-	else
-	{
-		rb_dlinkAddAlloc(aconf, &temp_klines[TEMP_MIN]);
-		aconf->port = TEMP_MIN;
-	}
+	int bucket = temp_conf_bucket(aconf->hold);
 
+	rb_dlinkAddAlloc(aconf, &temp_klines[bucket]);
+	aconf->port = bucket;
 	aconf->flags |= CONF_FLAGS_TEMPORARY;
 	add_conf_by_address(aconf->host, CONF_KILL, aconf->user, NULL, aconf);
 }
@@ -1006,27 +976,10 @@ add_temp_kline(struct ConfItem *aconf)
 void
 add_temp_dline(struct ConfItem *aconf)
 {
-	if(aconf->hold >= rb_current_time() + (10080 * 60))
-	{
-		rb_dlinkAddAlloc(aconf, &temp_dlines[TEMP_WEEK]);
-		aconf->port = TEMP_WEEK;
-	}
-	else if(aconf->hold >= rb_current_time() + (1440 * 60))
-	{
-		rb_dlinkAddAlloc(aconf, &temp_dlines[TEMP_DAY]);
-		aconf->port = TEMP_DAY;
-	}
-	else if(aconf->hold >= rb_current_time() + (60 * 60))
-	{
-		rb_dlinkAddAlloc(aconf, &temp_dlines[TEMP_HOUR]);
-		aconf->port = TEMP_HOUR;
-	}
-	else
-	{
-		rb_dlinkAddAlloc(aconf, &temp_dlines[TEMP_MIN]);
-		aconf->port = TEMP_MIN;
-	}
+	int bucket = temp_conf_bucket(aconf->hold);
 
+	rb_dlinkAddAlloc(aconf, &temp_dlines[bucket]);
+	aconf->port = bucket;
 	aconf->flags |= CONF_FLAGS_TEMPORARY;
 	add_conf_by_address(aconf->host, CONF_DLINE, aconf->user, NULL, aconf);
 }
@@ -1451,9 +1404,7 @@ read_conf_files(bool cold)
 			inotice("Failed in reading configuration file %s, aborting", filename);
 			ilog(L_MAIN, "Failed in reading configuration file %s", filename);
 
-			int e;
-			e = errno;
-
+			int e = errno;
 			inotice("FATAL: %s %s", strerror(e), filename);
 			ilog(L_MAIN, "FATAL: %s %s", strerror(e), filename);
 
@@ -1675,19 +1626,11 @@ conf_add_d_conf(struct ConfItem *aconf)
 static void
 strip_tabs(char *dest, const char *src, size_t size)
 {
-	char *d = dest;
-
-	if(dest == NULL || src == NULL)
-		return;
-
 	rb_strlcpy(dest, src, size);
 
-	while(*d)
-	{
+	for(char *d = dest; *d; d++)
 		if(*d == '\t')
 			*d = ' ';
-		d++;
-	}
 }
 
 /*
@@ -1711,16 +1654,17 @@ yyerror(const char *msg)
 }
 
 int
-conf_fgets(char *lbuf, int max_size, FILE * fb)
+conf_fgets(char *lbuf, int max_size, FILE *fb)
 {
 	if(fgets(lbuf, max_size, fb) == NULL)
-		return (0);
+		return 0;
 
-	return (strlen(lbuf));
+	return (int)strlen(lbuf);
 }
 
 int
 conf_yy_fatal_error(const char *msg)
 {
-	return (0);
+	(void)msg;
+	return 0;
 }

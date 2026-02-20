@@ -191,46 +191,34 @@ hunt_server(struct Client *client_p, struct Client *source_p,
 	    const char *command, int server, int parc, const char *parv[])
 {
 	struct Client *target_p;
-	int wilds;
 	rb_dlink_node *ptr;
-	const char *old;
-	char *new;
+	const char *saved;
+	char *target_name;
+	bool wilds;
 
-	/*
-	 * Assume it's me, if no server
-	 */
+	/* Assume it's me if no server parameter given. */
 	if(parc <= server || EmptyString(parv[server]) ||
-	   match(parv[server], me.name) || (strcmp(parv[server], me.id) == 0))
-		return (HUNTED_ISME);
+	   match(parv[server], me.name) || strcmp(parv[server], me.id) == 0)
+		return HUNTED_ISME;
 
-	new = LOCAL_COPY(parv[server]);
+	target_name = LOCAL_COPY(parv[server]);
 
-	/*
-	 * These are to pickup matches that would cause the following
-	 * message to go in the wrong direction while doing quick fast
-	 * non-matching lookups.
-	 */
-	if(MyClient(source_p))
-		target_p = find_named_client(new);
-	else
-		target_p = find_client(new);
+	/* Hash lookup first; wild-card fallback only if needed. */
+	target_p = MyClient(source_p) ? find_named_client(target_name)
+	                               : find_client(target_name);
 
-	if(target_p)
-		if(target_p->from == source_p->from && !MyConnect(target_p))
-			target_p = NULL;
+	if(target_p != NULL &&
+	   target_p->from == source_p->from && !MyConnect(target_p))
+		target_p = NULL;
 
-	collapse(new);
-	wilds = (strchr(new, '?') || strchr(new, '*'));
+	collapse(target_name);
+	wilds = strchr(target_name, '?') != NULL || strchr(target_name, '*') != NULL;
 
-	/*
-	 * Again, if there are no wild cards involved in the server
-	 * name, use the hash lookup
-	 */
-	if(!target_p && wilds)
+	if(target_p == NULL && wilds)
 	{
 		RB_DLINK_FOREACH(ptr, global_serv_list.head)
 		{
-			if(match(new, ((struct Client *) (ptr->data))->name))
+			if(match(target_name, ((struct Client *)(ptr->data))->name))
 			{
 				target_p = ptr->data;
 				break;
@@ -238,46 +226,43 @@ hunt_server(struct Client *client_p, struct Client *source_p,
 		}
 	}
 
-	if(target_p && !IsRegistered(target_p))
+	if(target_p != NULL && !IsRegistered(target_p))
 		target_p = NULL;
 
-	if(target_p)
+	if(target_p != NULL)
 	{
 		if(IsMe(target_p) || MyClient(target_p))
 			return HUNTED_ISME;
 
-		old = parv[server];
+		saved = parv[server];
 		parv[server] = get_id(target_p, target_p);
-
 		sendto_one(target_p, command, get_id(source_p, target_p),
-			   parv[1], parv[2], parv[3], parv[4], parv[5], parv[6], parv[7], parv[8]);
-		parv[server] = old;
-		return (HUNTED_PASS);
+			   parv[1], parv[2], parv[3], parv[4],
+			   parv[5], parv[6], parv[7], parv[8]);
+		parv[server] = saved;
+		return HUNTED_PASS;
 	}
 
 	if(MyClient(source_p) || !IsDigit(parv[server][0]))
 		sendto_one_numeric(source_p, ERR_NOSUCHSERVER,
 				   form_str(ERR_NOSUCHSERVER), parv[server]);
-	return (HUNTED_NOSUCH);
+	return HUNTED_NOSUCH;
 }
 
 /*
  * try_connections - scan through configuration and try new connections.
- * Returns the calendar time when the next call to this
- * function should be made latest. (No harm done if this
- * is called earlier or later...)
+ * Called periodically by the event loop; connects at most one server per call.
  */
 void
 try_connections(void *unused)
 {
-	struct Client *client_p;
 	struct server_conf *server_p = NULL;
 	struct server_conf *tmp_p;
-	struct Class *cltmp;
 	rb_dlink_node *ptr;
 	bool connecting = false;
-	int confrq = 0;
-	time_t next = 0;
+
+	if(GlobalSetOptions.autoconn == 0)
+		return;
 
 	RB_DLINK_FOREACH(ptr, server_conf_list.head)
 	{
@@ -286,69 +271,38 @@ try_connections(void *unused)
 		if(ServerConfIllegal(tmp_p) || !ServerConfAutoconn(tmp_p))
 			continue;
 
-		/* don't allow ssl connections if ssl isn't setup */
+		/* Don't attempt SSL links when SSL isn't available. */
 		if(ServerConfSSL(tmp_p) && (!ircd_ssl_ok || !get_ssld_count()))
 			continue;
 
-		cltmp = tmp_p->class;
-
-		/*
-		 * Skip this entry if the use of it is still on hold until
-		 * future. Otherwise handle this entry (and set it on hold
-		 * until next time). Will reset only hold times, if already
-		 * made one successfull connection... [this algorithm is
-		 * a bit fuzzy... -- msa >;) ]
-		 */
+		/* Skip entries still cooling down from a previous attempt. */
 		if(tmp_p->hold > rb_current_time())
-		{
-			if(next > tmp_p->hold || next == 0)
-				next = tmp_p->hold;
 			continue;
-		}
 
-		confrq = get_con_freq(cltmp);
-		tmp_p->hold = rb_current_time() + confrq;
+		tmp_p->hold = rb_current_time() + get_con_freq(tmp_p->class);
 
-		/*
-		 * Found a CONNECT config with port specified, scan clients
-		 * and see if this server is already connected?
-		 */
-		client_p = find_server(NULL, tmp_p->name);
-
-		if(!client_p && (CurrUsers(cltmp) < MaxUsers(cltmp)) && !connecting)
+		/* Connect only if the server isn't already linked and the
+		 * class has room.  Pick the first eligible candidate. */
+		if(!connecting &&
+		   find_server(NULL, tmp_p->name) == NULL &&
+		   CurrUsers(tmp_p->class) < MaxUsers(tmp_p->class))
 		{
 			server_p = tmp_p;
-
-			/* We connect only one at time... */
 			connecting = true;
 		}
-
-		if((next > tmp_p->hold) || (next == 0))
-			next = tmp_p->hold;
 	}
-
-	if(GlobalSetOptions.autoconn == 0)
-		return;
 
 	if(!connecting)
 		return;
 
-	/* move this connect entry to end.. */
+	/* Rotate the chosen entry to the tail so the next scan tries a
+	 * different server if multiple are eligible. */
 	rb_dlinkDelete(&server_p->node, &server_conf_list);
 	rb_dlinkAddTail(server_p, &server_p->node, &server_conf_list);
 
-	/*
-	 * We used to only print this if serv_connect() actually
-	 * suceeded, but since rb_tcp_connect() can call the callback
-	 * immediately if there is an error, we were getting error messages
-	 * in the wrong order. SO, we just print out the activated line,
-	 * and let serv_connect() / serv_connect_callback() print an
-	 * error afterwards if it fails.
-	 *   -- adrian
-	 */
+	/* Log before connecting; the callback may log an error immediately. */
 	sendto_realops_snomask(SNO_GENERAL, L_ALL,
-			"Connection to %s activated",
-			server_p->name);
+			"Connection to %s activated", server_p->name);
 
 	serv_connect(server_p, 0);
 }
@@ -365,11 +319,9 @@ check_server(const char *name, struct Client *client_p)
 	bool host_matched = false;
 	bool certfp_failed = false;
 
-	s_assert(NULL != client_p);
-	if(client_p == NULL)
-		return error;
+	s_assert(client_p != NULL);
 
-	if(!(client_p->localClient->passwd))
+	if(client_p->localClient->passwd == NULL)
 		return -2;
 
 	if(strlen(name) > HOSTLEN)
@@ -448,14 +400,15 @@ check_server(const char *name, struct Client *client_p)
 	}
 
 	if(ServerConfSSL(server_p) && client_p->localClient->ssl_ctl == NULL)
-	{
 		return -5;
-	}
 
-	if (client_p->localClient->att_sconf && client_p->localClient->att_sconf->class == server_p->class) {
-		/* this is an outgoing connection that is already attached to the correct class */
-	} else if (CurrUsers(server_p->class) >= MaxUsers(server_p->class)) {
-		return -7;
+	/* Outgoing connections already attached to the correct class bypass
+	 * the class limit check; all other cases must have room. */
+	if(CurrUsers(server_p->class) >= MaxUsers(server_p->class))
+	{
+		struct server_conf *att = client_p->localClient->att_sconf;
+		if(att == NULL || att->class != server_p->class)
+			return -7;
 	}
 	attach_server_conf(client_p, server_p);
 
@@ -598,30 +551,14 @@ burst_modes_TS6(struct Client *client_p, struct Channel *chptr,
 	sendto_one(client_p, "%s", buf);
 }
 
-/*
- * burst_TS6
- *
- * inputs	- client (server) to send nick towards
- * 		- client to send nick for
- * output	- NONE
- * side effects	- NICK message is sent towards given client_p
- */
+/* burst_users_TS6 - send all user introductions to a newly linked server. */
 static void
-burst_TS6(struct Client *client_p)
+burst_users_TS6(struct Client *client_p, hook_data_client *hinfo)
 {
 	char ubuf[BUFSIZE];
 	struct Client *target_p;
-	struct Channel *chptr;
-	struct membership *msptr;
-	hook_data_client hclientinfo;
-	hook_data_channel hchaninfo;
 	rb_dlink_node *ptr;
-	rb_dlink_node *uptr;
-	char *t;
-	int tlen, mlen;
-	int cur_len = 0;
-
-	hclientinfo.client = hchaninfo.client = client_p;
+	bool euid = IsCapable(client_p, CAP_EUID);
 
 	RB_DLINK_FOREACH(ptr, global_client_list.head)
 	{
@@ -630,7 +567,9 @@ burst_TS6(struct Client *client_p)
 		if(!IsPerson(target_p))
 			continue;
 
-		if(MyClient(target_p->from) && target_p->localClient->att_sconf != NULL && ServerConfNoExport(target_p->localClient->att_sconf))
+		if(MyClient(target_p->from) &&
+		   target_p->localClient->att_sconf != NULL &&
+		   ServerConfNoExport(target_p->localClient->att_sconf))
 			continue;
 
 		send_umode(NULL, target_p, 0, ubuf);
@@ -640,54 +579,67 @@ burst_TS6(struct Client *client_p)
 			ubuf[1] = '\0';
 		}
 
-		if(IsCapable(client_p, CAP_EUID))
-			sendto_one(client_p, ":%s EUID %s %d %ld %s %s %s %s %s %s %s :%s",
+		if(euid)
+			sendto_one(client_p,
+				   ":%s EUID %s %d %ld %s %s %s %s %s %s %s :%s",
 				   target_p->servptr->id, target_p->name,
-				   target_p->hopcount + 1,
-				   (long) target_p->tsinfo, ubuf,
-				   target_p->username, target_p->host,
+				   target_p->hopcount + 1, (long)target_p->tsinfo,
+				   ubuf, target_p->username, target_p->host,
 				   IsIPSpoof(target_p) ? "0" : target_p->sockhost,
 				   target_p->id,
 				   IsDynSpoof(target_p) ? target_p->orighost : "*",
-				   EmptyString(target_p->user->suser) ? "*" : target_p->user->suser,
+				   EmptyString(target_p->user->suser) ? "*"
+				                                      : target_p->user->suser,
 				   target_p->info);
 		else
-			sendto_one(client_p, ":%s UID %s %d %ld %s %s %s %s %s :%s",
+			sendto_one(client_p,
+				   ":%s UID %s %d %ld %s %s %s %s %s :%s",
 				   target_p->servptr->id, target_p->name,
-				   target_p->hopcount + 1,
-				   (long) target_p->tsinfo, ubuf,
-				   target_p->username, target_p->host,
+				   target_p->hopcount + 1, (long)target_p->tsinfo,
+				   ubuf, target_p->username, target_p->host,
 				   IsIPSpoof(target_p) ? "0" : target_p->sockhost,
 				   target_p->id, target_p->info);
 
 		if(!EmptyString(target_p->certfp))
 			sendto_one(client_p, ":%s ENCAP * CERTFP :%s",
-					use_id(target_p), target_p->certfp);
+				   use_id(target_p), target_p->certfp);
 
-		if(!IsCapable(client_p, CAP_EUID))
+		if(!euid)
 		{
 			if(IsDynSpoof(target_p))
 				sendto_one(client_p, ":%s ENCAP * REALHOST %s",
-						use_id(target_p), target_p->orighost);
+					   use_id(target_p), target_p->orighost);
 			if(!EmptyString(target_p->user->suser))
 				sendto_one(client_p, ":%s ENCAP * LOGIN %s",
-						use_id(target_p), target_p->user->suser);
+					   use_id(target_p), target_p->user->suser);
 		}
 
 		if(ConfigFileEntry.burst_away && !EmptyString(target_p->user->away))
 			sendto_one(client_p, ":%s AWAY :%s",
-				   use_id(target_p),
-				   target_p->user->away);
+				   use_id(target_p), target_p->user->away);
 
-		if(IsOper(target_p) && target_p->user && target_p->user->opername && target_p->user->privset)
+		if(IsOper(target_p) && target_p->user &&
+		   target_p->user->opername && target_p->user->privset)
 			sendto_one(client_p, ":%s OPER %s %s",
-					use_id(target_p),
-					target_p->user->opername,
-					target_p->user->privset->name);
+				   use_id(target_p),
+				   target_p->user->opername,
+				   target_p->user->privset->name);
 
-		hclientinfo.target = target_p;
-		call_hook(h_burst_client, &hclientinfo);
+		hinfo->target = target_p;
+		call_hook(h_burst_client, hinfo);
 	}
+}
+
+/* burst_channels_TS6 - send all channel state to a newly linked server. */
+static void
+burst_channels_TS6(struct Client *client_p, hook_data_channel *hinfo)
+{
+	struct Channel *chptr;
+	struct membership *msptr;
+	rb_dlink_node *ptr;
+	rb_dlink_node *uptr;
+	char *t;
+	int tlen, mlen, cur_len;
 
 	RB_DLINK_FOREACH(ptr, global_channel_list.head)
 	{
@@ -696,10 +648,10 @@ burst_TS6(struct Client *client_p)
 		if(*chptr->chname != '#')
 			continue;
 
-		cur_len = mlen = snprintf(buf, sizeof(buf), ":%s SJOIN %ld %s %s :", me.id,
-				(long) chptr->channelts, chptr->chname,
+		cur_len = mlen = snprintf(buf, sizeof(buf),
+				":%s SJOIN %ld %s %s :", me.id,
+				(long)chptr->channelts, chptr->chname,
 				channel_modes(chptr, client_p));
-
 		t = buf + mlen;
 
 		RB_DLINK_FOREACH(uptr, chptr->members.head)
@@ -707,33 +659,27 @@ burst_TS6(struct Client *client_p)
 			msptr = uptr->data;
 
 			tlen = strlen(use_id(msptr->client_p)) + 1;
-			if(is_admin(msptr))
-				tlen++;
-			if(is_chanop(msptr))
-				tlen++;
-			if(is_voiced(msptr))
-				tlen++;
+			if(is_admin(msptr))  tlen++;
+			if(is_chanop(msptr)) tlen++;
+			if(is_voiced(msptr)) tlen++;
 
 			if(cur_len + tlen >= BUFSIZE - 3)
 			{
-				*(t-1) = '\0';
+				*(t - 1) = '\0';
 				sendto_one(client_p, "%s", buf);
 				cur_len = mlen;
 				t = buf + mlen;
 			}
 
-			snprintf(t, buf + BUFSIZE - t, "%s%s ", find_channel_status(msptr, 1),
-				   use_id(msptr->client_p));
-
+			snprintf(t, buf + BUFSIZE - t, "%s%s ",
+				 find_channel_status(msptr, 1),
+				 use_id(msptr->client_p));
 			cur_len += tlen;
 			t += tlen;
 		}
 
-		if (rb_dlink_list_length(&chptr->members) > 0)
-		{
-			/* remove trailing space */
-			*(t-1) = '\0';
-		}
+		if(rb_dlink_list_length(&chptr->members) > 0)
+			*(t - 1) = '\0'; /* trim trailing space */
 		sendto_one(client_p, "%s", buf);
 
 		if(rb_dlink_list_length(&chptr->banlist) > 0)
@@ -749,19 +695,35 @@ burst_TS6(struct Client *client_p)
 
 		if(IsCapable(client_p, CAP_TB) && chptr->topic != NULL)
 			sendto_one(client_p, ":%s TB %s %ld %s%s:%s",
-				   me.id, chptr->chname, (long) chptr->topic_time,
+				   me.id, chptr->chname, (long)chptr->topic_time,
 				   ConfigChannel.burst_topicwho ? chptr->topic_info : "",
 				   ConfigChannel.burst_topicwho ? " " : "",
 				   chptr->topic);
 
 		if(IsCapable(client_p, CAP_MLOCK))
 			sendto_one(client_p, ":%s MLOCK %ld %s :%s",
-				   me.id, (long) chptr->channelts, chptr->chname,
+				   me.id, (long)chptr->channelts, chptr->chname,
 				   EmptyString(chptr->mode_lock) ? "" : chptr->mode_lock);
 
-		hchaninfo.chptr = chptr;
-		call_hook(h_burst_channel, &hchaninfo);
+		hinfo->chptr = chptr;
+		call_hook(h_burst_channel, hinfo);
 	}
+}
+
+/*
+ * burst_TS6 - send the full network state (users then channels) to a newly
+ * linked server.
+ */
+static void
+burst_TS6(struct Client *client_p)
+{
+	hook_data_client hclientinfo;
+	hook_data_channel hchaninfo;
+
+	hclientinfo.client = hchaninfo.client = client_p;
+
+	burst_users_TS6(client_p, &hclientinfo);
+	burst_channels_TS6(client_p, &hchaninfo);
 
 	hclientinfo.target = NULL;
 	call_hook(h_burst_finished, &hclientinfo);
@@ -797,11 +759,11 @@ show_capabilities(struct Client *target_p)
 }
 
 /*
- * server_estab
+ * server_estab - complete the establishment of a server link.
  *
- * inputs       - pointer to a struct Client
- * output       -
- * side effects -
+ * Finalises capability negotiation, registers the server in all relevant
+ * data structures, broadcasts the new link to the rest of the network, and
+ * triggers the full TS6 burst.
  */
 int
 server_estab(struct Client *client_p)
@@ -809,35 +771,31 @@ server_estab(struct Client *client_p)
 	struct Client *target_p;
 	struct server_conf *server_p;
 	hook_data_client hdata;
-	char *host;
 	rb_dlink_node *ptr;
 	char note[HOSTLEN + 15];
 
-	s_assert(NULL != client_p);
-	if(client_p == NULL)
-		return -1;
-
-	host = client_p->name;
+	s_assert(client_p != NULL);
 
 	if((server_p = client_p->localClient->att_sconf) == NULL)
 	{
-		/* This shouldn't happen, better tell the ops... -A1kmm */
-		sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
-				     "Warning: Lost connect{} block for server %s!", host);
-		return exit_client(client_p, client_p, client_p, "Lost connect{} block!");
+		sendto_realops_snomask(SNO_GENERAL,
+				is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
+				"Warning: Lost connect{} block for server %s!",
+				client_p->name);
+		return exit_client(client_p, client_p, client_p,
+				   "Lost connect{} block!");
 	}
 
-	/* We shouldn't have to check this, it should already done before
-	 * server_estab is called. -A1kmm
-	 */
-	if(client_p->localClient->passwd)
+	/* Clear the password from memory now that auth is complete. */
+	if(client_p->localClient->passwd != NULL)
 	{
-		memset(client_p->localClient->passwd, 0, strlen(client_p->localClient->passwd));
+		memset(client_p->localClient->passwd, 0,
+		       strlen(client_p->localClient->passwd));
 		rb_free(client_p->localClient->passwd);
 		client_p->localClient->passwd = NULL;
 	}
 
-	/* Its got identd , since its a server */
+	/* Servers always have ident. */
 	SetGotId(client_p);
 
 	if(IsUnknown(client_p))
@@ -912,11 +870,7 @@ server_estab(struct Client *client_p)
 	snprintf(note, sizeof(note), "Server: %s", client_p->name);
 	rb_note(client_p->localClient->F, note);
 
-	/*
-	 ** Old sendto_serv_but_one() call removed because we now
-	 ** need to send different names to different servers
-	 ** (domain name matching) Send new server to other servers.
-	 */
+	/* Notify all existing servers about the new link. */
 	RB_DLINK_FOREACH(ptr, serv_list.head)
 	{
 		target_p = ptr->data;
@@ -949,24 +903,7 @@ server_estab(struct Client *client_p)
 		}
 	}
 
-	/*
-	 ** Pass on my client information to the new server
-	 **
-	 ** First, pass only servers (idea is that if the link gets
-	 ** cancelled beacause the server was already there,
-	 ** there are no NICK's to be cancelled...). Of course,
-	 ** if cancellation occurs, all this info is sent anyway,
-	 ** and I guess the link dies when a read is attempted...? --msa
-	 **
-	 ** Note: Link cancellation to occur at this point means
-	 ** that at least two servers from my fragment are building
-	 ** up connection this other fragment at the same time, it's
-	 ** a race condition, not the normal way of operation...
-	 **
-	 ** ALSO NOTE: using the get_client_name for server names--
-	 **    see previous *WARNING*!!! (Also, original inpath
-	 **    is destroyed...)
-	 */
+	/* Propagate topology: send the new server the rest of the network. */
 	RB_DLINK_FOREACH(ptr, global_serv_list.head)
 	{
 		target_p = ptr->data;
@@ -1013,210 +950,194 @@ server_estab(struct Client *client_p)
 }
 
 /*
- * New server connection code
- * Based upon the stuff floating about in s_bsd.c
- *   -- adrian
+ * serv_setup_addresses - populate sa_connect/sa_bind arrays from server_conf.
+ *
+ * When both IPv4 and IPv6 addresses are available and aftype is unspecified,
+ * the order is randomised so that successive auto-connect attempts alternate
+ * address families.  Returns true if at least one address was resolved.
  */
+static bool
+serv_setup_addresses(const struct server_conf *server_p,
+		     struct sockaddr_storage sa_connect[2],
+		     struct sockaddr_storage sa_bind[2])
+{
+	bool have4 = GET_SS_FAMILY(&server_p->connect4) == AF_INET;
+	bool have6 = GET_SS_FAMILY(&server_p->connect6) == AF_INET6;
+
+	for(int i = 0; i < 2; i++)
+	{
+		SET_SS_FAMILY(&sa_connect[i], AF_UNSPEC);
+		SET_SS_FAMILY(&sa_bind[i], AF_UNSPEC);
+	}
+
+	if(server_p->aftype == AF_UNSPEC && have4 && have6)
+	{
+		/* Randomly prefer IPv4 or IPv6 for load-balancing. */
+		if(rand() % 2 == 0)
+		{
+			sa_connect[0] = server_p->connect4; sa_bind[0] = server_p->bind4;
+			sa_connect[1] = server_p->connect6; sa_bind[1] = server_p->bind6;
+		}
+		else
+		{
+			sa_connect[0] = server_p->connect6; sa_bind[0] = server_p->bind6;
+			sa_connect[1] = server_p->connect4; sa_bind[1] = server_p->bind4;
+		}
+	}
+	else if(server_p->aftype == AF_INET || have4)
+	{
+		sa_connect[0] = server_p->connect4;
+		sa_bind[0]    = server_p->bind4;
+	}
+	else if(server_p->aftype == AF_INET6 || have6)
+	{
+		sa_connect[0] = server_p->connect6;
+		sa_bind[0]    = server_p->bind6;
+	}
+
+	return GET_SS_FAMILY(&sa_connect[0]) != AF_UNSPEC;
+}
 
 /*
- * serv_connect() - initiate a server connection
+ * serv_connect - initiate an outgoing server connection.
  *
- * inputs	- pointer to conf
- *		- pointer to client doing the connet
- * output	-
- * side effects	-
- *
- * This code initiates a connection to a server. It first checks to make
- * sure the given server exists. If this is the case, it creates a socket,
- * creates a client, saves the socket information in the client, and
- * initiates a connection to the server through rb_connect_tcp(). The
- * completion of this goes through serv_completed_connection().
- *
- * We return 1 if the connection is attempted, since we don't know whether
- * it suceeded or not, and 0 if it fails in here somewhere.
+ * Returns 1 if the connection attempt was started, 0 on failure.
+ * Completion (success or error) is handled by serv_connect_callback().
  */
 int
 serv_connect(struct server_conf *server_p, struct Client *by)
 {
 	struct Client *client_p;
 	struct sockaddr_storage sa_connect[2];
-	struct sockaddr_storage sa_bind[ARRAY_SIZE(sa_connect)];
+	struct sockaddr_storage sa_bind[2];
 	char note[HOSTLEN + 10];
 	rb_fde_t *F;
 
 	s_assert(server_p != NULL);
-	if(server_p == NULL)
+
+	if(!serv_setup_addresses(server_p, sa_connect, sa_bind))
+	{
+		ilog_error("unspecified socket address family");
 		return 0;
-
-	for (int i = 0; i < ARRAY_SIZE(sa_connect); i++) {
-		SET_SS_FAMILY(&sa_connect[i], AF_UNSPEC);
-		SET_SS_FAMILY(&sa_bind[i], AF_UNSPEC);
 	}
 
-	if(server_p->aftype == AF_UNSPEC
-		&& GET_SS_FAMILY(&server_p->connect4) == AF_INET
-		&& GET_SS_FAMILY(&server_p->connect6) == AF_INET6)
-	{
-		if(rand() % 2 == 0)
-		{
-			sa_connect[0] = server_p->connect4;
-			sa_connect[1] = server_p->connect6;
-			sa_bind[0] = server_p->bind4;
-			sa_bind[1] = server_p->bind6;
-		}
-		else
-		{
-			sa_connect[0] = server_p->connect6;
-			sa_connect[1] = server_p->connect4;
-			sa_bind[0] = server_p->bind6;
-			sa_bind[1] = server_p->bind4;
-		}
-	}
-	else if(server_p->aftype == AF_INET || GET_SS_FAMILY(&server_p->connect4) == AF_INET)
-	{
-		sa_connect[0] = server_p->connect4;
-		sa_bind[0] = server_p->bind4;
-	}
-	else if(server_p->aftype == AF_INET6 || GET_SS_FAMILY(&server_p->connect6) == AF_INET6)
-	{
-		sa_connect[0] = server_p->connect6;
-		sa_bind[0] = server_p->bind6;
-	}
-
-	/* log */
+	/* Log the target address(es). */
 #ifdef HAVE_LIBSCTP
-	if (ServerConfSCTP(server_p) && GET_SS_FAMILY(&sa_connect[1]) != AF_UNSPEC) {
+	if(ServerConfSCTP(server_p) && GET_SS_FAMILY(&sa_connect[1]) != AF_UNSPEC)
+	{
 		char buf2[HOSTLEN + 1];
-
-		buf[0] = 0;
-		buf2[0] = 0;
+		buf[0] = buf2[0] = '\0';
 		rb_inet_ntop_sock((struct sockaddr *)&sa_connect[0], buf, sizeof(buf));
 		rb_inet_ntop_sock((struct sockaddr *)&sa_connect[1], buf2, sizeof(buf2));
 		ilog(L_SERVER, "Connect to *[%s] @%s&%s", server_p->name, buf, buf2);
-	} else {
-#else
-	{
+	}
+	else
 #endif
-		buf[0] = 0;
+	{
+		buf[0] = '\0';
 		rb_inet_ntop_sock((struct sockaddr *)&sa_connect[0], buf, sizeof(buf));
 		ilog(L_SERVER, "Connect to *[%s] @%s", server_p->name, buf);
 	}
 
-	/*
-	 * Make sure this server isn't already connected
-	 */
-	if((client_p = find_server(NULL, server_p->name)))
+	/* Reject if already connected. */
+	if((client_p = find_server(NULL, server_p->name)) != NULL)
 	{
 		sendto_realops_snomask(SNO_GENERAL, L_ALL,
-				     "Server %s already present from %s",
-				     server_p->name, client_p->name);
-		if(by && IsPerson(by) && !MyClient(by))
+				"Server %s already present from %s",
+				server_p->name, client_p->name);
+		if(by != NULL && IsPerson(by) && !MyClient(by))
 			sendto_one_notice(by, ":Server %s already present from %s",
 					  server_p->name, client_p->name);
 		return 0;
 	}
 
-	if (CurrUsers(server_p->class) >= MaxUsers(server_p->class)) {
+	/* Reject if the class is full. */
+	if(CurrUsers(server_p->class) >= MaxUsers(server_p->class))
+	{
 		sendto_realops_snomask(SNO_GENERAL, L_ALL,
-				     "No more connections allowed in class \"%s\" for server %s",
-				     server_p->class->class_name, server_p->name);
-		if(by && IsPerson(by) && !MyClient(by))
-			sendto_one_notice(by, ":No more connections allowed in class \"%s\" for server %s",
-				     server_p->class->class_name, server_p->name);
+				"No more connections allowed in class \"%s\" for server %s",
+				server_p->class->class_name, server_p->name);
+		if(by != NULL && IsPerson(by) && !MyClient(by))
+			sendto_one_notice(by,
+				":No more connections allowed in class \"%s\" for server %s",
+				server_p->class->class_name, server_p->name);
 		return 0;
 	}
 
-	/* create a socket for the server connection */
-	if(GET_SS_FAMILY(&sa_connect[0]) == AF_UNSPEC) {
-		ilog_error("unspecified socket address family");
-		return 0;
+	/* Open the socket. */
 #ifdef HAVE_LIBSCTP
-	} else if (ServerConfSCTP(server_p)) {
-		if ((F = rb_socket(AF_INET6, SOCK_STREAM, IPPROTO_SCTP, NULL)) == NULL) {
-			ilog_error("opening a stream socket");
-			return 0;
-		}
+	if(ServerConfSCTP(server_p))
+		F = rb_socket(AF_INET6, SOCK_STREAM, IPPROTO_SCTP, NULL);
+	else
 #endif
-	} else if ((F = rb_socket(GET_SS_FAMILY(&sa_connect[0]), SOCK_STREAM, IPPROTO_TCP, NULL)) == NULL) {
+		F = rb_socket(GET_SS_FAMILY(&sa_connect[0]), SOCK_STREAM, IPPROTO_TCP, NULL);
+
+	if(F == NULL)
+	{
 		ilog_error("opening a stream socket");
 		return 0;
 	}
 
-	/* servernames are always guaranteed under HOSTLEN chars */
 	snprintf(note, sizeof(note), "Server: %s", server_p->name);
 	rb_note(F, note);
 
-	/* Create a local client */
+	/* Build the outgoing client. */
 	client_p = make_client(NULL);
-
-	/* Copy in the server, hostname, fd */
 	rb_strlcpy(client_p->name, server_p->name, sizeof(client_p->name));
-	if(server_p->connect_host)
-		rb_strlcpy(client_p->host, server_p->connect_host, sizeof(client_p->host));
-	else
-		rb_strlcpy(client_p->host, buf, sizeof(client_p->host));
+	rb_strlcpy(client_p->host,
+		   server_p->connect_host ? server_p->connect_host : buf,
+		   sizeof(client_p->host));
 	rb_strlcpy(client_p->sockhost, buf, sizeof(client_p->sockhost));
 	client_p->localClient->F = F;
-	/* shove the port number into the sockaddr */
+
 	SET_SS_PORT(&sa_connect[0], htons(server_p->port));
 	SET_SS_PORT(&sa_connect[1], htons(server_p->port));
 
-	/*
-	 * Set up the initial server evilness, ripped straight from
-	 * connect_server(), so don't blame me for it being evil.
-	 *   -- adrian
-	 */
-
 	if(!rb_set_buffers(client_p->localClient->F, READBUF_SIZE))
-	{
 		ilog_error("setting the buffer size for a server connection");
-	}
 
-	/*
-	 * Attach config entries to client here rather than in
-	 * serv_connect_callback(). This to avoid null pointer references.
-	 */
+	/* Attach config before the callback fires to prevent null-deref. */
 	attach_server_conf(client_p, server_p);
 
-	/*
-	 * at this point we have a connection in progress and C/N lines
-	 * attached to the client, the socket info should be saved in the
-	 * client and it should either be resolved or have a valid address.
-	 *
-	 * The socket has been connected or connect is in progress.
-	 */
 	make_server(client_p);
-	if(by && IsClient(by))
-		rb_strlcpy(client_p->serv->by, by->name, sizeof(client_p->serv->by));
-	else
-		rb_strlcpy(client_p->serv->by, "AutoConn.", sizeof(client_p->serv->by));
+	rb_strlcpy(client_p->serv->by,
+		   (by != NULL && IsClient(by)) ? by->name : "AutoConn.",
+		   sizeof(client_p->serv->by));
 
 	SetConnecting(client_p);
 	rb_dlinkAddTail(client_p, &client_p->node, &global_client_list);
 
-	for (int i = 0; i < ARRAY_SIZE(sa_connect); i++) {
-		if (GET_SS_FAMILY(&sa_bind[i]) == AF_UNSPEC) {
-			if (GET_SS_FAMILY(&sa_connect[i]) == GET_SS_FAMILY(&ServerInfo.bind4))
+	/* Fill in any missing bind addresses from global server info. */
+	for(int i = 0; i < 2; i++)
+	{
+		if(GET_SS_FAMILY(&sa_bind[i]) == AF_UNSPEC)
+		{
+			if(GET_SS_FAMILY(&sa_connect[i]) == GET_SS_FAMILY(&ServerInfo.bind4))
 				sa_bind[i] = ServerInfo.bind4;
-			if (GET_SS_FAMILY(&sa_connect[i]) == GET_SS_FAMILY(&ServerInfo.bind6))
+			else if(GET_SS_FAMILY(&sa_connect[i]) == GET_SS_FAMILY(&ServerInfo.bind6))
 				sa_bind[i] = ServerInfo.bind6;
 		}
 	}
 
 #ifdef HAVE_LIBSCTP
-	if (ServerConfSCTP(server_p)) {
-		rb_connect_sctp(client_p->localClient->F,
-			sa_connect, ARRAY_SIZE(sa_connect), sa_bind, ARRAY_SIZE(sa_bind),
-			ServerConfSSL(server_p) ? serv_connect_ssl_callback : serv_connect_callback,
-			client_p, ConfigFileEntry.connect_timeout);
-	} else {
-#else
+	if(ServerConfSCTP(server_p))
 	{
+		rb_connect_sctp(client_p->localClient->F,
+			sa_connect, ARRAY_SIZE(sa_connect),
+			sa_bind, ARRAY_SIZE(sa_bind),
+			ServerConfSSL(server_p) ? serv_connect_ssl_callback
+			                        : serv_connect_callback,
+			client_p, ConfigFileEntry.connect_timeout);
+	}
+	else
 #endif
+	{
 		rb_connect_tcp(client_p->localClient->F,
 			(struct sockaddr *)&sa_connect[0],
-			GET_SS_FAMILY(&sa_bind[0]) == AF_UNSPEC ? NULL : (struct sockaddr *)&sa_bind[0],
-			ServerConfSSL(server_p) ? serv_connect_ssl_callback : serv_connect_callback,
+			GET_SS_FAMILY(&sa_bind[0]) == AF_UNSPEC
+				? NULL : (struct sockaddr *)&sa_bind[0],
+			ServerConfSSL(server_p) ? serv_connect_ssl_callback
+			                        : serv_connect_callback,
 			client_p, ConfigFileEntry.connect_timeout);
 	}
 	return 1;
@@ -1227,25 +1148,29 @@ serv_connect_ssl_callback(rb_fde_t *F, int status, void *data)
 {
 	struct Client *client_p = data;
 	rb_fde_t *xF[2];
-	rb_connect_sockaddr(F, (struct sockaddr *)&client_p->localClient->ip, sizeof(client_p->localClient->ip));
+
+	rb_connect_sockaddr(F, (struct sockaddr *)&client_p->localClient->ip,
+			    sizeof(client_p->localClient->ip));
+
 	if(status != RB_OK)
 	{
-		/* Print error message, just like non-SSL. */
 		serv_connect_callback(F, status, data);
 		return;
 	}
-	if(rb_socketpair(AF_UNIX, SOCK_STREAM, 0, &xF[0], &xF[1], "Outgoing ssld connection") == -1)
+
+	if(rb_socketpair(AF_UNIX, SOCK_STREAM, 0, &xF[0], &xF[1],
+			 "Outgoing ssld connection") == -1)
 	{
-                ilog_error("rb_socketpair failed for server");
+		ilog_error("rb_socketpair failed for server");
 		serv_connect_callback(F, RB_ERROR, data);
 		return;
-
 	}
+
 	client_p->localClient->F = xF[0];
 	client_p->localClient->ssl_callback = serv_connect_ssl_open_callback;
-
-	client_p->localClient->ssl_ctl = start_ssld_connect(F, xF[1], connid_get(client_p));
-	if(!client_p->localClient->ssl_ctl)
+	client_p->localClient->ssl_ctl = start_ssld_connect(F, xF[1],
+							     connid_get(client_p));
+	if(client_p->localClient->ssl_ctl == NULL)
 	{
 		serv_connect_callback(client_p->localClient->F, RB_ERROR, data);
 		return;
@@ -1257,56 +1182,48 @@ static int
 serv_connect_ssl_open_callback(struct Client *client_p, int status)
 {
 	serv_connect_callback(client_p->localClient->F, status, client_p);
-	return 1; /* suppress default exit_client handler for status != RB_OK */
+	return 1; /* suppress default exit_client handler on error */
 }
 
 /*
- * serv_connect_callback() - complete a server connection.
+ * serv_connect_callback - complete an outgoing server connection.
  *
- * This routine is called after the server connection attempt has
- * completed. If unsucessful, an error is sent to ops and the client
- * is closed. If sucessful, it goes through the initialisation/check
- * procedures, the capabilities are sent, and the socket is then
- * marked for reading.
+ * Called once the TCP (or SCTP/SSL) handshake finishes.  On failure,
+ * notifies ops and tears down the client.  On success, sends PASS/CAPAB/SERVER
+ * and begins reading from the new link.
  */
 static void
 serv_connect_callback(rb_fde_t *F, int status, void *data)
 {
 	struct Client *client_p = data;
 	struct server_conf *server_p;
-	char *errstr;
+	int snomask_scope;
 
-	/* First, make sure its a real client! */
 	s_assert(client_p != NULL);
 	s_assert(client_p->localClient->F == F);
 
-	if(client_p == NULL)
-		return;
-
-	/* while we were waiting for the callback, its possible this already
-	 * linked in.. --fl
-	 */
+	/* Race: the server linked via another path while we were connecting. */
 	if(find_server(NULL, client_p->name) != NULL)
 	{
 		exit_client(client_p, client_p, &me, "Server Exists");
 		return;
 	}
 
+	/* Record the peer address for non-SSL connections (SSL callback does it). */
 	if(client_p->localClient->ssl_ctl == NULL)
-		rb_connect_sockaddr(F, (struct sockaddr *)&client_p->localClient->ip, sizeof(client_p->localClient->ip));
+		rb_connect_sockaddr(F, (struct sockaddr *)&client_p->localClient->ip,
+				    sizeof(client_p->localClient->ip));
 
-	/* Check the status */
+	snomask_scope = is_remote_connect(client_p) ? L_NETWIDE : L_ALL;
+
 	if(status != RB_OK)
 	{
-		/* COMM_ERR_TIMEOUT wont have an errno associated with it,
-		 * the others will.. --fl
-		 */
 		if(status == RB_ERR_TIMEOUT || status == RB_ERROR_SSL)
 		{
-			sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
+			/* No errno for timeout/SSL errors. */
+			sendto_realops_snomask(SNO_GENERAL, snomask_scope,
 					"Error connecting to %s[%s]: %s",
-					client_p->name,
-					client_p->sockhost,
+					client_p->name, client_p->sockhost,
 					rb_errstr(status));
 			ilog(L_SERVER, "Error connecting to %s[%s]: %s",
 				client_p->name, client_p->sockhost,
@@ -1314,11 +1231,10 @@ serv_connect_callback(rb_fde_t *F, int status, void *data)
 		}
 		else
 		{
-			errstr = strerror(rb_get_sockerr(F));
-			sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
+			const char *errstr = strerror(rb_get_sockerr(F));
+			sendto_realops_snomask(SNO_GENERAL, snomask_scope,
 					"Error connecting to %s[%s]: %s (%s)",
-					client_p->name,
-					client_p->sockhost,
+					client_p->name, client_p->sockhost,
 					rb_errstr(status), errstr);
 			ilog(L_SERVER, "Error connecting to %s[%s]: %s (%s)",
 				client_p->name, client_p->sockhost,
@@ -1329,57 +1245,48 @@ serv_connect_callback(rb_fde_t *F, int status, void *data)
 		return;
 	}
 
-	/* COMM_OK, so continue the connection procedure */
-	/* Get the C/N lines */
 	if((server_p = client_p->localClient->att_sconf) == NULL)
 	{
-		sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL, "Lost connect{} block for %s",
-				client_p->name);
+		sendto_realops_snomask(SNO_GENERAL, snomask_scope,
+				"Lost connect{} block for %s", client_p->name);
 		exit_client(client_p, client_p, &me, "Lost connect{} block");
 		return;
 	}
 
-	if(server_p->certfp && (!client_p->certfp || rb_strcasecmp(server_p->certfp, client_p->certfp) != 0))
+	if(server_p->certfp != NULL &&
+	   (client_p->certfp == NULL ||
+	    rb_strcasecmp(server_p->certfp, client_p->certfp) != 0))
 	{
-		sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
-		     "Connection to %s has invalid certificate fingerprint %s",
-		     client_p->name, client_p->certfp);
-		ilog(L_SERVER, "Access denied, invalid certificate fingerprint %s from %s",
-		     client_p->certfp, log_client_name(client_p, SHOW_IP));
-
+		sendto_realops_snomask(SNO_GENERAL, snomask_scope,
+			"Connection to %s has invalid certificate fingerprint %s",
+			client_p->name, client_p->certfp);
+		ilog(L_SERVER,
+			"Access denied, invalid certificate fingerprint %s from %s",
+			client_p->certfp, log_client_name(client_p, SHOW_IP));
 		exit_client(client_p, client_p, &me, "Invalid fingerprint.");
 		return;
 	}
 
-	/* Next, send the initial handshake */
 	SetHandshake(client_p);
 
-	/* the server may be linking based on certificate fingerprint now. --nenolod */
 	sendto_one(client_p, "PASS %s TS %d :%s",
-		   EmptyString(server_p->spasswd) ? "*" : server_p->spasswd, TS_CURRENT, me.id);
+		   EmptyString(server_p->spasswd) ? "*" : server_p->spasswd,
+		   TS_CURRENT, me.id);
 
-	/* pass my info to the new server */
 	send_capabilities(client_p, default_server_capabs | CAP_MASK
 			  | (ServerConfTb(server_p) ? CAP_TB : 0));
 
 	sendto_one(client_p, "SERVER %s 1 :%s%s",
-		   me.name,
-		   ConfigServerHide.hidden ? "(H) " : "", me.info);
+		   me.name, ConfigServerHide.hidden ? "(H) " : "", me.info);
 
-	/*
-	 * If we've been marked dead because a send failed, just exit
-	 * here now and save everyone the trouble of us ever existing.
-	 */
 	if(IsAnyDead(client_p))
 	{
-		sendto_realops_snomask(SNO_GENERAL, is_remote_connect(client_p) ? L_NETWIDE : L_ALL,
-				     "%s went dead during handshake", client_p->name);
+		sendto_realops_snomask(SNO_GENERAL, snomask_scope,
+				"%s went dead during handshake", client_p->name);
 		exit_client(client_p, client_p, &me, "Went dead during handshake");
 		return;
 	}
 
-	/* don't move to serv_list yet -- we haven't sent a burst! */
-
-	/* If we get here, we're ok, so lets start reading some data */
+	/* Don't move to serv_list yet — burst hasn't been sent. */
 	read_packet(F, client_p);
 }
