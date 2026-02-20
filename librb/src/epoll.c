@@ -47,6 +47,11 @@
 #include <sys/timerfd.h>
 #endif
 
+/* Max epoll_events to harvest per epoll_wait() call.  getdtablesize() can
+ * be 65535+, wasting ~768 KiB of cache for the event array.  1024 events
+ * per wakeup is plenty for an IRCd and keeps the array to 12 KiB. */
+#define EPOLL_MAX_EVENTS 1024
+
 #define RTSIGNAL SIGRTMIN
 struct epoll_info
 {
@@ -71,8 +76,8 @@ rb_init_netio_epoll(void)
 	can_do_event = 0;	/* shut up gcc */
 	can_do_timerfd = 0;
 	ep_info = rb_malloc(sizeof(struct epoll_info));
-	ep_info->pfd_size = getdtablesize();
-	ep_info->ep = epoll_create(ep_info->pfd_size);
+	ep_info->pfd_size = EPOLL_MAX_EVENTS;
+	ep_info->ep = epoll_create(EPOLL_MAX_EVENTS);
 	if(ep_info->ep < 0)
 	{
 		return -1;
@@ -186,7 +191,7 @@ rb_setselect_epoll(rb_fde_t *F, unsigned int type, PF * handler, void *client_da
 int
 rb_select_epoll(long delay)
 {
-	int num, i, flags, old_flags, op;
+	int num, i, flags, op;
 	struct epoll_event ep_event;
 	int o_errno;
 	void *data;
@@ -208,7 +213,6 @@ rb_select_epoll(long delay)
 	{
 		PF *hdl;
 		rb_fde_t *F = ep_info->pfd[i].data.ptr;
-		old_flags = F->pflags;
 		if(ep_info->pfd[i].events & (EPOLLIN | EPOLLHUP | EPOLLERR))
 		{
 			hdl = F->read_handler;
@@ -246,7 +250,10 @@ rb_select_epoll(long delay)
 		if(F->write_handler != NULL)
 			flags |= EPOLLOUT;
 
-		if(old_flags != flags)
+		/* Only sync epoll if the handler implicitly changed interest
+		 * without calling rb_setselect (which would have already updated
+		 * F->pflags and issued epoll_ctl itself). */
+		if(flags != F->pflags)
 		{
 			if(flags == 0)
 				op = EPOLL_CTL_DEL;

@@ -51,6 +51,10 @@
 #endif
 
 
+/* Max kevent structs to harvest/buffer per call.  getdtablesize() can be
+ * 65535+; 1024 entries keeps both kqlst and kqout to ~32 KiB total. */
+#define KQUEUE_MAX_EVENTS 1024
+
 static void kq_update_events(rb_fde_t *, short, PF *);
 static int kq;
 static struct timespec zero_timespec;
@@ -150,7 +154,7 @@ rb_init_netio_kqueue(void)
 	{
 		return errno;
 	}
-	kqmax = getdtablesize();
+	kqmax = KQUEUE_MAX_EVENTS;
 	kqlst = rb_malloc(sizeof(struct kevent) * kqmax);
 	kqout = rb_malloc(sizeof(struct kevent) * kqmax);
 	rb_open(kq, RB_FD_UNKNOWN, "kqueue fd");
