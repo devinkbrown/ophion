@@ -296,6 +296,7 @@ extern ExtbanFunc extban_table[256];
 extern int match_extban(const char *banstr, struct Client *client_p, struct Channel *chptr, long mode_type);
 extern int valid_extban(const char *banstr, struct Client *client_p, struct Channel *chptr, long mode_type);
 const char * get_extban_string(void);
+extern void extban_init(void);
 
 extern int get_channel_access(struct Client *source_p, struct Channel *chptr, struct membership *msptr, int dir, const char *modestr);
 
