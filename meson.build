@@ -14,6 +14,12 @@ else
 endif
 libdl_dep = declare_dependency(dependencies: libdl_deps)
 
+# liburing (io_uring backend)
+liburing_dep = dependency('liburing', required: false)
+if liburing_dep.found()
+  cdata.set('HAVE_LIBURING', true)
+endif
+
 # librt
 librt_lib = cc.find_library('rt', has_headers: ['signal.h', 'time.h'], required: false)
 if librt_lib.found()

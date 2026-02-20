@@ -15,6 +15,12 @@ else
   tls_dep = declare_dependency()
 endif
 
+if liburing_dep.found()
+  uring_dep = declare_dependency(dependencies: liburing_dep)
+else
+  uring_dep = declare_dependency()
+endif
+
 librb_lib = shared_library('rb',
   'unix.c',
   'win32.c',
@@ -34,6 +40,7 @@ librb_lib = shared_library('rb',
   'helper.c',
   'devpoll.c',
   'epoll.c',
+  'io_uring.c',
   'poll.c',
   'ports.c',
   'sigio.c',
@@ -46,7 +53,7 @@ librb_lib = shared_library('rb',
   'arc4random.c',
   librb_version_c,
   librb_serno_h,
-  dependencies: [librt_dep, tls_dep],
+  dependencies: [librt_dep, tls_dep, uring_dep],
   install: true,
   include_directories: [librb_inc]
 )

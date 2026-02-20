@@ -910,13 +910,14 @@ hook_discord_tagmsg(void *vdata)
  * Lines starting with '#' are comments.
  * ---------------------------------------------------------------------- */
 
-static void
+static int
 save_account_cb(rb_dictionary_element *elem, void *privdata)
 {
 	FILE *fp = privdata;
 	fprintf(fp, "%s\t%s\n",
 		(const char *)elem->key,
 		(const char *)elem->data);
+	return 0;
 }
 
 static void
