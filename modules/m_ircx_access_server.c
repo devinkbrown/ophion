@@ -198,9 +198,8 @@ h_access_channel_join(void *vdata)
 		return;
 
 	/* found a matching NOCHANNEL ban - kick the user out */
-	sendto_one_numeric(source_p, ERR_UNAVAILRESOURCE,
-		form_str(ERR_UNAVAILRESOURCE),
-		chptr->chname);
+	sendto_one(source_p, form_str(ERR_UNAVAILRESOURCE),
+		me.name, source_p->name, chptr->chname);
 
 	/* remove the user from the channel (destroys the channel) */
 	struct membership *msptr = find_channel_membership(chptr, source_p);
@@ -338,7 +337,7 @@ handle_add_deny(struct Client *source_p, const char *mask, int parc, const char 
 
 	if (!IsOperK(source_p))
 	{
-		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		sendto_one_numeric(source_p, ERR_NOPRIVILEGES, form_str(ERR_NOPRIVILEGES));
 		return;
 	}
 
@@ -878,7 +877,7 @@ m_access_server(struct MsgBuf *msgbuf_p, struct Client *client_p,
 
 	if (!IsOper(source_p))
 	{
-		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		sendto_one_numeric(source_p, ERR_NOPRIVILEGES, form_str(ERR_NOPRIVILEGES));
 		return;
 	}
 
@@ -915,7 +914,7 @@ h_access_server_cmd(void *vdata)
 
 	if (!IsOper(source_p))
 	{
-		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		sendto_one_numeric(source_p, ERR_NOPRIVILEGES, form_str(ERR_NOPRIVILEGES));
 		return;
 	}
 

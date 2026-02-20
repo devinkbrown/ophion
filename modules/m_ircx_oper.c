@@ -304,7 +304,7 @@ m_gag(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
 
 	if (!IsOper(source_p))
 	{
-		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		sendto_one_numeric(source_p, ERR_NOPRIVILEGES, form_str(ERR_NOPRIVILEGES));
 		return;
 	}
 
@@ -660,7 +660,7 @@ m_opforce(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 
 	if (!IsOper(source_p) || !IsOperAdmin(source_p))
 	{
-		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		sendto_one_numeric(source_p, ERR_NOPRIVILEGES, form_str(ERR_NOPRIVILEGES));
 		return;
 	}
 

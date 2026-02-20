@@ -45,6 +45,7 @@
 #include "parse.h"
 #include "msgbuf.h"
 #include "tgchange.h"
+#include "packet.h"
 #include "inline/stringops.h"
 
 static const char cap_message_tags_desc[] =
@@ -225,7 +226,7 @@ m_tagmsg(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 		else
 		{
 			/* Forward to remote server; remote server will decide delivery */
-			sendto_one_prefix(target_p, source_p, "TAGMSG", "");
+			sendto_one_prefix(target_p, source_p, "TAGMSG", "%s", "");
 		}
 
 		/* Echo back to sender if they have echo-message and it's not self */

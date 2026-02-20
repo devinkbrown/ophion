@@ -104,8 +104,8 @@ m_request(struct MsgBuf *msgbuf_p, struct Client *client_p,
 
 		if (find_channel_membership(chptr, source_p) == NULL)
 		{
-			sendto_one(source_p, form_str(ERR_NOTONCHANNEL),
-				   me.name, source_p->name, chptr->chname);
+			sendto_one_numeric(source_p, ERR_NOTONCHANNEL,
+				form_str(ERR_NOTONCHANNEL), chptr->chname);
 			return;
 		}
 
@@ -116,7 +116,7 @@ m_request(struct MsgBuf *msgbuf_p, struct Client *client_p,
 				     chptr->chname, tag, text);
 
 		/* propagate to other servers */
-		sendto_server(client_p, chptr, NULL, NOCAPS, NOCAPS,
+		sendto_server(client_p, chptr, NOCAPS, NOCAPS,
 			      ":%s REQUEST %s %s :%s",
 			      use_id(source_p), chptr->chname, tag, text);
 	}
@@ -171,7 +171,7 @@ ms_request(struct MsgBuf *msgbuf_p, struct Client *client_p,
 				     source_p->name, source_p->username, source_p->host,
 				     chptr->chname, tag, text);
 
-		sendto_server(client_p, chptr, NULL, NOCAPS, NOCAPS,
+		sendto_server(client_p, chptr, NOCAPS, NOCAPS,
 			      ":%s REQUEST %s %s :%s",
 			      use_id(source_p), chptr->chname, tag, text);
 	}
