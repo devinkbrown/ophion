@@ -165,7 +165,7 @@ oper:auto\_admin, channel-admin auto-join level
 ------------------------------------------------
 
 When this privilege is present, the oper automatically joins channels with
-``+q`` (channel-admin, prefix ``~``) when ``oper_auto_op = yes`` in
+``+q`` (channel-admin, prefix ``.``) when ``oper_auto_op = yes`` in
 ``ircd.conf``.  This gives full ``CHFL_ADMIN`` channel access with no
 ceiling.
 
