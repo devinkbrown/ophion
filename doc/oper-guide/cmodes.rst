@@ -59,7 +59,7 @@ channel, just without the escape characters themselves.
 ---------------------
 
 This mode takes one parameter of the same form as bans, which overrides
-``+b`` and ``+q`` bans for all clients it matches.
+``+b`` and ``+Z`` restrictions for all clients it matches.
 
 This can be useful if it is necessary to ban an entire ISP due to
 persistent abuse, but some users from that ISP should still be allowed
@@ -142,13 +142,13 @@ join (by racing for the last slot on each server).
 ----------------------
 
 Channels with this mode will be allowed larger banlists (by default, 500
-instead of 50 entries for ``+b``, ``+q``, ``+e`` and ``+I`` together). Only network
+instead of 50 entries for ``+b``, ``+Z``, ``+e`` and ``+I`` together). Only network
 operators with resv privilege may set this mode.
 
 ``+M``, opmoderate
 ------------------
 
-When ``+M`` is set, the effects of ``+m``, ``+b`` and ``+q`` are relaxed. For each
+When ``+M`` is set, the effects of ``+m``, ``+b`` and ``+Z`` are relaxed. For each
 message, if that message would normally be blocked by one of these
 modes, it is instead sent to all channel operators.
 
@@ -173,7 +173,7 @@ This mode takes one parameter, a nick, and grants or removes channel
 operator privilege to that user. Channel operators have full control
 over the channel, having the ability to set all channel modes except ``+L``
 and ``+P``, and kick users. Like voiced users, channel operators can always
-send to the channel, overriding ``+b``, ``+m`` and ``+q`` modes and the per-channel
+send to the channel, overriding ``+b``, ``+m`` and ``+Z`` modes and the per-channel
 flood limit. In most clients channel operators are marked with an '@'
 sign.
 
@@ -277,7 +277,7 @@ changing the topic.
 
 This mode takes one parameter, a nick, and grants or removes voice
 privilege to that user. Voiced users can always send to the channel,
-overriding ``+b``, ``+m`` and ``+q`` modes and the per-channel flood limit. In most
+overriding ``+b``, ``+m`` and ``+Z`` modes and the per-channel flood limit. In most
 clients voiced users are marked with a plus sign.
 
 The privilege is lost if the user leaves the channel or server in any

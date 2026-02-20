@@ -87,6 +87,6 @@ EXTBAN_NOMATCH: the client_p does not match the mask
 EXTBAN_MATCH: the client_p matches the mask
 
 The function is called whenever a (local) client needs to be checked against
-a +bqeI entry of the given extban type, and whenever a local client tries to
+a +bZeI entry of the given extban type, and whenever a local client tries to
 add such an entry. (Clients are allowed to add bans matching themselves.)
 

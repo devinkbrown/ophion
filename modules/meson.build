@@ -58,7 +58,6 @@ modules = [
   'm_ircx_prop_opkey',
   'm_ircx_prop_user_profile',
   'm_ircx_oper',
-  'm_ircx_oper_autoowner',
   'm_ircx_oper_godmode',
   'm_ircx_oper_vhost',
   'm_ircx_request',
