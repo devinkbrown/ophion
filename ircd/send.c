@@ -51,9 +51,8 @@ unsigned long current_serial = 0L;
 
 struct Client *remote_rehash_oper_p;
 
-/* IRCv3 labeled-response globals: set in parse.c before command dispatch */
-const char *g_labeled_response_label = NULL;
-struct Client *g_labeled_response_client = NULL;
+/* g_labeled_response_label and g_labeled_response_client are defined in parse.c
+ * and declared in parse.h. send.c reads them when building outbound messages. */
 
 /* send_linebuf()
  *
@@ -910,41 +909,34 @@ sendto_channel_local_butone(struct Client *one, int type, struct Channel *chptr,
 	msgbuf_cache_free(&msgbuf_cache);
 }
 
-/*
- * sendto_common_channels_local()
+/* _sendto_common_channels_local()
  *
- * inputs	- pointer to client
- *		- capability mask
- *		- negated capability mask
- *		- pattern to send
- * output	- NONE
- * side effects	- Sends a message to all people on local server who are
- * 		  in same channel with user.
- *		  used by m_nick.c and exit_one_client.
+ * Shared implementation for sendto_common_channels_local[_butone].
+ * When exclude_self is true the user's serial is pre-stamped so the inner
+ * loop skips them; when false we send to the user after the loop if they
+ * haven't been reached through a shared channel (e.g. nick change with no
+ * common channels).
  */
-void
-sendto_common_channels_local(struct Client *user, int cap, int negcap, const char *pattern, ...)
+static void
+_sendto_common_channels_local(struct Client *user, int cap, int negcap,
+			      bool exclude_self, const char *pattern, va_list *args)
 {
-	va_list args;
-	rb_dlink_node *ptr;
-	rb_dlink_node *next_ptr;
-	rb_dlink_node *uptr;
-	rb_dlink_node *next_uptr;
+	rb_dlink_node *ptr, *next_ptr;
+	rb_dlink_node *uptr, *next_uptr;
 	struct Channel *chptr;
 	struct Client *target_p;
 	struct membership *msptr;
 	struct membership *mscptr;
 	struct MsgBuf msgbuf;
 	struct MsgBuf_cache msgbuf_cache;
-	rb_strf_t strings = { .format = pattern, .format_args = &args, .next = NULL };
+	rb_strf_t strings = { .format = pattern, .format_args = args, .next = NULL };
 
 	build_msgbuf_tags(&msgbuf, user);
-
-	va_start(args, pattern);
 	msgbuf_cache_init(&msgbuf_cache, &msgbuf, &strings);
-	va_end(args);
 
 	++current_serial;
+	if(exclude_self)
+		user->serial = current_serial;
 
 	RB_DLINK_FOREACH_SAFE(ptr, next_ptr, user->user->channel.head)
 	{
@@ -967,11 +959,12 @@ sendto_common_channels_local(struct Client *user, int cap, int negcap, const cha
 		}
 	}
 
-	/* this can happen when the user isnt in any channels, but we still
-	 * need to send them the data, ie a nick change
-	 */
-	if(MyConnect(user) && (user->serial != current_serial)
-			&& IsCapable(user, cap) && NotCapable(user, negcap)) {
+	/* When not excluding self: send to the user if they weren't reached
+	 * through a shared channel (e.g. a nick change while in no channels). */
+	if(!exclude_self && MyConnect(user) &&
+	   user->serial != current_serial &&
+	   IsCapable(user, cap) && NotCapable(user, negcap))
+	{
 		send_linebuf(user, msgbuf_cache_get(&msgbuf_cache, CLIENT_CAPS_ONLY(user)));
 	}
 
@@ -979,64 +972,37 @@ sendto_common_channels_local(struct Client *user, int cap, int negcap, const cha
 }
 
 /*
+ * sendto_common_channels_local()
+ *
+ * inputs	- pointer to client, capability mask, negated capability mask, pattern
+ * output	- NONE
+ * side effects	- Sends a message to all local clients sharing a channel with
+ *		  user, including user themselves if they match the cap filter.
+ *		  Used by m_nick.c and exit_one_client.
+ */
+void
+sendto_common_channels_local(struct Client *user, int cap, int negcap, const char *pattern, ...)
+{
+	va_list args;
+	va_start(args, pattern);
+	_sendto_common_channels_local(user, cap, negcap, false, pattern, &args);
+	va_end(args);
+}
+
+/*
  * sendto_common_channels_local_butone()
  *
- * inputs	- pointer to client
- *		- capability mask
- *		- negated capability mask
- *		- pattern to send
+ * inputs	- pointer to client, capability mask, negated capability mask, pattern
  * output	- NONE
- * side effects	- Sends a message to all people on local server who are
- * 		  in same channel with user, except for user itself.
+ * side effects	- As sendto_common_channels_local but skips user themselves.
  */
 void
 sendto_common_channels_local_butone(struct Client *user, int cap, int negcap, const char *pattern, ...)
 {
 	va_list args;
-	rb_dlink_node *ptr;
-	rb_dlink_node *next_ptr;
-	rb_dlink_node *uptr;
-	rb_dlink_node *next_uptr;
-	struct Channel *chptr;
-	struct Client *target_p;
-	struct membership *msptr;
-	struct membership *mscptr;
-	struct MsgBuf msgbuf;
-	struct MsgBuf_cache msgbuf_cache;
-	rb_strf_t strings = { .format = pattern, .format_args = &args, .next = NULL };
-
-	build_msgbuf_tags(&msgbuf, user);
-
 	va_start(args, pattern);
-	msgbuf_cache_init(&msgbuf_cache, &msgbuf, &strings);
+	_sendto_common_channels_local(user, cap, negcap, true, pattern, &args);
 	va_end(args);
-
-	++current_serial;
-	/* Skip them -- jilles */
-	user->serial = current_serial;
-
-	RB_DLINK_FOREACH_SAFE(ptr, next_ptr, user->user->channel.head)
-	{
-		mscptr = ptr->data;
-		chptr = mscptr->chptr;
-
-		RB_DLINK_FOREACH_SAFE(uptr, next_uptr, chptr->locmembers.head)
-		{
-			msptr = uptr->data;
-			target_p = msptr->client_p;
-
-			if(IsIOError(target_p) ||
-			   target_p->serial == current_serial ||
-			   !IsCapable(target_p, cap) ||
-			   !NotCapable(target_p, negcap))
-				continue;
-
-			target_p->serial = current_serial;
-			send_linebuf(target_p, msgbuf_cache_get(&msgbuf_cache, CLIENT_CAPS_ONLY(target_p)));
-		}
-	}
-
-	msgbuf_cache_free(&msgbuf_cache);
 }
 
 /* sendto_match_butone()

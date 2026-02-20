@@ -37,9 +37,9 @@ extern unsigned long current_serial;
 
 extern struct Client *remote_rehash_oper_p;
 
-/* IRCv3 labeled-response: current label and the client it belongs to.
- * Set in parse.c before command dispatch, cleared after. */
-extern const char *g_labeled_response_label;
+/* IRCv3 labeled-response: set by parse.c before dispatch, cleared after.
+ * Defined in parse.c; also declared in parse.h. */
+extern const char    *g_labeled_response_label;
 extern struct Client *g_labeled_response_client;
 
 extern void send_pop_queue(struct Client *);
