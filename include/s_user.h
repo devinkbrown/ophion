@@ -53,4 +53,6 @@ extern void construct_umodebuf(void);
 
 extern void oper_up(struct Client *, struct oper_conf *);
 
+extern void um_builtin_init(void);
+
 #endif

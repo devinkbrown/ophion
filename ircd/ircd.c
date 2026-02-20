@@ -810,6 +810,9 @@ charybdis_main(int argc, char * const argv[])
 	init_monitor();
 
         chmode_init();
+        extban_init();
+        chm_builtin_init();
+        um_builtin_init();
         construct_cflags_strings();
 
 	init_authd();		/* Start up authd. */

@@ -195,7 +195,7 @@ TimeMr14C, Yusuf Iskenderoglu <uhc0@stud.uni-karlsruhe.de>
 toot, Toby Verrall <to7@antipope.fsnet.co.uk>
 vx0, Mark Miller <mark@oc768.net>
 wiz, Jason Dambrosio <jason@wiz.cx>
-Xride, Søren Straarup <xride@x12.dk>
+Xride, Sï¿½ren Straarup <xride@x12.dk>
 zb^3, Alfred Perlstein <alfred@freebsd.org>
 
 Others are welcome. Always. And if we left anyone off the above list,
@@ -273,3 +273,31 @@ distribution.
 
 Visit the Charybdis website at: http://www.charybdis.io/
 Visit us on IRC at: irc.charybdis.io #charybdis
+
+===============================================================================
+OPHION CREDITS
+===============================================================================
+
+Ophion is a websocket-first IRC server forked from Charybdis, implementing
+IRCv3.2, parts of the IRCv3 living standard, and relevant patent-unencumbered
+parts of the IRCX specification (draft-pfenning-irc-extensions-04).
+
+Key additions in Ophion beyond Charybdis:
+
+- IRCX protocol extensions: AUTH, CREATE, LISTX, PROP, WHISPER, ACCESS,
+  EVENT, GAG, OPFORCE commands; channel modes +u/+h/+a/+d/+E/+f/+z/+x/+w;
+  user mode +z (GAG); comprehensive property (PROP) system
+- Discord bridge daemon (discordd) for IRC/Discord integration
+- wolfSSL TLS backend replacing OpenSSL (OpenSSL-compatible interface)
+- WebSocket-first design with a rewritten wsockd helper daemon
+- Unified IP cloaking (ip_cloaking_unified) with multiple cloaking styles
+- Auto-generated server IDs (SID) with AUTOSID capability and collision
+  resolution via SVSSID
+- God mode (+G), oper auto-promote, and oper kick/mode protection
+- Microsoft Comic Chat character metadata support via PROP system
+- Oper event subscription system (EVENT command)
+- New IRCv3 capabilities: draft/read-marker, draft/multiline,
+  ophion.dev/prop-notify, draft/account-registration
+
+The Ophion development team, 2024-2026:
+See the project repository for a full list of contributors.

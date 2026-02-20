@@ -5,12 +5,12 @@ librb_version_c = custom_target(
   command: ['sh', '@INPUT@', '@OUTPUT@']
 )
 
-if mbedtls_dep.found()
+if wolfssl_dep.found()
+  tls_dep = declare_dependency(dependencies: wolfssl_dep)
+elif mbedtls_dep.found()
   tls_dep = declare_dependency(dependencies: mbedtls_dep)
 elif gnutls_dep.found()
   tls_dep = declare_dependency(dependencies: gnutls_dep)
-elif libssl_dep.found()
-  tls_dep = declare_dependency(dependencies: [libcrypto_dep, libssl_dep])
 else
   tls_dep = declare_dependency()
 endif

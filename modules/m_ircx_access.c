@@ -566,6 +566,33 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 		return;
 	}
 
+	/*
+	 * If the mask begins with '$', validate that the extban type is known.
+	 * We only check that the type character is registered; we do not run
+	 * the extban function itself so that state-dependent types (e.g. $j
+	 * which requires the target channel to exist) can still be added.
+	 *
+	 * DENY / GRANT / QUIET entries route through set_channel_mode which
+	 * already performs its own extban validation; this block covers the
+	 * membership levels (VOICE / HOST / OWNER / ADMIN).
+	 */
+	if (mask[0] == '$' &&
+	    newflags != ACCESS_DENY_FLAG &&
+	    newflags != ACCESS_GRANT_FLAG &&
+	    newflags != ACCESS_QUIET_FLAG)
+	{
+		const char *p = mask + 1;
+		if (*p == '~')
+			p++;
+		unsigned char type_char = (unsigned char) irctolower((unsigned char)*p);
+		if (type_char == '\0' || extban_table[type_char] == NULL)
+		{
+			sendto_one_numeric(source_p, ERR_INVALIDBAN, form_str(ERR_INVALIDBAN),
+				chptr->chname, 'b', mask);
+			return;
+		}
+	}
+
 	if (!can_upsert_on_access_list(chptr, source_p, mask, newflags))
 	{
 		sendto_one(source_p, form_str(ERR_CHANOPRIVSNEEDED),

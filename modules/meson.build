@@ -9,13 +9,6 @@ modules = [
   'cap_prop_notify',
   'cap_server_time',
   'cap_sts',
-  'chm_nocolour',
-  'chm_noctcp',
-  'extb_account',
-  'extb_group',
-  'extb_ssl',
-  'um_callerid',
-  'um_regonlymsg',
   'm_accept',
   'm_admin',
   'm_alias',
@@ -125,10 +118,10 @@ foreach module : modules
     install_dir: autoload_dir)
 endforeach
 
-if libcrypto_dep.found()
+if wolfssl_dep.found()
   shared_module('m_challenge',
     'm_challenge.c',
-    dependencies: [libcrypto_dep],
+    dependencies: [wolfssl_dep],
     link_with: [librb_lib, ircd_lib],
     include_directories: [librb_inc, base_inc],
     name_prefix: '',

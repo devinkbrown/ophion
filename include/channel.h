@@ -233,7 +233,7 @@ extern void destroy_channel(struct Channel *);
 extern int can_send(struct Channel *chptr, struct Client *who,
 		    struct membership *);
 extern bool flood_attack_channel(int p_or_n, struct Client *source_p,
-				struct Channel *chptr, char *chname);
+				struct Channel *chptr);
 struct matchset;
 extern int is_banned(struct Channel *chptr, struct Client *who,
                      struct membership *msptr, const struct matchset *ms,
@@ -296,6 +296,7 @@ extern ExtbanFunc extban_table[256];
 extern int match_extban(const char *banstr, struct Client *client_p, struct Channel *chptr, long mode_type);
 extern int valid_extban(const char *banstr, struct Client *client_p, struct Channel *chptr, long mode_type);
 const char * get_extban_string(void);
+extern void extban_init(void);
 
 extern int get_channel_access(struct Client *source_p, struct Channel *chptr, struct membership *msptr, int dir, const char *modestr);
 

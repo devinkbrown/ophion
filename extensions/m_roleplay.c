@@ -172,7 +172,7 @@ m_displaymsg(struct MsgBuf *msgbuf_p, struct Client *source_p, const char *chann
 	}
 
 	/* enforce flood stuff on roleplay commands */
-	if(flood_attack_channel(0, source_p, chptr, chptr->chname))
+	if(flood_attack_channel(0, source_p, chptr))
 		return;
 
 	/* enforce target change on roleplay commands */

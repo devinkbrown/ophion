@@ -6,10 +6,10 @@
  * Provides:
  *   - GAG user mode (+z): silences a user globally (oper-only set/unset)
  *   - OPFORCE command: unified oper channel force command
- *     OPFORCE JOIN <channel>     - force-join a channel (replaces m_ojoin)
- *     OPFORCE OP <channel>       - force-op self on channel (replaces m_opme)
- *     OPFORCE KICK <chan> <nick>  - force-kick (replaces m_okick)
- *     OPFORCE MODE <chan> <modes> - force-mode (replaces m_omode)
+ *     OPFORCE JOIN <channel>     - force-join a channel
+ *     OPFORCE OP <channel>       - force-op self on channel
+ *     OPFORCE KICK <chan> <nick>  - force-kick a user
+ *     OPFORCE MODE <chan> <modes> - force-set channel modes
  *   - Hooks into message sending to enforce GAG silently
  *   - Server-to-server propagation of GAG via user mode 'z'
  *

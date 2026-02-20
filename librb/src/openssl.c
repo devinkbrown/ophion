@@ -250,52 +250,71 @@ make_certfp(X509 *const cert, uint8_t certfp[const RB_SSL_CERTFP_LEN], const int
 {
 	unsigned int hashlen = 0;
 	const EVP_MD *md_type = NULL;
-	const ASN1_ITEM *item = NULL;
-	void *data = NULL;
+	bool use_pubkey = false;
 
 	switch(method)
 	{
 	case RB_SSL_CERTFP_METH_CERT_SHA1:
 		hashlen = RB_SSL_CERTFP_LEN_SHA1;
 		md_type = EVP_sha1();
-		item = ASN1_ITEM_rptr(X509);
-		data = cert;
 		break;
 	case RB_SSL_CERTFP_METH_CERT_SHA256:
 		hashlen = RB_SSL_CERTFP_LEN_SHA256;
 		md_type = EVP_sha256();
-		item = ASN1_ITEM_rptr(X509);
-		data = cert;
 		break;
 	case RB_SSL_CERTFP_METH_CERT_SHA512:
 		hashlen = RB_SSL_CERTFP_LEN_SHA512;
 		md_type = EVP_sha512();
-		item = ASN1_ITEM_rptr(X509);
-		data = cert;
 		break;
 	case RB_SSL_CERTFP_METH_SPKI_SHA256:
 		hashlen = RB_SSL_CERTFP_LEN_SHA256;
 		md_type = EVP_sha256();
-		item = ASN1_ITEM_rptr(X509_PUBKEY);
-		data = X509_get_X509_PUBKEY(cert);
+		use_pubkey = true;
 		break;
 	case RB_SSL_CERTFP_METH_SPKI_SHA512:
 		hashlen = RB_SSL_CERTFP_LEN_SHA512;
 		md_type = EVP_sha512();
-		item = ASN1_ITEM_rptr(X509_PUBKEY);
-		data = X509_get_X509_PUBKEY(cert);
+		use_pubkey = true;
 		break;
 	default:
 		return 0;
 	}
 
-	if(ASN1_item_digest(item, md_type, data, certfp, &hashlen) != 1)
+	/* DER-encode the cert or SPKI, then hash the result. */
+	unsigned char *der = NULL;
+	int der_len;
+
+	if(use_pubkey)
 	{
-		rb_lib_log("%s: ASN1_item_digest: %s", __func__, rb_ssl_strerror(rb_ssl_last_err()));
+		EVP_PKEY *pkey = X509_get_pubkey(cert);
+		if(pkey == NULL)
+		{
+			rb_lib_log("%s: X509_get_pubkey: %s", __func__, rb_ssl_strerror(rb_ssl_last_err()));
+			return 0;
+		}
+		der_len = i2d_PUBKEY(pkey, &der);
+		EVP_PKEY_free(pkey);
+	}
+	else
+	{
+		der_len = i2d_X509(cert, &der);
+	}
+
+	if(der_len <= 0 || der == NULL)
+	{
+		rb_lib_log("%s: i2d encode failed: %s", __func__, rb_ssl_strerror(rb_ssl_last_err()));
 		return 0;
 	}
 
-	return (int) hashlen;
+	if(EVP_Digest(der, (size_t)der_len, certfp, &hashlen, md_type, NULL) != 1)
+	{
+		rb_lib_log("%s: EVP_Digest: %s", __func__, rb_ssl_strerror(rb_ssl_last_err()));
+		OPENSSL_free(der);
+		return 0;
+	}
+
+	OPENSSL_free(der);
+	return (int)hashlen;
 }
 
 

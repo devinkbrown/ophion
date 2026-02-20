@@ -10,10 +10,16 @@ authentication, without the insecurity of oper passwords.
 The challenge system documented here was redesigned in
 ircd-ratbox-2.2/charybdis-1.1 and is not compatible with earlier versions.
 
+Ophion implements the CHALLENGE command via the m_challenge module, which
+uses wolfSSL (an OpenSSL-compatible TLS library) for the RSA operations.
+The challenge/response system works identically to charybdis; the change
+in TLS backend is transparent.
+
 This document does not describe the technical details of the challenge
-system.  If you are reading this as part of the ircd distribution, the
-programs referred to are contained in ratbox-respond, see
-http://respond.ircd-ratbox.org for more information and downloads.
+system.  The ratbox-respond client tool can be used to generate responses;
+see http://respond.ircd-ratbox.org for more information and downloads.
+ratbox-respond requires OpenSSL or an OpenSSL-compatible library (such as
+wolfSSL) to build.
 
 
 - Challenge basics -
@@ -54,20 +60,23 @@ If aes256 is not available, the following is used instead:
 If you are using the unix based ratbox-respond this must be built.  For the
 windows version, ratbox-winrespond, please see http://respond.ircd-ratbox.org
 
-ratbox-respond takes the challenge from the server, and together with your 
+ratbox-respond takes the challenge from the server, and together with your
 private key file generates a response to be sent back.  ratbox-respond
-requires the openssl headers (ie, development files) and openssl libraries
-are installed for compilation.
+requires OpenSSL headers and libraries (or a compatible implementation
+such as wolfSSL) to build.
 
 Change into the ratbox-respond directory, and run:
 	./configure
 	make
 
 This will generate a 'ratbox-respond' binary, which you may place wherever
-you like.  If configure does not detect your openssl installation, you may
-pass it the directory where it is installed to via --enable-openssl, this
-should be the base directory which has lib/ and include/openssl/ within it:
+you like.  If configure does not detect your OpenSSL installation, pass the
+base directory (containing lib/ and include/openssl/) via:
 	./configure --enable-openssl=/path/to/opensslbase
+
+On systems using wolfSSL with its OpenSSL compatibility headers, you can
+point ratbox-respond at the wolfSSL include directory:
+	./configure --enable-openssl=/usr/include/wolfssl
 
 
 - Opering up -

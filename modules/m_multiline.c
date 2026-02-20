@@ -353,7 +353,7 @@ dispatch_channel(struct Client *source_p, struct ml_batch *batch)
 
 	/* Flood check */
 	if (result != CAN_SEND_OPV &&
-	    flood_attack_channel(batch->msgtype, source_p, chptr, chptr->chname))
+	    flood_attack_channel(batch->msgtype, source_p, chptr))
 		return;
 
 	/* Reset idle time */
