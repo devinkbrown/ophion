@@ -226,7 +226,7 @@ check_forward(struct Client *source_p, struct Channel *chptr,
 static void
 m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
-	static char jbuf[BUFSIZE];
+	char jbuf[BUFSIZE];
 	struct Channel *chptr = NULL, *chptr2 = NULL;
 	struct ConfItem *aconf;
 	char *name;
@@ -298,7 +298,7 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		}
 
 		if(*jbuf)
-			(void) strcat(jbuf, ",");
+			(void) rb_strlcat(jbuf, ",", sizeof(jbuf));
 		(void) rb_strlcat(jbuf, name, sizeof(jbuf));
 	}
 
@@ -484,10 +484,10 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 static void
 ms_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
-	static char modebuf[MODEBUFLEN];
-	static char parabuf[MODEBUFLEN];
+	char modebuf[MODEBUFLEN];
+	char parabuf[MODEBUFLEN];
 	struct Channel *chptr;
-	static struct Mode mode;
+	struct Mode mode;
 	time_t oldts;
 	time_t newts;
 	bool isnew;
@@ -619,30 +619,30 @@ parse_sjoin_modes(struct Mode *mode, const char *modestr,
 		switch (*(s++))
 		{
 		case 'y':
-			rb_strlcpy(mode->forward, parv[4 + args], sizeof(mode->forward));
-			args++;
 			if(parc < 5 + args)
 				return false;
+			rb_strlcpy(mode->forward, parv[4 + args], sizeof(mode->forward));
+			args++;
 			break;
 		case 'j':
+			if(parc < 5 + args)
+				return false;
 			sscanf(parv[4 + args], "%d:%d", &joinc, &timeslice);
 			args++;
 			mode->join_num = joinc;
 			mode->join_time = timeslice;
-			if(parc < 5 + args)
-				return false;
 			break;
 		case 'k':
+			if(parc < 5 + args)
+				return false;
 			rb_strlcpy(mode->key, parv[4 + args], sizeof(mode->key));
 			args++;
-			if(parc < 5 + args)
-				return false;
 			break;
 		case 'l':
-			mode->limit = atoi(parv[4 + args]);
-			args++;
 			if(parc < 5 + args)
 				return false;
+			mode->limit = atoi(parv[4 + args]);
+			args++;
 			break;
 		default:
 			if(chmode_flags[(int) *s] != 0)
@@ -685,15 +685,15 @@ append_membership_mode(char **mbuf_p, char *modebuf, const char **para, int *par
 static void
 ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
-	static char modebuf[MODEBUFLEN];
-	static char parabuf[MODEBUFLEN];
-	static char buf_uid[BUFSIZE];
+	char modebuf[MODEBUFLEN];
+	char parabuf[MODEBUFLEN];
+	char buf_uid[BUFSIZE];
 	static const char empty_modes[] = "0";
 	struct Channel *chptr;
 	struct Client *target_p, *fakesource_p;
 	time_t newts;
 	time_t oldts;
-	static struct Mode mode, *oldmode;
+	struct Mode mode, *oldmode;
 	const char *modes;
 	int args = 0;
 	bool keep_our_modes = true;
@@ -707,7 +707,7 @@ ms_sjoin(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 	const char *s;
 	char *ptr_uid;
 	char *p;
-	static char empty[] = "";
+	const char *empty = "";
 	rb_dlink_node *ptr, *next_ptr;
 	char *mbuf;
 	int pargs;
@@ -1156,147 +1156,113 @@ send_join_error(struct Client *source_p, int numeric, const char *name)
 static char *
 set_final_mode(char *mbuf, char *parabuf, struct Mode *mode, struct Mode *oldmode)
 {
+/* emit direction prefix only when it changes */
+#define SETDIR(new_dir, ch) \
+	do { if(dir != (new_dir)) { *mbuf++ = (ch); dir = (new_dir); } } while(0)
+
 	int dir = MODE_QUERY;
 	char *pbuf = parabuf;
 	int len;
 	int i;
 
-	/* ok, first get a list of modes we need to add */
-	for (i = 0; i < 256; i++)
+	/* flag modes to add */
+	for(i = 0; i < 256; i++)
 	{
 		if((mode->mode & chmode_flags[i]) && !(oldmode->mode & chmode_flags[i]))
 		{
-			if(dir != MODE_ADD)
-			{
-				*mbuf++ = '+';
-				dir = MODE_ADD;
-			}
+			SETDIR(MODE_ADD, '+');
 			*mbuf++ = i;
 		}
 	}
 
-	/* now the ones we need to remove. */
-	for (i = 0; i < 256; i++)
+	/* flag modes to remove */
+	for(i = 0; i < 256; i++)
 	{
 		if((oldmode->mode & chmode_flags[i]) && !(mode->mode & chmode_flags[i]))
 		{
-			if(dir != MODE_DEL)
-			{
-				*mbuf++ = '-';
-				dir = MODE_DEL;
-			}
+			SETDIR(MODE_DEL, '-');
 			*mbuf++ = i;
 		}
 	}
 
 	if(oldmode->limit && !mode->limit)
 	{
-		if(dir != MODE_DEL)
-		{
-			*mbuf++ = '-';
-			dir = MODE_DEL;
-		}
+		SETDIR(MODE_DEL, '-');
 		*mbuf++ = 'l';
 	}
 	if(oldmode->key[0] && !mode->key[0])
 	{
-		if(dir != MODE_DEL)
-		{
-			*mbuf++ = '-';
-			dir = MODE_DEL;
-		}
+		SETDIR(MODE_DEL, '-');
 		*mbuf++ = 'k';
 		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%s ", oldmode->key);
 		pbuf += len;
 	}
 	if(oldmode->join_num && !mode->join_num)
 	{
-		if(dir != MODE_DEL)
-		{
-			*mbuf++ = '-';
-			dir = MODE_DEL;
-		}
+		SETDIR(MODE_DEL, '-');
 		*mbuf++ = 'j';
 	}
 	if(oldmode->forward[0] && !mode->forward[0])
 	{
-		if(dir != MODE_DEL)
-		{
-			*mbuf++ = '-';
-			dir = MODE_DEL;
-		}
+		SETDIR(MODE_DEL, '-');
 		*mbuf++ = 'f';
 	}
 	if(mode->limit && oldmode->limit != mode->limit)
 	{
-		if(dir != MODE_ADD)
-		{
-			*mbuf++ = '+';
-			dir = MODE_ADD;
-		}
+		SETDIR(MODE_ADD, '+');
 		*mbuf++ = 'l';
 		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%d ", mode->limit);
 		pbuf += len;
 	}
 	if(mode->key[0] && strcmp(oldmode->key, mode->key))
 	{
-		if(dir != MODE_ADD)
-		{
-			*mbuf++ = '+';
-			dir = MODE_ADD;
-		}
+		SETDIR(MODE_ADD, '+');
 		*mbuf++ = 'k';
 		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%s ", mode->key);
 		pbuf += len;
 	}
 	if(mode->join_num && (oldmode->join_num != mode->join_num || oldmode->join_time != mode->join_time))
 	{
-		if(dir != MODE_ADD)
-		{
-			*mbuf++ = '+';
-			dir = MODE_ADD;
-		}
+		SETDIR(MODE_ADD, '+');
 		*mbuf++ = 'j';
 		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%d:%d ", mode->join_num, mode->join_time);
 		pbuf += len;
 	}
-	if(mode->forward[0] && strcmp(oldmode->forward, mode->forward) &&
-			ConfigChannel.use_forward)
+	if(mode->forward[0] && strcmp(oldmode->forward, mode->forward) && ConfigChannel.use_forward)
 	{
-		if(dir != MODE_ADD)
-		{
-			*mbuf++ = '+';
-			dir = MODE_ADD;
-		}
+		SETDIR(MODE_ADD, '+');
 		*mbuf++ = 'y';
 		len = snprintf(pbuf, parabuf + MODEBUFLEN - pbuf, "%s ", mode->forward);
 		pbuf += len;
 	}
 	*mbuf = '\0';
 
+#undef SETDIR
 	return mbuf;
 }
 
-/*
- * remove_our_modes
- *
- * inputs	-
- * output	-
- * side effects	-
- */
+/* mode table for remove_our_modes: flag to strip, mode letter to emit */
+static const struct {
+	unsigned int flag;
+	char letter;
+} mode_strip_table[] = {
+	{ CHFL_ADMIN,  'q' },
+	{ CHFL_CHANOP, 'o' },
+	{ CHFL_VOICE,  'v' },
+};
+
 static void
 remove_our_modes(struct Channel *chptr, struct Client *source_p)
 {
 	struct membership *msptr;
 	rb_dlink_node *ptr;
 	char lmodebuf[MODEBUFLEN];
-	char *lpara[MAXMODEPARAMS];
+	const char *lpara[MAXMODEPARAMS];
 	int count = 0;
-	int i;
+	int i, j;
 	char *mbuf = lmodebuf;
 
 	*mbuf++ = '-';
-
 	for(i = 0; i < MAXMODEPARAMS; i++)
 		lpara[i] = NULL;
 
@@ -1304,94 +1270,29 @@ remove_our_modes(struct Channel *chptr, struct Client *source_p)
 	{
 		msptr = ptr->data;
 
-		if(is_admin(msptr))
+		for(i = 0; i < (int)(sizeof mode_strip_table / sizeof *mode_strip_table); i++)
 		{
-			msptr->flags &= ~CHFL_ADMIN;
+			if(!(msptr->flags & mode_strip_table[i].flag))
+				continue;
+
+			msptr->flags &= ~mode_strip_table[i].flag;
 			lpara[count++] = msptr->client_p->name;
-			*mbuf++ = 'q';
+			*mbuf++ = mode_strip_table[i].letter;
 
-			if(count >= MAXMODEPARAMS)
-			{
-				*mbuf = '\0';
-				sendto_channel_local(source_p, ALL_MEMBERS, chptr,
-						     ":%s MODE %s %s %s %s %s %s",
-						     source_p->name, chptr->chname,
-						     lmodebuf, lpara[0], lpara[1],
-						     lpara[2], lpara[3]);
+			if(count < MAXMODEPARAMS)
+				continue;
 
-				/* preserve the initial '-' */
-				mbuf = lmodebuf;
-				*mbuf++ = '-';
-				count = 0;
-
-				for(i = 0; i < MAXMODEPARAMS; i++)
-					lpara[i] = NULL;
-			}
-		}
-		if(is_chanop(msptr))
-		{
-			msptr->flags &= ~CHFL_CHANOP;
-			lpara[count++] = msptr->client_p->name;
-			*mbuf++ = 'o';
-
-			if(count >= MAXMODEPARAMS)
-			{
-				*mbuf = '\0';
-				sendto_channel_local(source_p, ALL_MEMBERS, chptr,
-						     ":%s MODE %s %s %s %s %s %s",
-						     source_p->name, chptr->chname,
-						     lmodebuf, lpara[0], lpara[1],
-						     lpara[2], lpara[3]);
-
-				/* preserve the initial '-' */
-				mbuf = lmodebuf;
-				*mbuf++ = '-';
-				count = 0;
-
-				for(i = 0; i < MAXMODEPARAMS; i++)
-					lpara[i] = NULL;
-			}
-		}
-		if(is_voiced(msptr))
-		{
-			msptr->flags &= ~CHFL_VOICE;
-			lpara[count++] = msptr->client_p->name;
-			*mbuf++ = 'v';
-
-			if(count >= MAXMODEPARAMS)
-			{
-				*mbuf = '\0';
-				sendto_channel_local(source_p, ALL_MEMBERS, chptr,
-						     ":%s MODE %s %s %s %s %s %s",
-						     source_p->name, chptr->chname,
-						     lmodebuf, lpara[0], lpara[1],
-						     lpara[2], lpara[3]);
-
-				/* preserve the initial '-' */
-				mbuf = lmodebuf;
-				*mbuf++ = '-';
-				count = 0;
-
-				for(i = 0; i < MAXMODEPARAMS; i++)
-					lpara[i] = NULL;
-			}
-		}
-		else
-			continue;
-
-		if(count >= MAXMODEPARAMS)
-		{
 			*mbuf = '\0';
 			sendto_channel_local(source_p, ALL_MEMBERS, chptr,
 					     ":%s MODE %s %s %s %s %s %s",
-					     source_p->name, chptr->chname, lmodebuf,
-					     lpara[0], lpara[1], lpara[2], lpara[3]);
+					     source_p->name, chptr->chname,
+					     lmodebuf, lpara[0], lpara[1],
+					     lpara[2], lpara[3]);
 			mbuf = lmodebuf;
 			*mbuf++ = '-';
 			count = 0;
-
-			for(i = 0; i < MAXMODEPARAMS; i++)
-				lpara[i] = NULL;
+			for(j = 0; j < MAXMODEPARAMS; j++)
+				lpara[j] = NULL;
 		}
 	}
 
@@ -1401,11 +1302,10 @@ remove_our_modes(struct Channel *chptr, struct Client *source_p)
 		sendto_channel_local(source_p, ALL_MEMBERS, chptr,
 				     ":%s MODE %s %s %s %s %s %s",
 				     source_p->name, chptr->chname, lmodebuf,
-				     EmptyString(lpara[0]) ? "" : lpara[0],
-				     EmptyString(lpara[1]) ? "" : lpara[1],
-				     EmptyString(lpara[2]) ? "" : lpara[2],
-				     EmptyString(lpara[3]) ? "" : lpara[3]);
-
+				     lpara[0] ? lpara[0] : "",
+				     lpara[1] ? lpara[1] : "",
+				     lpara[2] ? lpara[2] : "",
+				     lpara[3] ? lpara[3] : "");
 	}
 }
 
@@ -1419,8 +1319,8 @@ static void
 remove_ban_list(struct Channel *chptr, struct Client *source_p,
 		rb_dlink_list * list, char c, int mems)
 {
-	static char lmodebuf[BUFSIZE];
-	static char lparabuf[BUFSIZE];
+	char lmodebuf[BUFSIZE];
+	char lparabuf[BUFSIZE];
 	struct Ban *banptr;
 	rb_dlink_node *ptr;
 	rb_dlink_node *next_ptr;
