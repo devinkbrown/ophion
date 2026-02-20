@@ -675,15 +675,18 @@ conn_mod_process_ping(conn_t *conn, ws_frame_hdr_t *hdr, int masked)
 		}
 	}
 
-	dolen = rb_rawbuf_get(conn->modbuf_in, msg, hdr->payload_length_mask);
-	if (!dolen)
+	dolen = 0;
+	if (hdr->payload_length_mask > 0)
 	{
-		close_conn(conn, WAIT_PLAIN, "websocket error: fault unpacking message");
-		return;
+		dolen = rb_rawbuf_get(conn->modbuf_in, msg, hdr->payload_length_mask);
+		if (!dolen)
+		{
+			close_conn(conn, WAIT_PLAIN, "websocket error: fault unpacking message");
+			return;
+		}
+		if (masked)
+			ws_frame_unmask(msg, dolen, maskval);
 	}
-
-	if (masked)
-		ws_frame_unmask(msg, dolen, maskval);
 
 	ws_frame_hdr_t out_hdr = WEBSOCKET_FRAME_HDR_INIT;
 
@@ -795,6 +798,8 @@ conn_mod_process(conn_t *conn)
 			return;
 	}
 
+	/* Flush any pending WebSocket output (e.g. PONG responses) */
+	conn_mod_write_sendq(conn->mod_fd, conn);
 	conn_plain_write_sendq(conn->plain_fd, conn);
 }
 
@@ -880,7 +885,7 @@ conn_mod_handshake_process(conn_t *conn)
 
 	while (line != NULL && line < hdr_end)
 	{
-		char *eol = memchr(line, '\n', hdr_end - line);
+		char *eol = memchr(line, '\n', hdr_end + 2 - line);
 		if (!eol)
 			break;
 
