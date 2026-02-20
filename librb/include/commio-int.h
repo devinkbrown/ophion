@@ -163,6 +163,18 @@ void rb_io_unsched_event(struct ev_entry *ev);
 int rb_io_supports_event(void);
 void rb_io_init_event(void);
 
+/* io_uring versions */
+void rb_setselect_uring(rb_fde_t *F, unsigned int type, PF *handler, void *client_data);
+int  rb_init_netio_uring(void);
+int  rb_select_uring(long);
+int  rb_setup_fd_uring(rb_fde_t *F);
+
+void rb_uring_init_event(void);
+int  rb_uring_sched_event(struct ev_entry *event, int when);
+void rb_uring_unsched_event(struct ev_entry *event);
+int  rb_uring_supports_event(void);
+
+
 /* epoll versions */
 void rb_setselect_epoll(rb_fde_t *F, unsigned int type, PF * handler, void *client_data);
 int rb_init_netio_epoll(void);

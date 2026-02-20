@@ -73,31 +73,32 @@ _send_linebuf(struct Client *to, buf_head_t *linebuf)
 	if(!MyConnect(to) || IsIOError(to))
 		return 0;
 
-	if(rb_linebuf_len(&to->localClient->buf_sendq) > get_sendq(to))
+	if(rb_sendbuf_len(&to->localClient->buf_sendq) > get_sendq(to))
 	{
 		if(IsServer(to))
 		{
 			sendto_realops_snomask(SNO_GENERAL, L_ALL,
-					     "Max SendQ limit exceeded for %s: %u > %lu",
+					     "Max SendQ limit exceeded for %s: %zu > %lu",
 					     to->name,
-					     rb_linebuf_len(&to->localClient->buf_sendq),
+					     rb_sendbuf_len(&to->localClient->buf_sendq),
 					     get_sendq(to));
 
-			ilog(L_SERVER, "Max SendQ limit exceeded for %s: %u > %lu",
+			ilog(L_SERVER, "Max SendQ limit exceeded for %s: %zu > %lu",
 			     log_client_name(to, SHOW_IP),
-			     rb_linebuf_len(&to->localClient->buf_sendq),
+			     rb_sendbuf_len(&to->localClient->buf_sendq),
 			     get_sendq(to));
 		}
 
 		dead_link(to, 1);
 		return -1;
 	}
-	else
+
+	/* Copy formatted message bytes into the client's byte-block send queue. */
+	if(rb_sendbuf_write_linebuf(&to->localClient->buf_sendq, linebuf) < 0)
 	{
-		/* just attach the linebuf to the sendq instead of
-		 * generating a new one
-		 */
-		rb_linebuf_attach(&to->localClient->buf_sendq, linebuf);
+		/* Allocation failure — treat like sendq exceeded. */
+		dead_link(to, 1);
+		return -1;
 	}
 
 	/*
@@ -107,7 +108,7 @@ _send_linebuf(struct Client *to, buf_head_t *linebuf)
 	 */
 	to->localClient->sendM += 1;
 	me.localClient->sendM += 1;
-	if(rb_linebuf_len(&to->localClient->buf_sendq) > 0)
+	if(rb_sendbuf_len(&to->localClient->buf_sendq) > 0)
 		send_queued(to);
 	return 0;
 }
@@ -151,10 +152,10 @@ send_queued(struct Client *to)
 	if(IsFlush(to))
 		return;
 
-	if(rb_linebuf_len(&to->localClient->buf_sendq))
+	if(rb_sendbuf_len(&to->localClient->buf_sendq))
 	{
 		while ((retlen =
-			rb_linebuf_flush(F, &to->localClient->buf_sendq)) > 0)
+			rb_sendbuf_flush(&to->localClient->buf_sendq, F)) > 0)
 		{
 			/* We have some data written .. update counters */
 			ClearFlush(to);
@@ -182,7 +183,7 @@ send_queued(struct Client *to)
 		ServerStats.is_sendq_eagain++;
 	}
 
-	if(rb_linebuf_len(&to->localClient->buf_sendq))
+	if(rb_sendbuf_len(&to->localClient->buf_sendq))
 	{
 		SetFlush(to);
 		rb_setselect(to->localClient->F, RB_SELECT_WRITE,
@@ -199,7 +200,7 @@ send_pop_queue(struct Client *to)
 		to = to->from;
 	if(!MyConnect(to) || IsIOError(to))
 		return;
-	if(rb_linebuf_len(&to->localClient->buf_sendq) > 0)
+	if(rb_sendbuf_len(&to->localClient->buf_sendq) > 0)
 		send_queued(to);
 }
 

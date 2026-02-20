@@ -2065,6 +2065,24 @@ try_kqueue(void)
 }
 
 static int
+try_uring(void)
+{
+	if(!rb_init_netio_uring())
+	{
+		setselect_handler = rb_setselect_uring;
+		select_handler = rb_select_uring;
+		setup_fd_handler = rb_setup_fd_uring;
+		io_sched_event = rb_uring_sched_event;
+		io_unsched_event = rb_uring_unsched_event;
+		io_supports_event = rb_uring_supports_event;
+		io_init_event = rb_uring_init_event;
+		rb_strlcpy(iotype, "uring", sizeof(iotype));
+		return 0;
+	}
+	return -1;
+}
+
+static int
 try_epoll(void)
 {
 	if(!rb_init_netio_epoll())
@@ -2234,7 +2252,12 @@ rb_init_netio(void)
 
 	if(ioenv != NULL)
 	{
-		if(!strcmp("epoll", ioenv))
+		if(!strcmp("uring", ioenv))
+		{
+			if(!try_uring())
+				return;
+		}
+		else if(!strcmp("epoll", ioenv))
 		{
 			if(!try_epoll())
 				return;
@@ -2278,6 +2301,8 @@ rb_init_netio(void)
 	}
 
 	if(!try_kqueue())
+		return;
+	if(!try_uring())
 		return;
 	if(!try_epoll())
 		return;

@@ -107,6 +107,11 @@ rb_linebuf_newbuf
 rb_linebuf_parse
 rb_linebuf_put
 rb_listen
+rb_sendbuf_donebuf
+rb_sendbuf_flush
+rb_sendbuf_init
+rb_sendbuf_write
+rb_sendbuf_write_linebuf
 rb_make_rb_dlink_node
 rb_match_exact_string
 rb_match_ip
