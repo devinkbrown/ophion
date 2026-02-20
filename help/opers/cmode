@@ -20,9 +20,9 @@ NO PARAMETERS:
               messages is stripped.
      +g     - Free invite.  Everyone may invite users.  Significantly
               weakens +i control.
-     +M     - Op moderated.  Messages blocked by +m, +b and +q are instead
+     +M     - Op moderated.  Messages blocked by +m, +b and +Z are instead
               sent to ops.
-     +L     - Large ban list.  Increase maximum number of +beIq entries.
+     +L     - Large ban list.  Increase maximum number of +beIZ entries.
               Only settable by opers.
      +P     - Permanent.  Channel does not disappear when empty.  Only
               settable by opers.
@@ -56,11 +56,16 @@ WITH PARAMETERS:
               sending or changing nick if they are on it, based on a 
               nick!ident@host match.
               PARAMS: /mode #channel +b nick!user@host
-     +q     - Quiet.  Prevents a user from sending to the channel or changing
-              nick, based on a nick!ident@host match.
-              PARAMS: /mode #channel +q nick!user@host
+     +q     - Channel Admin.  Grants channel-admin status (prefix ~) to a
+              user.  Channel admins have full control including granting/
+              revoking +q and +o on other users.
+              PARAMS: /mode #channel +q nick
+     +Z     - Quiet/Mute.  Prevents a user from sending to the channel,
+              based on a nick!ident@host match.  Unlike +b, the user may
+              still join and appear in /NAMES.
+              PARAMS: /mode #channel +Z nick!user@host
      +e     - Exempt.  Allows a user to join a channel and send to it even if
-              they are banned (+b) or quieted (+q), based on a nick!ident@host
+              they are banned (+b) or quieted (+Z), based on a nick!ident@host
               match.
               PARAMS: /mode #channel +e nick!user@host
      +I     - Invite Exempt.  Allows a user to join a +i channel without an 
