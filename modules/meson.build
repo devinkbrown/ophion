@@ -11,7 +11,6 @@ modules = [
   'cap_sts',
   'chm_nocolour',
   'chm_noctcp',
-  'extb_group',
   'um_callerid',
   'um_regonlymsg',
   'm_accept',
