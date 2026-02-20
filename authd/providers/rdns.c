@@ -30,25 +30,10 @@
 
 struct user_query
 {
-	struct dns_query *query;		/* Pending DNS query */
+	struct dns_query *query;	/* Pending DNS query */
 };
 
-/* Goinked from old s_auth.c --Elizabeth */
-static const char *messages[] =
-{
-	"*** Looking up your hostname...",
-	"*** Couldn't look up your hostname",
-	"*** Your hostname is too long, ignoring hostname",
-};
-
-typedef enum
-{
-	REPORT_LOOKUP,
-	REPORT_FAIL,
-	REPORT_TOOLONG,
-} dns_message;
-
-static void client_fail(struct auth_client *auth, dns_message message);
+static void client_fail(struct auth_client *auth);
 static void client_success(struct auth_client *auth);
 static void dns_answer_callback(const char *res, bool status, query_type type, void *data);
 
@@ -60,29 +45,27 @@ dns_answer_callback(const char *res, bool status, query_type type, void *data)
 {
 	struct auth_client *auth = data;
 
-	if(res == NULL || status == false)
-		client_fail(auth, REPORT_FAIL);
-	else if(strlen(res) > HOSTLEN)
-		client_fail(auth, REPORT_TOOLONG);
-	else
+	if(res != NULL && strlen(res) <= HOSTLEN)
 	{
 		rb_strlcpy(auth->hostname, res, HOSTLEN + 1);
 		client_success(auth);
 	}
+	else
+	{
+		/* DNS failed, timed out, hostname too long, or forward check mismatch:
+		 * fall back to the client IP which was set as hostname in rdns_start. */
+		client_fail(auth);
+	}
 }
 
 static void
-client_fail(struct auth_client *auth, dns_message report)
+client_fail(struct auth_client *auth)
 {
 	struct user_query *query = get_provider_data(auth, SELF_PID);
 
 	lrb_assert(query != NULL);
 
-	rb_strlcpy(auth->hostname, "*", sizeof(auth->hostname));
-
-	notice_client(auth->cid, messages[report]);
 	cancel_query(query->query);
-
 	rb_free(query);
 
 	set_provider_data(auth, SELF_PID, NULL);
@@ -101,7 +84,6 @@ client_success(struct auth_client *auth)
 
 	notice_client(auth->cid, "*** Found your hostname: %s", auth->hostname);
 	cancel_query(query->query);
-
 	rb_free(query);
 
 	set_provider_data(auth, SELF_PID, NULL);
@@ -120,7 +102,7 @@ rdns_destroy(void)
 	RB_DICTIONARY_FOREACH(auth, &iter, auth_clients)
 	{
 		if(get_provider_data(auth, SELF_PID) != NULL)
-			client_fail(auth, REPORT_FAIL);
+			client_fail(auth);
 		/* auth is now invalid as we have no reference */
 	}
 }
@@ -128,9 +110,11 @@ rdns_destroy(void)
 static bool
 rdns_start(struct auth_client *auth)
 {
+	/* Default hostname to the client IP; rDNS success will override it. */
+	rb_strlcpy(auth->hostname, auth->c_ip, sizeof(auth->hostname));
+
 	if(!rdns_enabled)
 	{
-		/* Skip rDNS — hostname stays as IP address */
 		provider_done(auth, SELF_PID);
 		return true;
 	}
@@ -144,17 +128,14 @@ rdns_start(struct auth_client *auth)
 
 	query->query = lookup_hostname(auth->c_ip, dns_answer_callback, auth);
 
-	notice_client(auth->cid, messages[REPORT_LOOKUP]);
 	return true;
 }
 
 static void
 rdns_cancel(struct auth_client *auth)
 {
-	struct user_query *query = get_provider_data(auth, SELF_PID);
-
-	if(query != NULL)
-		client_fail(auth, REPORT_FAIL);
+	if(get_provider_data(auth, SELF_PID) != NULL)
+		client_fail(auth);
 }
 
 static void

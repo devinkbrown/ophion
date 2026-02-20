@@ -201,7 +201,9 @@ handle_lookup_hostname_reply(void *data, struct DNSReply *reply)
 	}
 end:
 	if(query->callback)
-		query->callback(hostname, hostname != NULL, query->type, query->data);
+		/* status: true = DNS replied (but res may be NULL if forward check failed),
+		 *         false = DNS lookup failed/timed out */
+		query->callback(hostname, reply != NULL, query->type, query->data);
 
 	rb_free(query);
 }

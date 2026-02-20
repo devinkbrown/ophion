@@ -57,7 +57,7 @@ struct auth_client
 	struct rb_sockaddr_storage c_addr;	/* Client address/port */
 
 	char hostname[HOSTLEN + 1];		/* Used for DNS lookup */
-	char username[USERLEN + 1];		/* Used for ident lookup */
+	char username[USERLEN + 1];		/* Username sent to ircd (always "*") */
 
 	bool providers_starting;		/* Providers are still warming up */
 	bool providers_cancelled;		/* Providers are being cancelled */

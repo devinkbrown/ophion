@@ -374,8 +374,8 @@ dnsbls_start(struct auth_client *auth)
 
 	set_provider_data(auth, SELF_PID, rb_malloc(sizeof(struct dnsbl_user)));
 
-	if (run_after_provider(auth, "rdns") && run_after_provider(auth, "ident")) {
-		/* Start the lookup if ident and rdns are finished, or not loaded. */
+	if (run_after_provider(auth, "rdns")) {
+		/* Start the lookup if rdns is finished, or not loaded. */
 		if (!lookup_all_dnsbls(auth)) {
 			dnsbls_cancel_none(auth);
 			return true;
@@ -398,8 +398,8 @@ dnsbls_initiate(struct auth_client *auth, uint32_t provider)
 	if (bluser == NULL || bluser->started) {
 		/* Nothing to do */
 		return;
-	} else if (run_after_provider(auth, "rdns") && run_after_provider(auth, "ident")) {
-		/* Start the lookup if ident and rdns are finished, or not loaded. */
+	} else if (run_after_provider(auth, "rdns")) {
+		/* Start the lookup if rdns is finished, or not loaded. */
 		if (!lookup_all_dnsbls(auth)) {
 			dnsbls_cancel_none(auth);
 		}
