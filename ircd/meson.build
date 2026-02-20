@@ -1,6 +1,3 @@
-ircd_lexer_src = flex_gen.process('ircd_lexer.l')
-ircd_parser_src = bison_gen.process('ircd_parser.y')
-
 ircd_version_c = custom_target(
   'version.c',
   input: 'version.c.SH',
@@ -20,6 +17,7 @@ ircd_lib = shared_library('ircd',
   'chmode.c',
   'class.c',
   'client.c',
+  'conf_parser.c',
   'dns.c',
   'extban.c',
   'getopt.c',
@@ -58,8 +56,6 @@ ircd_lib = shared_library('ircd',
   'wsproc.c',
   serno_h,
   ircd_version_c,
-  ircd_lexer_src,
-  ircd_parser_src,
   dependencies: [libcrypto_dep, libdl_dep],
   include_directories: [librb_inc, base_inc],
   install: true,

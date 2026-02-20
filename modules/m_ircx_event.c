@@ -392,7 +392,7 @@ m_event(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 {
 	if (!IsOper(source_p))
 	{
-		sendto_one(source_p, form_str(ERR_NOPRIVILEGES), me.name, source_p->name);
+		sendto_one_numeric(source_p, ERR_NOPRIVILEGES, form_str(ERR_NOPRIVILEGES));
 		return;
 	}
 

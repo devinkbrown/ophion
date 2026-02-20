@@ -64,6 +64,7 @@
 #include "packet.h"
 #include "tgchange.h"
 #include "s_conf.h"
+#include "s_newconf.h"
 #include "inline/stringops.h"
 
 static const char m_multiline_desc[] =
