@@ -521,7 +521,7 @@ msg_channel(enum message_type msgtype,
 			return;
 		}
 		if(result == CAN_SEND_OPV ||
-		   !flood_attack_channel(msgtype, source_p, chptr, chptr->chname))
+		   !flood_attack_channel(msgtype, source_p, chptr))
 		{
 			sendto_channel_flags(client_p, ALL_MEMBERS, source_p, chptr,
 					     "%s %s :%s", cmdname[msgtype], chptr->chname, text);
@@ -538,7 +538,7 @@ msg_channel(enum message_type msgtype,
 				   me.name, source_p->name, chptr->chname);
 			return;
 		}
-		if(!flood_attack_channel(msgtype, source_p, chptr, chptr->chname))
+		if(!flood_attack_channel(msgtype, source_p, chptr))
 		{
 			sendto_channel_opmod(client_p, source_p, chptr,
 					     cmdname[msgtype], text);
@@ -598,7 +598,7 @@ msg_channel_opmod(enum message_type msgtype,
 			(!(chptr->mode.mode & MODE_NOPRIVMSGS) ||
 			 IsMember(source_p, chptr)))
 	{
-		if(!flood_attack_channel(msgtype, source_p, chptr, chptr->chname))
+		if(!flood_attack_channel(msgtype, source_p, chptr))
 		{
 			sendto_channel_opmod(client_p, source_p, chptr,
 					     cmdname[msgtype], text);

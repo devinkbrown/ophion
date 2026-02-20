@@ -104,7 +104,7 @@ allocate_channel(const char *chname)
 	struct Channel *chptr;
 	chptr = rb_bh_alloc(channel_heap);
 	chptr->chname = rb_strdup(chname);
-	return (chptr);
+	return chptr;
 }
 
 void
@@ -124,7 +124,7 @@ allocate_ban(const char *banstr, const char *who, const char *forward)
 	bptr->who = rb_strdup(who);
 	bptr->forward = forward ? rb_strdup(forward) : NULL;
 
-	return (bptr);
+	return bptr;
 }
 
 void
@@ -311,8 +311,6 @@ remove_user_from_channel(struct membership *msptr)
 		destroy_channel(chptr);
 
 	rb_bh_free(member_heap, msptr);
-
-	return;
 }
 
 /* remove_user_from_channels()
@@ -468,10 +466,10 @@ static const char *
 channel_pub_or_secret(struct Channel *chptr)
 {
 	if(PubChannel(chptr))
-		return ("=");
+		return "=";
 	else if(SecretChannel(chptr))
-		return ("@");
-	return ("*");
+		return "@";
+	return "*";
 }
 
 /* channel_member_names()
@@ -673,7 +671,7 @@ is_banned_list(struct Channel *chptr, rb_dlink_list *list,
 	if (actualBan && actualBan->forward && forward)
 		*forward = actualBan->forward;
 
-	return ((actualBan ? CHFL_BAN : 0));
+	return (actualBan ? CHFL_BAN : 0);
 }
 
 /* is_quieted()
@@ -740,22 +738,7 @@ int
 is_banned(struct Channel *chptr, struct Client *who, struct membership *msptr,
 	  const struct matchset *ms, const char **forward)
 {
-#if 0
-	if (chptr->last_checked_client != NULL &&
-		who == chptr->last_checked_client &&
-		chptr->last_checked_type == CHFL_BAN &&
-		chptr->last_checked_ts > chptr->bants)
-		return chptr->last_checked_result;
-
-	chptr->last_checked_client = who;
-	chptr->last_checked_type = CHFL_BAN;
-	chptr->last_checked_result = is_banned_list(chptr, &chptr->banlist, who, msptr, s, s2, forward);
-	chptr->last_checked_ts = rb_current_time();
-
-	return chptr->last_checked_result;
-#else
 	return is_banned_list(chptr, &chptr->banlist, who, msptr, ms, forward);
-#endif
 }
 
 /* can_join()
@@ -935,7 +918,7 @@ can_send(struct Channel *chptr, struct Client *source_p, struct membership *mspt
  * side effects	- check for flood attack on target chptr
  */
 bool
-flood_attack_channel(int p_or_n, struct Client *source_p, struct Channel *chptr, char *chname)
+flood_attack_channel(int p_or_n, struct Client *source_p, struct Channel *chptr)
 {
 	int delta;
 
@@ -1053,12 +1036,13 @@ check_spambot_warning(struct Client *source_p, const char *name)
 		   JOIN_LEAVE_COUNT_EXPIRE_TIME)
 		{
 			decrement_count = (t_delta / JOIN_LEAVE_COUNT_EXPIRE_TIME);
-			if(name != NULL)
-				;
-			else if(decrement_count > source_p->localClient->join_leave_count)
-				source_p->localClient->join_leave_count = 0;
-			else
-				source_p->localClient->join_leave_count -= decrement_count;
+			if(name == NULL)
+			{
+				if(decrement_count > source_p->localClient->join_leave_count)
+					source_p->localClient->join_leave_count = 0;
+				else
+					source_p->localClient->join_leave_count -= decrement_count;
+			}
 		}
 		else
 		{
@@ -1174,7 +1158,7 @@ free_topic(struct Channel *chptr)
 void
 set_channel_topic(struct Channel *chptr, const char *topic, const char *topic_info, time_t topicts)
 {
-	if(strlen(topic) > 0)
+	if(*topic)
 	{
 		if(chptr->topic == NULL)
 			allocate_topic(chptr);
@@ -1196,8 +1180,6 @@ set_channel_topic(struct Channel *chptr, const char *topic, const char *topic_in
  *              - pointer to client
  * output       - string with simple modes
  * side effects - result from previous calls overwritten
- *
- * Stolen from ShadowIRCd 4 --nenolod
  */
 const char *
 channel_modes(struct Channel *chptr, struct Client *client_p)

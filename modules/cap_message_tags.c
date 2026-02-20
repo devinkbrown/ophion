@@ -161,7 +161,7 @@ m_tagmsg(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source
 			}
 
 			if (result == CAN_SEND_OPV ||
-			    !flood_attack_channel(MESSAGE_TYPE_PRIVMSG, source_p, chptr, chptr->chname))
+			    !flood_attack_channel(MESSAGE_TYPE_PRIVMSG, source_p, chptr))
 			{
 				sendto_channel_local_with_capability_butone(source_p, ALL_MEMBERS,
 					CLICAP_MESSAGE_TAGS, NOCAPS, chptr,
