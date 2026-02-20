@@ -49,15 +49,16 @@ static int
 comp_with_mask(void *addr, void *dest, unsigned int mask)
 {
 
-	if( /* mask/8 == 0 || */ memcmp(addr, dest, mask / 8) == 0)
+	if(memcmp(addr, dest, mask / 8) == 0)
 	{
+		if(mask % 8 == 0)
+			return 1;
 		int n = mask / 8;
-		uint8_t m = (0xFF << (8 - (mask % 8)));
-
-		if(mask % 8 == 0 || (((uint8_t *)addr)[n] & m) == (((uint8_t *)dest)[n] & m))
-			return (1);
+		uint8_t m = (uint8_t)(0xFF << (8 - (mask % 8)));
+		if((((uint8_t *)addr)[n] & m) == (((uint8_t *)dest)[n] & m))
+			return 1;
 	}
-	return (0);
+	return 0;
 }
 
 #ifdef NOTYET
