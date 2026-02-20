@@ -39,7 +39,7 @@ static int yy_wsock = 0;
 struct TopConf *conf_cur_block;
 static char *conf_cur_block_name = NULL;
 
-static rb_dlink_list conf_items;
+static rb_dictionary *conf_items_dict;
 
 static struct ConfItem *yy_aconf = NULL;
 
@@ -96,6 +96,9 @@ add_top_conf(const char *name, int (*sfunc) (struct TopConf *),
 {
 	struct TopConf *tc;
 
+	if(conf_items_dict == NULL)
+		conf_items_dict = rb_dictionary_create("conf blocks", rb_strcasecmp);
+
 	tc = rb_malloc(sizeof(struct TopConf));
 
 	tc->tc_name = name;
@@ -103,24 +106,17 @@ add_top_conf(const char *name, int (*sfunc) (struct TopConf *),
 	tc->tc_efunc = efunc;
 	tc->tc_entries = items;
 
-	rb_dlinkAddAlloc(tc, &conf_items);
+	rb_dictionary_add(conf_items_dict, tc->tc_name, tc);
 	return 0;
 }
 
 struct TopConf *
 find_top_conf(const char *name)
 {
-	rb_dlink_node *d;
-	struct TopConf *tc;
+	if(conf_items_dict == NULL)
+		return NULL;
 
-	RB_DLINK_FOREACH(d, conf_items.head)
-	{
-		tc = d->data;
-		if(rb_strcasecmp(tc->tc_name, name) == 0)
-			return tc;
-	}
-
-	return NULL;
+	return rb_dictionary_retrieve(conf_items_dict, name);
 }
 
 
@@ -157,17 +153,15 @@ int
 remove_top_conf(char *name)
 {
 	struct TopConf *tc;
-	rb_dlink_node *ptr;
 
-	if((tc = find_top_conf(name)) == NULL)
+	if(conf_items_dict == NULL)
 		return -1;
 
-	if((ptr = rb_dlinkFind(tc, &conf_items)) == NULL)
+	tc = rb_dictionary_delete(conf_items_dict, name);
+	if(tc == NULL)
 		return -1;
 
-	rb_dlinkDestroy(ptr, &conf_items);
 	rb_free(tc);
-
 	return 0;
 }
 

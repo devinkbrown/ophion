@@ -42,10 +42,16 @@ extern char *reconstruct_parv(int parc, const char *parv[]);
 extern rb_dictionary *alias_dict;
 extern rb_dictionary *cmd_dict;
 
-/* IRCv3 message-tags: pointer to the current incoming client MsgBuf.
- * Set in parse() before command dispatch; cleared after.
- * Used by cap_message_tags to forward client-only tags. */
+/* ---------- parse context ---------------------------------------------- *
+ * These are set before each command dispatch and cleared after.            *
+ * They live in parse.c; send.c and modules access them via these externs. */
+
+/* Incoming client MsgBuf (message-tags): used to forward client-only tags. */
 extern const struct MsgBuf *g_client_msgbuf;
+
+/* IRCv3 labeled-response: the label string and originating client. */
+extern const char    *g_labeled_response_label;
+extern struct Client *g_labeled_response_client;
 
 /*
  * Client-initiated batch handler callback.

@@ -42,20 +42,65 @@
 #include "s_assert.h"
 
 rb_dictionary *cmd_dict = NULL;
-
-/* IRCv3 message-tags: pointer to current client's incoming MsgBuf */
-const struct MsgBuf *g_client_msgbuf = NULL;
 rb_dictionary *alias_dict = NULL;
 
 /* Client-initiated batch handler callback (set by modules like m_multiline) */
 client_batch_handler_fn client_batch_handler = NULL;
 
+/* ---------- parse context ----------------------------------------------- *
+ *
+ * These globals capture IRCv3 per-message state that is set before command
+ * dispatch and cleared immediately after.  All three live here so that
+ * parse.c owns the full dispatch context; they are declared extern in
+ * parse.h (message-tags) and send.h (labeled-response) for use by send.c
+ * and modules.
+ */
+
+/* Pointer to the current incoming client MsgBuf (message-tags). */
+const struct MsgBuf *g_client_msgbuf = NULL;
+
+/* Label and originating client for the current labeled-response round-trip. */
+const char *g_labeled_response_label  = NULL;
+struct Client *g_labeled_response_client = NULL;
+
+/* Set up parse context for one command dispatch. */
+static void
+parse_ctx_setup(struct Client *from, const struct MsgBuf *msgbuf)
+{
+	if(!MyClient(from) || !IsPerson(from))
+		return;
+
+	if(IsCapable(from, CLICAP_MESSAGE_TAGS))
+		g_client_msgbuf = msgbuf;
+
+	for(size_t i = 0; i < msgbuf->n_tags; i++)
+	{
+		if(strcmp(msgbuf->tags[i].key, "label") == 0 &&
+		   msgbuf->tags[i].value != NULL &&
+		   IsCapable(from, CLICAP_LABELED_RESPONSE))
+		{
+			g_labeled_response_label  = msgbuf->tags[i].value;
+			g_labeled_response_client = from;
+			break;
+		}
+	}
+}
+
+/* Clear parse context after command dispatch. */
+static void
+parse_ctx_clear(void)
+{
+	g_client_msgbuf          = NULL;
+	g_labeled_response_label  = NULL;
+	g_labeled_response_client = NULL;
+}
+
+/* ---------- internal prototypes ----------------------------------------- */
+
 static void cancel_clients(struct Client *, struct Client *);
 static void remove_unknown(struct Client *, const char *, char *);
-
 static void do_numeric(int, struct Client *, struct Client *, int, const char **);
-
-static int handle_command(struct Message *, struct MsgBuf *, struct Client *, struct Client *);
+static int  handle_command(struct Message *, struct MsgBuf *, struct Client *, struct Client *);
 
 static char buffer[1024];
 
@@ -161,83 +206,37 @@ parse(struct Client *client_p, char *pbuffer, char *bufend)
 		return;
 	}
 
-	/* IRCv3: set globals for labeled-response and message-tags before dispatch */
-	if (MyClient(from) && IsPerson(from))
-	{
-		/* message-tags: expose client's incoming msgbuf for tag forwarding */
-		if (IsCapable(from, CLICAP_MESSAGE_TAGS))
-			g_client_msgbuf = &msgbuf;
-
-		/* labeled-response: extract label tag if present */
-		for (size_t i = 0; i < msgbuf.n_tags; i++)
-		{
-			if (strcmp(msgbuf.tags[i].key, "label") == 0 &&
-			    msgbuf.tags[i].value != NULL &&
-			    IsCapable(from, CLICAP_LABELED_RESPONSE))
-			{
-				g_labeled_response_label = msgbuf.tags[i].value;
-				g_labeled_response_client = from;
-				break;
-			}
-		}
-	}
+	/* Populate the parse context (message-tags, labeled-response). */
+	parse_ctx_setup(from, &msgbuf);
 
 	/* Client-initiated batch interception: check for @batch= tag or
 	 * BATCH command and let the handler consume the message if needed. */
-	if (client_batch_handler && MyClient(from) && IsPerson(from))
+	if(client_batch_handler && MyClient(from) && IsPerson(from))
 	{
 		int has_batch_tag = 0;
-		for (size_t i = 0; i < msgbuf.n_tags; i++)
+		for(size_t i = 0; i < msgbuf.n_tags; i++)
 		{
-			if (strcmp(msgbuf.tags[i].key, "batch") == 0)
+			if(strcmp(msgbuf.tags[i].key, "batch") == 0)
 			{
 				has_batch_tag = 1;
 				break;
 			}
 		}
 
-		if (has_batch_tag || strcasecmp(msgbuf.cmd, "BATCH") == 0)
+		if(has_batch_tag || strcasecmp(msgbuf.cmd, "BATCH") == 0)
 		{
-			if (client_batch_handler(&msgbuf, client_p, from))
+			if(client_batch_handler(&msgbuf, client_p, from))
 			{
-				/* Message was consumed by the batch handler */
-				g_client_msgbuf = NULL;
-				g_labeled_response_label = NULL;
-				g_labeled_response_client = NULL;
+				parse_ctx_clear();
 				return;
 			}
 		}
 	}
 
-	if(handle_command(mptr, &msgbuf, client_p, from) < -1)
-	{
-		char *p;
-		for (p = pbuffer; p <= end; p += 8)
-		{
-			/* HACK HACK */
-			/* Its expected this nasty code can be removed
-			 * or rewritten later if still needed.
-			 */
-			if((p + 8) > end)
-			{
-				for (; p <= end; p++)
-				{
-					ilog(L_MAIN, "%02x |%c", p[0], p[0]);
-				}
-			}
-			else
-				ilog(L_MAIN,
-				     "%02x %02x %02x %02x %02x %02x %02x %02x |%c%c%c%c%c%c%c%c",
-				     p[0], p[1], p[2], p[3], p[4], p[5],
-				     p[6], p[7], p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
-		}
-	}
+	handle_command(mptr, &msgbuf, client_p, from);
 
-	/* IRCv3: clear globals after command dispatch (msgbuf is stack-local) */
-	g_client_msgbuf = NULL;
-	g_labeled_response_label = NULL;
-	g_labeled_response_client = NULL;
-
+	/* Clear parse context — msgbuf is stack-local and must not outlive parse(). */
+	parse_ctx_clear();
 }
 
 /*
