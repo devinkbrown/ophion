@@ -278,14 +278,14 @@ int comp_with_mask(void *addr, void *dest, unsigned int mask)
 {
 	if (memcmp(addr, dest, mask / 8) == 0)
 	{
+		if (mask % 8 == 0)
+			return 1;
 		int n = mask / 8;
-		unsigned char m = (0xFF << (8 - (mask % 8)));
-		if (mask % 8 == 0 || (((unsigned char *) addr)[n] & m) == (((unsigned char *) dest)[n] & m))
-		{
-			return (1);
-		}
+		unsigned char m = (unsigned char)(0xFF << (8 - (mask % 8)));
+		if ((((unsigned char *) addr)[n] & m) == (((unsigned char *) dest)[n] & m))
+			return 1;
 	}
-	return (0);
+	return 0;
 }
 
 int comp_with_mask_sock(struct sockaddr *addr, struct sockaddr *dest, unsigned int mask)

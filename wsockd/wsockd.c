@@ -32,6 +32,14 @@
 #define WEBSOCKET_ANSWER_STRING_1 "HTTP/1.1 101 Switching Protocols\r\nAccess-Control-Allow-Origin: *\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
 #define WEBSOCKET_ANSWER_STRING_2 "\r\n\r\n"
 
+/* RFC 6455 close codes used internally */
+#define WS_CLOSE_NORMAL         1000
+#define WS_CLOSE_PROTOCOL_ERROR 1002
+#define WS_CLOSE_TOO_LARGE      1009
+
+/* Maximum size of the HTTP upgrade request we will accumulate */
+#define WS_MAX_HEADER_SIZE 4096
+
 static void setup_signals(void);
 static pid_t ppid;
 
@@ -93,6 +101,10 @@ typedef struct _conn
 	uint8_t flags;
 
 	char client_key[37];		/* maximum 36 bytes + nul */
+
+	/* HTTP upgrade accumulation — allocated lazily, freed after handshake */
+	char   *hs_buf;
+	size_t  hs_len;
 } conn_t;
 
 #define WEBSOCKET_OPCODE_TEXT_FRAME		0x1
@@ -155,15 +167,18 @@ static void conn_plain_process_recvq(conn_t *conn);
 #define FLAG_DEAD	0x02
 #define FLAG_WSOCK	0x04
 #define FLAG_KEYED	0x08
+#define FLAG_SENT_CLOSE	0x10	/* we sent a CLOSE frame; don't send another */
 
-#define IsCork(x) ((x)->flags & FLAG_CORK)
-#define IsDead(x) ((x)->flags & FLAG_DEAD)
-#define IsKeyed(x) ((x)->flags & FLAG_KEYED)
+#define IsCork(x)      ((x)->flags & FLAG_CORK)
+#define IsDead(x)      ((x)->flags & FLAG_DEAD)
+#define IsKeyed(x)     ((x)->flags & FLAG_KEYED)
+#define IsSentClose(x) ((x)->flags & FLAG_SENT_CLOSE)
 
-#define SetCork(x) ((x)->flags |= FLAG_CORK)
-#define SetDead(x) ((x)->flags |= FLAG_DEAD)
-#define SetWS(x)   ((x)->flags |= FLAG_WSOCK)
-#define SetKeyed(x) ((x)->flags |= FLAG_KEYED)
+#define SetCork(x)      ((x)->flags |= FLAG_CORK)
+#define SetDead(x)      ((x)->flags |= FLAG_DEAD)
+#define SetWS(x)        ((x)->flags |= FLAG_WSOCK)
+#define SetKeyed(x)     ((x)->flags |= FLAG_KEYED)
+#define SetSentClose(x) ((x)->flags |= FLAG_SENT_CLOSE)
 
 #define ClearCork(x) ((x)->flags &= ~FLAG_CORK)
 
@@ -247,6 +262,10 @@ free_conn(conn_t * conn)
 	rb_free_rawbuffer(conn->modbuf_in);
 	rb_free_rawbuffer(conn->modbuf_out);
 
+	/* hs_buf is normally freed after a successful/failed handshake,
+	 * but free it here too in case the connection died mid-handshake. */
+	rb_free(conn->hs_buf);
+
 	rb_free(conn);
 }
 
@@ -302,10 +321,13 @@ conn_mod_write_sendq(rb_fde_t *fd, void *data)
 	while((retlen = rb_rawbuf_flush(conn->modbuf_out, fd)) > 0)
 		conn->mod_out += retlen;
 
-	if(retlen == 0 || (retlen < 0 && !rb_ignore_errno(errno)))
+	if(retlen == 0)
 	{
-		if(retlen == 0)
-			close_conn(conn, WAIT_PLAIN, "%s", remote_closed);
+		close_conn(conn, WAIT_PLAIN, "%s", remote_closed);
+		return;
+	}
+	if(retlen < 0 && !rb_ignore_errno(errno))
+	{
 		err = strerror(errno);
 		close_conn(conn, WAIT_PLAIN, "Write error: %s", err);
 		return;
@@ -324,11 +346,11 @@ conn_mod_write_sendq(rb_fde_t *fd, void *data)
 }
 
 static void
-conn_mod_write(conn_t * conn, void *data, size_t len)
+conn_mod_write(conn_t * conn, const void *data, size_t len)
 {
 	if(IsDead(conn))	/* no point in queueing to a dead man */
 		return;
-	rb_rawbuf_append(conn->modbuf_out, data, len);
+	rb_rawbuf_append(conn->modbuf_out, (void *)data, len);
 }
 
 static void
@@ -371,6 +393,35 @@ conn_mod_write_frame(conn_t *conn, void *data, int len)
 	}
 
 	conn_mod_write_long_frame(conn, data, len);
+}
+
+/*
+ * conn_mod_write_close_frame - send a RFC 6455 CLOSE control frame.
+ *
+ * Payload is a 2-byte big-endian status code followed by an optional
+ * UTF-8 reason string (max 123 bytes so the total payload stays ≤ 125).
+ * We set FLAG_SENT_CLOSE so callers can avoid double-sending.
+ */
+static void
+conn_mod_write_close_frame(conn_t *conn, uint16_t code, const char *reason)
+{
+	ws_frame_hdr_t hdr = WEBSOCKET_FRAME_HDR_INIT;
+	uint16_t wire_code = htons(code);
+	size_t reasonlen = reason ? strlen(reason) : 0;
+
+	if (reasonlen > 123)
+		reasonlen = 123;
+
+	ws_frame_set_opcode(&hdr, WEBSOCKET_OPCODE_CLOSE_FRAME);
+	ws_frame_set_fin(&hdr, 1);
+	hdr.payload_length_mask = (uint8_t)(2 + reasonlen);
+
+	conn_mod_write(conn, &hdr, sizeof(hdr));
+	conn_mod_write(conn, &wire_code, 2);
+	if (reasonlen)
+		conn_mod_write(conn, (void *)reason, reasonlen);
+
+	SetSentClose(conn);
 }
 
 static void
@@ -503,7 +554,7 @@ conn_mod_process_frame(conn_t *conn, ws_frame_hdr_t *hdr, int masked)
 	uint8_t maskval[WEBSOCKET_MASK_LENGTH];
 	int dolen;
 
-	/* if we're masked, we get to collect the masking key for this frame */
+	/* collect the masking key before the payload */
 	if (masked)
 	{
 		dolen = rb_rawbuf_get(conn->modbuf_in, maskval, sizeof(maskval));
@@ -513,6 +564,10 @@ conn_mod_process_frame(conn_t *conn, ws_frame_hdr_t *hdr, int masked)
 			return;
 		}
 	}
+
+	/* zero-length TEXT frame is valid; nothing to unmask or parse */
+	if (hdr->payload_length_mask == 0)
+		return;
 
 	dolen = rb_rawbuf_get(conn->modbuf_in, msg, hdr->payload_length_mask);
 	if (!dolen)
@@ -574,7 +629,33 @@ conn_mod_process_large(conn_t *conn, ws_frame_hdr_t *hdr, int masked)
 static void
 conn_mod_process_huge(conn_t *conn, ws_frame_hdr_t *hdr, int masked)
 {
-	/* XXX implement me */
+	uint8_t lenbuf[8];
+	uint64_t msglen;
+	int dolen;
+
+	/* Read the 8-byte extended length to keep the buffer in sync */
+	dolen = rb_rawbuf_get(conn->modbuf_in, lenbuf, sizeof(lenbuf));
+	if (!dolen)
+	{
+		close_conn(conn, WAIT_PLAIN, "websocket error: fault unpacking huge message size");
+		return;
+	}
+
+	/* Network (big-endian) to host order, portable */
+	msglen = ((uint64_t)lenbuf[0] << 56) | ((uint64_t)lenbuf[1] << 48) |
+	         ((uint64_t)lenbuf[2] << 40) | ((uint64_t)lenbuf[3] << 32) |
+	         ((uint64_t)lenbuf[4] << 24) | ((uint64_t)lenbuf[5] << 16) |
+	         ((uint64_t)lenbuf[6] <<  8) |  (uint64_t)lenbuf[7];
+
+	/*
+	 * No valid IRC message (even with IRCv3 tags) approaches 65535 bytes,
+	 * let alone 2^63.  Reject with RFC 6455 close code 1009 (message too
+	 * big) rather than trying to buffer gigabytes.
+	 */
+	if (!IsSentClose(conn))
+		conn_mod_write_close_frame(conn, WS_CLOSE_TOO_LARGE, "message too large");
+	conn_mod_write_sendq(conn->mod_fd, conn);
+	close_conn(conn, WAIT_PLAIN, "websocket error: message too large (%" PRIu64 " bytes)", msglen);
 }
 
 static void
@@ -618,11 +699,29 @@ static void
 conn_mod_process_pong(conn_t *conn, ws_frame_hdr_t *hdr, int masked)
 {
 	char msg[WEBSOCKET_MAX_UNEXTENDED_PAYLOAD_DATA_LENGTH];
-	int dolen = rb_rawbuf_get(conn->modbuf_in, msg, hdr->payload_length_mask);
-	if (!dolen)
+	uint8_t maskval[WEBSOCKET_MASK_LENGTH];
+	int dolen;
+
+	/* Masking key must be consumed before the payload */
+	if (masked)
 	{
-		close_conn(conn, WAIT_PLAIN, "websocket error: fault unpacking message");
-		return;
+		dolen = rb_rawbuf_get(conn->modbuf_in, maskval, sizeof(maskval));
+		if (!dolen)
+		{
+			close_conn(conn, WAIT_PLAIN, "websocket error: fault unpacking pong unmask key");
+			return;
+		}
+	}
+
+	/* PONG payload may be zero-length; just consume and discard it */
+	if (hdr->payload_length_mask > 0)
+	{
+		dolen = rb_rawbuf_get(conn->modbuf_in, msg, hdr->payload_length_mask);
+		if (!dolen)
+		{
+			close_conn(conn, WAIT_PLAIN, "websocket error: fault unpacking pong payload");
+			return;
+		}
 	}
 }
 
@@ -633,7 +732,7 @@ conn_mod_process(conn_t *conn)
 
 	while (1)
 	{
-		int masked, opcode;
+		int masked, opcode, rsv;
 
 		int dolen = rb_rawbuf_get(conn->modbuf_in, &hdr, sizeof(hdr));
 		if (dolen != sizeof(hdr))
@@ -644,11 +743,33 @@ conn_mod_process(conn_t *conn)
 
 		opcode = (hdr.opcode_rsv_fin & 0xF);
 
+		/*
+		 * RFC 6455 §5.2: RSV1-RSV3 MUST be 0 unless an extension
+		 * is negotiated that defines their meaning.  We negotiate no
+		 * extensions, so any non-zero RSV is a protocol error.
+		 */
+		rsv = (hdr.opcode_rsv_fin >> 4) & 0x7;
+		if (rsv != 0)
+		{
+			if (!IsSentClose(conn))
+				conn_mod_write_close_frame(conn, WS_CLOSE_PROTOCOL_ERROR, "nonzero RSV bits");
+			conn_mod_write_sendq(conn->mod_fd, conn);
+			close_conn(conn, WAIT_PLAIN, "websocket error: nonzero RSV bits (0x%x)", rsv);
+			return;
+		}
+
 		switch (opcode)
 		{
 		case WEBSOCKET_OPCODE_CLOSE_FRAME:
+			/*
+			 * RFC 6455 §5.5.1: if we haven't already sent a CLOSE,
+			 * echo one back before tearing down the connection.
+			 */
+			if (!IsSentClose(conn))
+				conn_mod_write_close_frame(conn, WS_CLOSE_NORMAL, NULL);
+			conn_mod_write_sendq(conn->mod_fd, conn);
 			close_conn(conn, WAIT_PLAIN, "websocket error: received close frame");
-			break;
+			return;
 		case WEBSOCKET_OPCODE_PING_FRAME:
 			conn_mod_process_ping(conn, &hdr, masked);
 			break;
@@ -669,73 +790,189 @@ conn_mod_process(conn_t *conn)
 				break;
 			}
 		}
+
+		if (IsDead(conn))
+			return;
 	}
 
 	conn_plain_write_sendq(conn->plain_fd, conn);
 }
 
+/*
+ * conn_mod_handshake_process - RFC 6455 WebSocket upgrade handshake.
+ *
+ * Accumulates raw bytes from modbuf_in into a dedicated heap buffer
+ * (conn->hs_buf) across multiple calls, so a handshake split across
+ * several TCP segments is handled correctly.
+ *
+ * Once the full HTTP header block (\r\n\r\n) has arrived we validate:
+ *   - Upgrade: websocket          (required, case-insensitive)
+ *   - Connection: ... Upgrade ... (required, token list, case-insensitive)
+ *   - Sec-WebSocket-Version: 13   (required)
+ *   - Sec-WebSocket-Key: <key>    (required)
+ *   - Sec-WebSocket-Protocol: ... (optional; we echo "irc" if present)
+ *
+ * Any bytes that arrived after the HTTP headers (i.e. the first WebSocket
+ * frame data piggybacked on the same segment) are re-queued into modbuf_in
+ * and processed immediately as frames.
+ *
+ * On any validation failure we send HTTP 400 and close the connection.
+ */
 static void
 conn_mod_handshake_process(conn_t *conn)
 {
-	char inbuf[READBUF_SIZE];
+	char chunk[READBUF_SIZE];
+	char *hdr_end;
+	int dolen;
 
-	memset(inbuf, 0, sizeof inbuf);
-
-	while (1)
+	/* Allocate the accumulation buffer on first call */
+	if (conn->hs_buf == NULL)
 	{
-		char *p = NULL;
-
-		int dolen = rb_rawbuf_get(conn->modbuf_in, inbuf, sizeof inbuf);
-		if (!dolen)
-			break;
-
-		if ((p = rb_strcasestr(inbuf, "Sec-WebSocket-Key:")) != NULL)
-		{
-			char *start, *end;
-
-			start = p + strlen("Sec-WebSocket-Key:");
-
-			for (; start < (inbuf + READBUF_SIZE) && *start; start++)
-			{
-				if (*start != ' ' && *start != '\t')
-					break;
-			}
-
-			for (end = start; end < (inbuf + READBUF_SIZE) && *end; end++)
-			{
-				if (*end == '\r' || *end == '\n')
-				{
-					*end = '\0';
-					break;
-				}
-			}
-
-			rb_strlcpy(conn->client_key, start, sizeof(conn->client_key));
-			SetKeyed(conn);
-		}
+		conn->hs_buf = rb_malloc(WS_MAX_HEADER_SIZE + 1);
+		conn->hs_len = 0;
 	}
 
-	if (IsKeyed(conn))
+	/* Drain modbuf_in into hs_buf until we see \r\n\r\n or hit the cap */
+	while ((dolen = rb_rawbuf_get(conn->modbuf_in, chunk, sizeof(chunk))) > 0)
+	{
+		if (conn->hs_len + (size_t)dolen > WS_MAX_HEADER_SIZE)
+		{
+			static const char toobig[] =
+				"HTTP/1.1 400 Bad Request\r\n"
+				"Content-Length: 0\r\n\r\n";
+			conn_mod_write(conn, toobig, strlen(toobig));
+			conn_mod_write_sendq(conn->mod_fd, conn);
+			close_conn(conn, NO_WAIT, "websocket error: handshake too large");
+			return;
+		}
+		memcpy(conn->hs_buf + conn->hs_len, chunk, dolen);
+		conn->hs_len += dolen;
+		conn->hs_buf[conn->hs_len] = '\0';
+	}
+
+	/* Wait for the complete header block */
+	hdr_end = strstr(conn->hs_buf, "\r\n\r\n");
+	if (!hdr_end)
+		return;
+
+	/*
+	 * Re-queue any frame data that arrived in the same segment as the
+	 * HTTP headers (unusual but valid).
+	 */
+	{
+		char *frame_start = hdr_end + 4;
+		size_t frame_len  = (conn->hs_buf + conn->hs_len) - frame_start;
+		if (frame_len > 0)
+			rb_rawbuf_append(conn->modbuf_in, frame_start, frame_len);
+	}
+
+	/* --- Parse headers -------------------------------------------------- */
+	char client_key[64]  = "";
+	char ws_subproto[64] = "";
+	int  have_upgrade    = 0;
+	int  have_connection = 0;
+	int  have_version    = 0;
+
+	/* skip the request line */
+	char *line = strchr(conn->hs_buf, '\n');
+	if (line)
+		line++;
+
+	while (line != NULL && line < hdr_end)
+	{
+		char *eol = memchr(line, '\n', hdr_end - line);
+		if (!eol)
+			break;
+
+		size_t linelen = (size_t)(eol - line);
+		char hline[512];
+		if (linelen >= sizeof(hline))
+		{
+			line = eol + 1;
+			continue;
+		}
+		memcpy(hline, line, linelen);
+		hline[linelen] = '\0';
+		if (linelen > 0 && hline[linelen - 1] == '\r')
+			hline[--linelen] = '\0';
+
+		char *colon = strchr(hline, ':');
+		if (colon != NULL)
+		{
+			*colon = '\0';
+			char *name  = hline;
+			char *value = colon + 1;
+			while (*value == ' ' || *value == '\t')
+				value++;
+
+			if (rb_strcasecmp(name, "Upgrade") == 0)
+				have_upgrade = (rb_strcasecmp(value, "websocket") == 0);
+			else if (rb_strcasecmp(name, "Connection") == 0)
+				have_connection = (rb_strcasestr(value, "Upgrade") != NULL);
+			else if (rb_strcasecmp(name, "Sec-WebSocket-Version") == 0)
+				have_version = (atoi(value) == 13);
+			else if (rb_strcasecmp(name, "Sec-WebSocket-Key") == 0)
+				rb_strlcpy(client_key, value, sizeof(client_key));
+			else if (rb_strcasecmp(name, "Sec-WebSocket-Protocol") == 0)
+				rb_strlcpy(ws_subproto, value, sizeof(ws_subproto));
+		}
+
+		line = eol + 1;
+	}
+
+	/* Free the accumulation buffer — we no longer need it */
+	rb_free(conn->hs_buf);
+	conn->hs_buf = NULL;
+	conn->hs_len = 0;
+
+	/* --- Validate -------------------------------------------------------- */
+	if (!have_upgrade || !have_connection || !have_version || !client_key[0])
+	{
+		static const char badreq[] =
+			"HTTP/1.1 400 Bad Request\r\n"
+			"Sec-WebSocket-Version: 13\r\n"
+			"Content-Length: 0\r\n\r\n";
+		conn_mod_write(conn, badreq, strlen(badreq));
+		conn_mod_write_sendq(conn->mod_fd, conn);
+		close_conn(conn, NO_WAIT, "websocket error: invalid upgrade request");
+		return;
+	}
+
+	/* --- Compute Sec-WebSocket-Accept ------------------------------------ */
 	{
 		SHA1 sha1;
 		uint8_t digest[SHA1_DIGEST_LENGTH];
-		char *resp;
+		char *accept;
 
 		sha1_init(&sha1);
-		sha1_update(&sha1, (uint8_t *) conn->client_key, strlen(conn->client_key));
-		sha1_update(&sha1, (uint8_t *) WEBSOCKET_SERVER_KEY, strlen(WEBSOCKET_SERVER_KEY));
+		sha1_update(&sha1, (uint8_t *)client_key, strlen(client_key));
+		sha1_update(&sha1, (uint8_t *)WEBSOCKET_SERVER_KEY,
+		            strlen(WEBSOCKET_SERVER_KEY));
 		sha1_final(&sha1, digest);
 
-		resp = (char *) rb_base64_encode(digest, SHA1_DIGEST_LENGTH);
+		accept = (char *)rb_base64_encode(digest, SHA1_DIGEST_LENGTH);
 
-		conn_mod_write(conn, WEBSOCKET_ANSWER_STRING_1, strlen(WEBSOCKET_ANSWER_STRING_1));
-		conn_mod_write(conn, resp, strlen(resp));
-		conn_mod_write(conn, WEBSOCKET_ANSWER_STRING_2, strlen(WEBSOCKET_ANSWER_STRING_2));
+		rb_strlcpy(conn->client_key, client_key, sizeof(conn->client_key));
+		SetKeyed(conn);
 
-		rb_free(resp);
+		conn_mod_write(conn, WEBSOCKET_ANSWER_STRING_1,
+		               strlen(WEBSOCKET_ANSWER_STRING_1));
+		conn_mod_write(conn, accept, strlen(accept));
+		rb_free(accept);
 	}
 
+	/* Echo the IRC subprotocol if the client requested it */
+	if (ws_subproto[0] && rb_strcasestr(ws_subproto, "irc") != NULL)
+	{
+		static const char proto_hdr[] = "\r\nSec-WebSocket-Protocol: irc";
+		conn_mod_write(conn, proto_hdr, strlen(proto_hdr));
+	}
+
+	conn_mod_write(conn, WEBSOCKET_ANSWER_STRING_2, strlen(WEBSOCKET_ANSWER_STRING_2));
 	conn_mod_write_sendq(conn->mod_fd, conn);
+
+	/* Process any frame data that was piggybacked with the HTTP headers */
+	conn_mod_process(conn);
 }
 
 static void
