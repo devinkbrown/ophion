@@ -154,6 +154,9 @@ rb_init_netio_kqueue(void)
 	{
 		return errno;
 	}
+	/* Set close-on-exec so the kqueue fd is not inherited by child
+	 * processes (ssld, wsockd, authd).  Best-effort: no-op on error.  */
+	(void)fcntl(kq, F_SETFD, FD_CLOEXEC);
 	kqmax = KQUEUE_MAX_EVENTS;
 	kqlst = rb_malloc(sizeof(struct kevent) * kqmax);
 	kqout = rb_malloc(sizeof(struct kevent) * kqmax);

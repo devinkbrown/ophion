@@ -32,6 +32,8 @@
 #include "hook.h"
 #include "send.h"
 #include "s_newconf.h"
+#include "s_serv.h"
+#include "numeric.h"
 #include "services.h"
 #include "services_db.h"
 #include "services_sync.h"
@@ -299,8 +301,8 @@ svc_account_create(const char *name, const char *passhash, const char *email)
 	if(svc_account_find(name) != NULL)
 		return NULL;
 
+	/* rb_malloc wraps calloc(1, size), so memory is already zeroed */
 	struct svc_account *acct = rb_malloc(sizeof *acct);
-	memset(acct, 0, sizeof *acct);
 
 	rb_strlcpy(acct->name, name, sizeof acct->name);
 	if(passhash && *passhash)
@@ -391,8 +393,8 @@ svc_chanreg_create(const char *channel, const char *founder_name)
 	if(svc_chanreg_find(channel) != NULL)
 		return NULL;
 
+	/* rb_malloc wraps calloc(1, size), so memory is already zeroed */
 	struct svc_chanreg *reg = rb_malloc(sizeof *reg);
-	memset(reg, 0, sizeof *reg);
 
 	rb_strlcpy(reg->channel, channel,      sizeof reg->channel);
 	rb_strlcpy(reg->founder, founder_name, sizeof reg->founder);
@@ -529,19 +531,11 @@ svc_authenticate_certfp(const char *certfp, const char *account_hint,
 			goto try_oper;
 		}
 
-		/* Verify certfp is listed on this account */
-		bool found = false;
-		rb_dlink_node *ptr;
-		RB_DLINK_FOREACH(ptr, acct->certfps.head)
-		{
-			struct svc_certfp *scf = ptr->data;
-			if(rb_strcasecmp(scf->fingerprint, certfp) == 0)
-			{
-				found = true;
-				break;
-			}
-		}
-		if(!found)
+		/* Verify the certfp belongs to this account.  Use the secondary
+		 * svc_certfp_dict index for an O(1) pointer comparison instead
+		 * of an O(n) linear scan through acct->certfps.                */
+		struct svc_account *fp_acct = svc_account_find_certfp(certfp);
+		if(fp_acct == NULL || fp_acct != acct)
 			acct = NULL;
 	}
 	else

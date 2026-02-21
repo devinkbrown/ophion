@@ -23,7 +23,7 @@
 #include "match.h"
 #include "services.h"
 #include "services_db.h"
-#include "bandb/sqlite3.h"
+#include <sqlite3.h>
 
 /* -------------------------------------------------------------------------
  * Module-private state
@@ -322,7 +322,6 @@ svc_db_account_load_all(void)
 	while(sqlite3_step(stmt) == SQLITE_ROW)
 	{
 		struct svc_account *acct = rb_malloc(sizeof *acct);
-		memset(acct, 0, sizeof *acct);
 
 		rb_strlcpy(acct->name,
 		           (const char *)sqlite3_column_text(stmt, 0),
@@ -379,7 +378,6 @@ svc_db_account_load_all(void)
 					continue;
 
 				struct svc_nick *sn = rb_malloc(sizeof *sn);
-				memset(sn, 0, sizeof *sn);
 				rb_strlcpy(sn->nick, nk, sizeof sn->nick);
 				rb_strlcpy(sn->account, an, sizeof sn->account);
 				sn->registered_ts = rts;
@@ -412,7 +410,6 @@ svc_db_account_load_all(void)
 					continue;
 
 				struct svc_certfp *scf = rb_malloc(sizeof *scf);
-				memset(scf, 0, sizeof *scf);
 				rb_strlcpy(scf->fingerprint, fp,
 				           sizeof scf->fingerprint);
 				scf->added_ts = ats;
@@ -727,7 +724,6 @@ svc_db_nick_add(const char *nick, const char *account_name)
 	}
 
 	struct svc_nick *sn = rb_malloc(sizeof *sn);
-	memset(sn, 0, sizeof *sn);
 	rb_strlcpy(sn->nick, nick, sizeof sn->nick);
 	rb_strlcpy(sn->account, account_name, sizeof sn->account);
 	sn->registered_ts = now;
@@ -802,7 +798,6 @@ svc_db_certfp_add(const char *account_name, const char *certfp)
 	}
 
 	struct svc_certfp *scf = rb_malloc(sizeof *scf);
-	memset(scf, 0, sizeof *scf);
 	rb_strlcpy(scf->fingerprint, certfp, sizeof scf->fingerprint);
 	scf->added_ts = now;
 	rb_dlinkAdd(scf, &scf->node, &acct->certfps);
@@ -878,7 +873,6 @@ svc_db_chanreg_load_all(void)
 	while(sqlite3_step(stmt) == SQLITE_ROW)
 	{
 		struct svc_chanreg *reg = rb_malloc(sizeof *reg);
-		memset(reg, 0, sizeof *reg);
 
 		rb_strlcpy(reg->channel,
 		           (const char *)sqlite3_column_text(stmt, 0),
@@ -1205,7 +1199,6 @@ svc_db_memo_load_for(const char *account, rb_dlink_list *out)
 	while(sqlite3_step(stmt) == SQLITE_ROW)
 	{
 		struct svc_memo *m = rb_malloc(sizeof *m);
-		memset(m, 0, sizeof *m);
 
 		m->id   = sqlite3_column_int(stmt, 0);
 		rb_strlcpy(m->to_account,
@@ -1282,7 +1275,6 @@ svc_db_vhost_offers_load(rb_dlink_list *out)
 	while(sqlite3_step(stmt) == SQLITE_ROW)
 	{
 		struct svc_vhost_offer *vo = rb_malloc(sizeof *vo);
-		memset(vo, 0, sizeof *vo);
 		rb_strlcpy(vo->vhost,
 		           (const char *)sqlite3_column_text(stmt, 0),
 		           sizeof vo->vhost);
