@@ -2025,6 +2025,275 @@ def test_event_operspy_admin_command():
 
 
 # ===========================================================================
+# 7. Multi-target KICK and configurable max_mode_params
+# ===========================================================================
+
+def test_modes_isupport_value():
+    """ISUPPORT 005 advertises MODES=<max_mode_params> (default 6)."""
+    s, n = connect()
+    try:
+        # The 005 numerics were already received during registration;
+        # send a second ISUPPORT request via VERSION to get them again.
+        _send(s, "VERSION")
+        lines = _read_lines(s, 3.0)
+        # Also check the buffer captured during connect (use WHOIS self as proxy)
+        _send(s, f"WHOIS {n}")
+        # Reconnect fresh and look at 005 lines
+        s2, n2 = connect()
+        # 005 lines arrive during registration; we need a fresh connection
+        # to capture them. Use the raw socket approach.
+        s2.close()
+
+        # Standalone capture
+        raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw.settimeout(5)
+        raw.connect((SERVER_HOST, SERVER_PORT))
+        raw.sendall(b"NICK modes005check\r\nUSER t 0 * :t\r\nPING :x\r\n")
+        buf = b""
+        deadline = time.time() + 8
+        while b"PONG" not in buf and time.time() < deadline:
+            try:
+                buf += raw.recv(4096)
+            except Exception:
+                break
+        raw.close()
+
+        lines_005 = [l for l in buf.decode("utf-8", "replace").split("\r\n")
+                     if " 005 " in l and "MODES=" in l]
+        has_modes6 = any("MODES=6" in l for l in lines_005)
+        _report("ISUPPORT MODES= reflects max_mode_params config (default 6)",
+                has_modes6, str(lines_005[:1]))
+    finally:
+        close(s)
+
+
+def test_kick_single_target():
+    """KICK with a single target still works (backward compatibility)."""
+    op_s, op_n = connect()
+    v_s,  v_n  = connect()
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        _send(v_s, f"JOIN {ch}")
+        _drain(v_s, 0.5)
+
+        _send(op_s, f"KICK {ch} {v_n} :single target test")
+        time.sleep(0.5)
+        lines = _read_lines(op_s, 2.0)
+        kicked = any("KICK" in l and ch in l and v_n in l for l in lines)
+        _report("KICK single target still works",
+                kicked, str([l for l in lines if "KICK" in l][:2]))
+    finally:
+        close(op_s)
+        close(v_s)
+
+
+def test_kick_multi_target_two():
+    """KICK nick1,nick2 kicks both users."""
+    op_s, op_n = connect()
+    v1_s, v1_n = connect()
+    v2_s, v2_n = connect()
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        _send(v1_s, f"JOIN {ch}")
+        time.sleep(0.15)
+        _send(v2_s, f"JOIN {ch}")
+        time.sleep(0.3)
+        _drain(op_s, 0.3)
+
+        _send(op_s, f"KICK {ch} {v1_n},{v2_n} :multi-kick test")
+        time.sleep(0.8)
+        lines = _read_lines(op_s, 2.0)
+        kick_lines = [l for l in lines if "KICK" in l and ch in l]
+        kicked_v1 = any(v1_n in l for l in kick_lines)
+        kicked_v2 = any(v2_n in l for l in kick_lines)
+        _report("KICK nick1,nick2 → 2 separate KICK lines",
+                len(kick_lines) == 2 and kicked_v1 and kicked_v2,
+                f"kick_lines={kick_lines}")
+    finally:
+        close(op_s)
+        close(v1_s)
+        close(v2_s)
+
+
+def test_kick_multi_target_six():
+    """KICK 6 targets in a single command (up to max_mode_params)."""
+    op_s, op_n = connect()
+    victims = [connect() for _ in range(6)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        for vs, vn in victims:
+            _send(vs, f"JOIN {ch}")
+            time.sleep(0.1)
+        time.sleep(0.5)
+        _drain(op_s, 0.3)
+
+        nick_list = ",".join(vn for _, vn in victims)
+        _send(op_s, f"KICK {ch} {nick_list} :mass kick")
+        time.sleep(1.0)
+        lines = _read_lines(op_s, 2.0)
+        kick_lines = [l for l in lines if "KICK" in l and ch in l]
+        _report("KICK 6 targets → 6 KICK lines (matches max_mode_params)",
+                len(kick_lines) == 6,
+                f"kicks={len(kick_lines)}: {kick_lines[:3]}")
+    finally:
+        close(op_s)
+        for vs, _ in victims:
+            close(vs)
+
+
+def test_kick_multi_target_exceeds_limit():
+    """KICK beyond max_mode_params: only first max_mode_params targets are kicked."""
+    op_s, op_n = connect()
+    # 8 victims, limit is 6 → only 6 should be kicked
+    victims = [connect() for _ in range(8)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        for vs, vn in victims:
+            _send(vs, f"JOIN {ch}")
+            time.sleep(0.1)
+        time.sleep(0.5)
+        _drain(op_s, 0.3)
+
+        nick_list = ",".join(vn for _, vn in victims)
+        _send(op_s, f"KICK {ch} {nick_list} :over limit")
+        time.sleep(1.2)
+        lines = _read_lines(op_s, 2.0)
+        kick_lines = [l for l in lines if "KICK" in l and ch in l]
+        _report("KICK beyond max_mode_params → capped at 6",
+                len(kick_lines) == 6,
+                f"kicks received={len(kick_lines)}")
+    finally:
+        close(op_s)
+        for vs, _ in victims:
+            close(vs)
+
+
+def test_kick_only_channel_operator_can_kick():
+    """Non-chanop cannot KICK → 482 ERR_CHANOPRIVSNEEDED."""
+    op_s, op_n = connect()
+    reg_s, reg_n = connect()
+    v_s,   v_n  = connect()
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        _send(reg_s, f"JOIN {ch}")
+        _send(v_s,   f"JOIN {ch}")
+        _drain(reg_s, 0.3)
+
+        _send(reg_s, f"KICK {ch} {v_n} :non-op test")
+        lines = _read_lines(reg_s, 2.0)
+        _report("Non-chanop KICK denied → 482",
+                _has_num(lines, "482"), str(lines[:2]))
+    finally:
+        close(op_s)
+        close(reg_s)
+        close(v_s)
+
+
+def test_mode_broadcast_one_per_line_default():
+    """With default mode_broadcast_params=1, MODE +ooo broadcasts 3 separate lines."""
+    op_s, op_n = connect()
+    users = [connect() for _ in range(3)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        for us, un in users:
+            _send(us, f"JOIN {ch}")
+            time.sleep(0.1)
+        time.sleep(0.5)
+        _drain(op_s, 0.3)
+
+        nick_list = " ".join(un for _, un in users)
+        _send(op_s, f"MODE {ch} +ooo {nick_list}")
+        time.sleep(0.8)
+        lines = _read_lines(op_s, 2.0)
+        mode_lines = [l for l in lines if "MODE" in l and ch in l
+                      and "+" in l and "o" in l]
+        # Default mode_broadcast_params=1 → one MODE line per user, no trailing space
+        all_single = all("+o" in l for l in mode_lines)
+        no_trailing_space = all(not l.endswith(" ") for l in mode_lines)
+        _report("MODE +ooo (broadcast_params=1 default) → 3 separate +o lines",
+                len(mode_lines) == 3 and all_single,
+                f"lines={mode_lines}")
+        _report("No trailing space in broadcast MODE lines",
+                no_trailing_space, str(mode_lines[:2]))
+    finally:
+        close(op_s)
+        for us, _ in users:
+            close(us)
+
+
+def test_mode_max_params_six_accepted():
+    """Server accepts MODE +oooooo with 6 targets (max_mode_params=6)."""
+    op_s, op_n = connect()
+    users = [connect() for _ in range(6)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        for us, un in users:
+            _send(us, f"JOIN {ch}")
+            time.sleep(0.1)
+        time.sleep(0.5)
+        _drain(op_s, 0.3)
+
+        nick_list = " ".join(un for _, un in users)
+        _send(op_s, f"MODE {ch} +oooooo {nick_list}")
+        time.sleep(1.2)
+        lines = _read_lines(op_s, 2.0)
+        mode_lines = [l for l in lines if "MODE" in l and ch in l
+                      and "+" in l and "o" in l]
+        # All 6 modes accepted; broadcast_params=1 means 6 separate lines
+        _report("Server accepts +oooooo (6 modes, within max_mode_params=6)",
+                len(mode_lines) == 6,
+                f"lines received={len(mode_lines)}")
+    finally:
+        close(op_s)
+        for us, _ in users:
+            close(us)
+
+
+def test_mode_excess_params_capped():
+    """MODE with more than max_mode_params (6) targets: only first 6 are applied."""
+    op_s, op_n = connect()
+    users = [connect() for _ in range(8)]  # 8 > max_mode_params=6
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+        for us, un in users:
+            _send(us, f"JOIN {ch}")
+            time.sleep(0.1)
+        time.sleep(0.5)
+        _drain(op_s, 0.3)
+
+        nick_list = " ".join(un for _, un in users)
+        _send(op_s, f"MODE {ch} +oooooooo {nick_list}")
+        time.sleep(1.2)
+        lines = _read_lines(op_s, 2.0)
+        mode_lines = [l for l in lines if "MODE" in l and ch in l
+                      and "+" in l and "o" in l]
+        # max_mode_params=6 caps the input; broadcast_params=1 → 6 separate output lines
+        _report("MODE +oooooooo (8 nicks) capped at max_mode_params=6",
+                len(mode_lines) == 6,
+                f"mode_lines={len(mode_lines)}")
+    finally:
+        close(op_s)
+        for us, _ in users:
+            close(us)
+
+
+# ===========================================================================
 # Runner
 # ===========================================================================
 
@@ -2129,6 +2398,16 @@ ALL_TESTS = [
     ("EVENT fires for ACCESS-OP-promoted join",      test_access_and_event_together),
     ("EVENT OPERSPY fires on WHOIS of oper",         test_event_operspy_spy_whois),
     ("EVENT OPERSPY fires on ADMIN command",         test_event_operspy_admin_command),
+    # — Multi-target KICK + configurable MODE params —
+    ("ISUPPORT MODES= reflects max_mode_params (6)", test_modes_isupport_value),
+    ("KICK single target backward compat",           test_kick_single_target),
+    ("KICK nick1,nick2 → 2 KICK lines",              test_kick_multi_target_two),
+    ("KICK 6 targets → 6 KICK lines",               test_kick_multi_target_six),
+    ("KICK >6 targets capped at max_mode_params",    test_kick_multi_target_exceeds_limit),
+    ("Non-chanop KICK denied → 482",                 test_kick_only_channel_operator_can_kick),
+    ("MODE broadcast_params=1 → separate lines",     test_mode_broadcast_one_per_line_default),
+    ("MODE +oooooo (6) accepted by max_mode_params", test_mode_max_params_six_accepted),
+    ("MODE +oooooooo (8) capped at 6",               test_mode_excess_params_capped),
 ]
 
 

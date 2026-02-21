@@ -704,6 +704,7 @@ set_default_conf(void)
 	ConfigFileEntry.max_nick_time = 20;
 	ConfigFileEntry.max_nick_changes = 5;
 	ConfigFileEntry.max_mode_params = 6;
+	ConfigFileEntry.mode_broadcast_params = 1;
 	ConfigFileEntry.max_accept = 20;
 	ConfigFileEntry.max_monitor = 60;
 	ConfigFileEntry.nick_delay = 900;	/* 15 minutes */

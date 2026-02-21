@@ -1783,18 +1783,30 @@ set_channel_mode(struct Client *client_p, struct Client *source_p,
 			else
 				arglen = 0;
 
-			/* if we're creeping over MAXMODEPARAMSSERV, or over
+			/* if we're creeping over the per-line parameter limit, or over
 			 * bufsize (4 == +/-,modechar,two spaces) send now.
+			 * For server-sourced changes use MAXMODEPARAMSSERV (10);
+			 * for client-sourced changes use mode_broadcast_params
+			 * (configurable, default 1 = one mode change per line).
 			 */
+			{
+			int _bcast_limit = IsServer(source_p)
+				? MAXMODEPARAMSSERV
+				: ConfigFileEntry.mode_broadcast_params;
 			if(mode_changes[i].arg != NULL &&
-			   ((paracount == MAXMODEPARAMSSERV) ||
+			   ((paracount == _bcast_limit) ||
 			    ((cur_len + paralen + arglen + 4) > (BUFSIZE - 3))))
 			{
 				*mbuf = '\0';
 
 				if(cur_len > mlen)
+				{
+					/* strip trailing space added by sprintf before flushing */
+					if(paralen > 0 && parabuf[paralen - 1] == ' ')
+						parabuf[paralen - 1] = '\0';
 					sendto_channel_local_priv(IsServer(source_p) ? fakesource_p : source_p,
 							send_flags, priv, chptr, "%s %s", modebuf, parabuf);
+				}
 				else
 					continue;
 
@@ -1805,6 +1817,7 @@ set_channel_mode(struct Client *client_p, struct Client *source_p,
 				parabuf[0] = '\0';
 				dir = MODE_QUERY;
 			}
+			} /* end _bcast_limit block */
 
 			if(dir != mode_changes[i].dir)
 			{
