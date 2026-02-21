@@ -64,6 +64,7 @@ struct PreClient;
 struct ListClient;
 struct scache_entry;
 struct ws_ctl;
+struct oper_conf;
 
 typedef int SSL_OPEN_CB(struct Client *, int status);
 
@@ -292,6 +293,14 @@ struct LocalUser
 	struct ev_entry *event;			/* used for associated events */
 
 	struct sasl_session *sess;
+
+	/*
+	 * pending_oper: set by a SASL mechanism (sasl_plain, sasl_external)
+	 * when it successfully pre-authenticates a client as an oper during
+	 * connection registration.  register_local_user() (s_user.c) detects
+	 * this field and calls oper_up() once the client is fully registered.
+	 */
+	struct oper_conf *pending_oper;
 };
 
 #define AUTHC_F_DEFERRED 0x01

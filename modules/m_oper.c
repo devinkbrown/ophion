@@ -38,13 +38,12 @@
 #include "modules.h"
 #include "packet.h"
 #include "cache.h"
+#include "auth_oper.h"
 
 static const char oper_desc[] = "Provides the OPER command to become an IRC operator";
 
 static void m_oper(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void mc_oper(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-
-static bool match_oper_password(const char *password, struct oper_conf *oper_p);
 
 struct Message oper_msgtab = {
 	"OPER", 0, 0, 0, 0,
@@ -117,9 +116,9 @@ m_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		return;
 	}
 
-	if (oper_p->certfp != NULL)
+	if(oper_p->certfp != NULL)
 	{
-		if (source_p->certfp == NULL || rb_strcasecmp(source_p->certfp, oper_p->certfp))
+		if(!oper_check_certfp(source_p, oper_p))
 		{
 			sendto_one_numeric(source_p, ERR_NOOPERHOST, form_str(ERR_NOOPERHOST));
 			ilog(L_FOPER, "FAILED OPER (%s) by (%s!%s@%s) (%s) -- client certificate fingerprint mismatch",
@@ -146,7 +145,7 @@ m_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		}
 	}
 
-	if(match_oper_password(password, oper_p))
+	if(oper_check_password(password, oper_p))
 	{
 		oper_up(source_p, oper_p);
 
@@ -200,43 +199,4 @@ mc_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 
 	source_p->user->privset = privset;
 	source_p->user->opername = rb_strdup(parv[1]);
-}
-
-/*
- * match_oper_password
- *
- * inputs       - pointer to given password
- *              - pointer to Conf
- * output       - true if match, false otherwise
- * side effects - none
- */
-static bool
-match_oper_password(const char *password, struct oper_conf *oper_p)
-{
-	const char *encr;
-
-	/* passwd may be NULL pointer. Head it off at the pass... */
-	if(EmptyString(oper_p->passwd))
-		return false;
-
-	if(IsOperConfEncrypted(oper_p))
-	{
-		/* use first two chars of the password they send in as salt */
-		/* If the password in the conf is MD5, and ircd is linked
-		 * to scrypt on FreeBSD, or the standard crypt library on
-		 * glibc Linux, then this code will work fine on generating
-		 * the proper encrypted hash for comparison.
-		 */
-		if(!EmptyString(password))
-			encr = rb_crypt(password, oper_p->passwd);
-		else
-			encr = "";
-	}
-	else
-		encr = password;
-
-	if(encr != NULL && strcmp(encr, oper_p->passwd) == 0)
-		return true;
-	else
-		return false;
 }

@@ -79,6 +79,8 @@ modules = [
   'm_restart',
   'm_resv',
   'm_sasl_core',
+  'sasl_external',
+  'sasl_plain',
   'm_scan',
   'm_setname',
   'm_services',

@@ -51,6 +51,7 @@
 #include "substitution.h"
 #include "chmode.h"
 #include "s_assert.h"
+#include "auth_oper.h"
 
 static void report_and_set_user_flags(struct Client *, struct ConfItem *);
 void user_welcome(struct Client *source_p);
@@ -663,6 +664,14 @@ register_local_user(struct Client *client_p, struct Client *source_p)
 
 	monitor_signon(source_p);
 	user_welcome(source_p);
+
+	/* Grant oper status pre-authenticated by a SASL mechanism. */
+	if(source_p->localClient->pending_oper != NULL)
+	{
+		struct oper_conf *oper_p = source_p->localClient->pending_oper;
+		source_p->localClient->pending_oper = NULL;
+		oper_up(source_p, oper_p);
+	}
 
 	free_pre_client(source_p);
 
