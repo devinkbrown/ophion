@@ -18,6 +18,23 @@ See LICENSE for licensing details (GPL v2).
   derived deterministically from the server name via FNV-1a hash, logged at startup.
 - Zero-config server linking via SVSSID collision negotiation.
 - WebSocket transport support via `listen { wsock = yes; }`.
+- **Dotless server names**: server names no longer require a dot/domain suffix;
+  simple names like `ircxserver01` or `leaf02` are fully supported.
+- **Built-in reserved names**: `system`, `server`, `services`, `global`,
+  `localhost`, and `ircd` are permanently reserved and cannot be used as a
+  server name or user nickname (bypasses ExemptResv).
+- **Server-link nick force-rename**: when a dotless server name collides with an
+  existing local user nickname, the user is automatically renamed (tries `nick_`,
+  `nick__`, `nick___`, then `Guest<uid-tail>`) and sent an informative notice.
+  Remote-user collisions still cause the link to be rejected.
+- **Per-operation flood controls**: rate limiting for KICK, MODE, and PROP SET
+  operations in addition to the existing packet-level flood controls.  The
+  effective limit is the stricter of the server-global setting and an optional
+  per-channel override set via PROP keys (`KICKFLOOD`, `MODEFLOOD`, `PROPFLOOD`
+  in `N/T` format).  Clients with `oper:god` privilege or general opers with
+  `no_oper_flood = yes` are exempt, consistent with `packet.c`.
+- **Interactive configuration tool** (`tools/setup.py`): full setup and
+  management wizard for `ircd.conf`; see README for details.
 
 #### IRCX channel modes (m_ircx_modes module)
 - `+a` AUTHONLY — only services-authenticated users may join.
@@ -33,12 +50,25 @@ See LICENSE for licensing details (GPL v2).
 - `dnsbl {}` block name (replaces old `blacklist {}` block name).
 - `certfp_method = spki_sha256` (or spki_sha512): SPKI-based certificate fingerprints
   that survive certificate renewal.
+- `kick_flood_count`, `kick_flood_time`: per-user KICK flood limit (0 = disabled).
+- `mode_flood_count`, `mode_flood_time`: per-user MODE flood limit (0 = disabled).
+- `prop_flood_count`, `prop_flood_time`: per-user PROP SET flood limit (0 = disabled).
+- `max_mode_params`: maximum number of MODE parameters accepted per command (default 4).
+- `mode_broadcast_params`: maximum MODE params included when broadcasting to servers.
 
 #### code
 - `make_conf(void)`, `temp_conf_bucket()` helper in `ircd/s_conf.c`.
 - Removed all static-local buffers in `modules/core/m_join.c`.
 - `set_final_mode` uses `SETDIR` macro; `remove_our_modes` uses `mode_strip_table`.
 - `parse_sjoin_modes` bounds check ordering fixed.
+- `is_builtin_resv()` in `ircd/s_newconf.c`: permanent name reservation that
+  cannot be bypassed by ExemptResv.
+- `server_link_nick_fnc()` in `ircd/client.c`: force-renames a local user whose
+  nickname conflicts with a linking dotless server name.
+- `ircd/flood.c`: new `flood_exempt()` helper ensures all operation flood checks
+  honour the same oper-bypass rules as `packet.c`.
+- Server hash-table updated on REHASH rename: `del_from_client_hash` +
+  `add_to_client_hash` ensure the server is findable under its new name.
 
 ---
 
