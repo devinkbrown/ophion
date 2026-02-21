@@ -315,7 +315,7 @@ m_sendpass(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		 * manually if email infrastructure is unavailable. */
 		sendto_realops_snomask(SNO_GENERAL, L_ALL,
 			"SENDPASS: reset token for account \2%s\2 requested by "
-			"%s!%s@%s — token: \2%s\2 (valid %d min)",
+			"%s!%s@%s — token: %s (valid %d min)",
 			acct->name,
 			source_p->name, source_p->username, source_p->host,
 			t->token, TOKEN_EXPIRE_SECS / 60);

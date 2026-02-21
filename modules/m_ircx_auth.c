@@ -88,11 +88,12 @@ end_auth_session(struct Client *client_p)
 static void
 login_auth_session(struct Client *client_p)
 {
-	if (!MyClient(client_p))
+	/* Allow unknown (pre-registration) clients — MyClient requires STAT_CLIENT */
+	if (!MyConnect(client_p))
 		return;
 
 	struct User *user_p = client_p->user;
-	if (!IsPerson(client_p) && IsUnknown(client_p))
+	if (user_p == NULL)
 		user_p = make_user(client_p);
 
 	struct sasl_session *sess = client_p->localClient->sess;
@@ -190,7 +191,7 @@ m_auth(struct MsgBuf *msgbuf_p, struct Client *client_p,
 			case SASL_MRESULT_SUCCESS:
 				login_auth_session(source_p);
 
-				if (*source_p->user->suser)
+				if (source_p->user != NULL && *source_p->user->suser)
 					sendto_one(source_p, form_str(RPL_LOGGEDIN),
 						   me.name, nick,
 						   nick,
@@ -256,7 +257,7 @@ m_auth(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	case SASL_MRESULT_SUCCESS:
 		login_auth_session(source_p);
 
-		if (*source_p->user->suser)
+		if (source_p->user != NULL && *source_p->user->suser)
 			sendto_one(source_p, form_str(RPL_LOGGEDIN),
 				   me.name, nick,
 				   nick,
