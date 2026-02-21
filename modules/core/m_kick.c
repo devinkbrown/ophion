@@ -118,99 +118,118 @@ m_kick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 
 	}
 
-	if((p = strchr(parv[2], ',')))
-		*p = '\0';
-
-	user = parv[2];		/* strtoken(&p2, parv[2], ","); */
-
-	if(!(who = find_chasing(source_p, user, &chasing)))
+	/*
+	 * Iterate over comma-separated target list in parv[2].
+	 * For local clients, the number of targets is capped by
+	 * general::max_mode_params (default 6, matches ISUPPORT MODES=).
+	 * For remote/server sources there is no cap (servers are trusted).
+	 * This preserves the old single-target behaviour when only one nick
+	 * is given and adds multi-target support when a comma-separated list
+	 * is provided.
+	 */
 	{
-		return;
-	}
+		static char targets_buf[BUFSIZE];
+		char *target_ptr;
+		char *target_tok;
+		int kick_count = 0;
+		int max_kicks = MyClient(source_p) ? ConfigFileEntry.max_mode_params : INT_MAX;
 
-	msptr = find_channel_membership(chptr, who);
+		rb_strlcpy(targets_buf, parv[2], sizeof(targets_buf));
+		target_ptr = targets_buf;
 
-	if(msptr != NULL)
-	{
-		if(MyClient(source_p) && IsService(who))
+		while ((target_tok = rb_strtok_r(target_ptr, ",", &target_ptr)) != NULL)
 		{
-			sendto_one(source_p, form_str(ERR_ISCHANSERVICE),
-				   me.name, source_p->name, who->name, chptr->chname);
-			return;
-		}
+			if(kick_count >= max_kicks)
+				break;
+			kick_count++;
 
-		/*
-		 * Oper kick protection — applies to ALL sources, including
-		 * services (e.g. ChanServ AKICK / RESTRICTED mode kicks).
-		 *
-		 * When oper_kick_protection is enabled in ircd.conf:
-		 *   - O-lined users (IRC operators and admins) cannot be kicked
-		 *     from any channel by a non-oper source.
-		 *   - An IRC oper CAN still kick another IRC oper.
-		 *   - This is enforced here (not just via h_can_kick) so that
-		 *     server-sourced KICK commands from services are also blocked.
-		 *
-		 * A notice is sent back to local sources; remote sources (e.g.
-		 * ChanServ) are silently rejected (the kick is not applied).
-		 */
-		if(!IsServer(source_p) &&
-		   ConfigFileEntry.oper_kick_protection &&
-		   (IsOper(who) || IsAdmin(who)) &&
-		   !(IsOper(source_p) || IsAdmin(source_p)))
-		{
+			user = target_tok;
+
+			if(!(who = find_chasing(source_p, user, &chasing)))
+				continue;
+
+			msptr = find_channel_membership(chptr, who);
+
+			if(msptr == NULL)
+			{
+				if(MyClient(source_p))
+					sendto_one_numeric(source_p, ERR_USERNOTINCHANNEL,
+							   form_str(ERR_USERNOTINCHANNEL),
+							   user, name);
+				continue;
+			}
+
+			if(MyClient(source_p) && IsService(who))
+			{
+				sendto_one(source_p, form_str(ERR_ISCHANSERVICE),
+					   me.name, source_p->name, who->name, chptr->chname);
+				continue;
+			}
+
+			/*
+			 * Oper kick protection — applies to ALL sources, including
+			 * services (e.g. ChanServ AKICK / RESTRICTED mode kicks).
+			 *
+			 * When oper_kick_protection is enabled in ircd.conf:
+			 *   - O-lined users (IRC operators and admins) cannot be kicked
+			 *     from any channel by a non-oper source.
+			 *   - An IRC oper CAN still kick another IRC oper.
+			 *   - This is enforced here (not just via h_can_kick) so that
+			 *     server-sourced KICK commands from services are also blocked.
+			 *
+			 * A notice is sent back to local sources; remote sources (e.g.
+			 * ChanServ) are silently rejected (the kick is not applied).
+			 */
+			if(!IsServer(source_p) &&
+			   ConfigFileEntry.oper_kick_protection &&
+			   (IsOper(who) || IsAdmin(who)) &&
+			   !(IsOper(source_p) || IsAdmin(source_p)))
+			{
+				if(MyClient(source_p))
+					sendto_one_numeric(source_p, ERR_ISCHANSERVICE,
+						"%s %s :IRC operators cannot be kicked from channels.",
+						who->name, chptr->chname);
+				sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
+					"%s attempted to kick oper %s from %s (blocked: oper_kick_protection)",
+					source_p->name, who->name, chptr->chname);
+				continue;
+			}
+
 			if(MyClient(source_p))
-				sendto_one_numeric(source_p, ERR_ISCHANSERVICE,
-					"%s %s :IRC operators cannot be kicked from channels.",
-					who->name, chptr->chname);
-			sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
-				"%s attempted to kick oper %s from %s (blocked: oper_kick_protection)",
-				source_p->name, who->name, chptr->chname);
-			return;
+			{
+				hook_data_channel_approval hookdata;
+
+				hookdata.client = source_p;
+				hookdata.chptr = chptr;
+				hookdata.msptr = msptr;
+				hookdata.target = who;
+				hookdata.approved = 1;
+				hookdata.dir = MODE_ADD;
+
+				call_hook(h_can_kick, &hookdata);
+
+				if(!hookdata.approved)
+					continue;
+			}
+
+			comment = LOCAL_COPY((EmptyString(parv[3])) ? who->name : parv[3]);
+			if(strlen(comment) > (size_t) REASONLEN)
+				comment[REASONLEN] = '\0';
+
+			if(IsServer(source_p))
+				sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+						     ":%s KICK %s %s :%s",
+						     source_p->name, name, who->name, comment);
+			else
+				sendto_channel_local(source_p, ALL_MEMBERS, chptr,
+						     ":%s!%s@%s KICK %s %s :%s",
+						     source_p->name, source_p->username,
+						     source_p->host, name, who->name, comment);
+
+			sendto_server(client_p, chptr, CAP_TS6, NOCAPS,
+				      ":%s KICK %s %s :%s",
+				      use_id(source_p), chptr->chname, use_id(who), comment);
+			remove_user_from_channel(msptr);
 		}
-
-		if(MyClient(source_p))
-		{
-			hook_data_channel_approval hookdata;
-
-			hookdata.client = source_p;
-			hookdata.chptr = chptr;
-			hookdata.msptr = msptr;
-			hookdata.target = who;
-			hookdata.approved = 1;
-			hookdata.dir = MODE_ADD;	/* ensure modules like override speak up */
-
-			call_hook(h_can_kick, &hookdata);
-
-			if (!hookdata.approved)
-				return;
-		}
-
-		comment = LOCAL_COPY((EmptyString(parv[3])) ? who->name : parv[3]);
-		if(strlen(comment) > (size_t) REASONLEN)
-			comment[REASONLEN] = '\0';
-
-		/* jdc
-		 * - In the case of a server kicking a user (i.e. CLEARCHAN),
-		 *   the kick should show up as coming from the server which did
-		 *   the kick.
-		 * - Personally, flame and I believe that server kicks shouldn't
-		 *   be sent anyways.  Just waiting for some oper to abuse it...
-		 */
-		if(IsServer(source_p))
-			sendto_channel_local(source_p, ALL_MEMBERS, chptr, ":%s KICK %s %s :%s",
-					     source_p->name, name, who->name, comment);
-		else
-			sendto_channel_local(source_p, ALL_MEMBERS, chptr,
-					     ":%s!%s@%s KICK %s %s :%s",
-					     source_p->name, source_p->username,
-					     source_p->host, name, who->name, comment);
-
-		sendto_server(client_p, chptr, CAP_TS6, NOCAPS,
-			      ":%s KICK %s %s :%s",
-			      use_id(source_p), chptr->chname, use_id(who), comment);
-		remove_user_from_channel(msptr);
 	}
-	else if (MyClient(source_p))
-		sendto_one_numeric(source_p, ERR_USERNOTINCHANNEL,
-				   form_str(ERR_USERNOTINCHANNEL), user, name);
 }

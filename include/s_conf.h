@@ -173,6 +173,7 @@ struct config_file_entry
 	int max_monitor;
 	int max_nick_time;
 	int max_nick_changes;
+	int max_mode_params;	/* max per-parameter modes per MODE command (ISUPPORT MODES=) */
 	int ts_max_delta;
 	int ts_warn_delta;
 	int dline_with_reason;

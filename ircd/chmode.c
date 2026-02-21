@@ -867,7 +867,7 @@ chm_ban(struct Client *source_p, struct Channel *chptr,
 		return;
 
 
-	if(MyClient(source_p) && (++mode_limit > MAXMODEPARAMS))
+	if(MyClient(source_p) && (++mode_limit > ConfigFileEntry.max_mode_params))
 		return;
 
 	raw_mask = parv[(*parn)];
@@ -1074,7 +1074,7 @@ chm_admin(struct Client *source_p, struct Channel *chptr,
 		return;
 	}
 
-	if(MyClient(source_p) && (++mode_limit > MAXMODEPARAMS))
+	if(MyClient(source_p) && (++mode_limit > ConfigFileEntry.max_mode_params))
 		return;
 
 	if(dir == MODE_ADD)
@@ -1194,7 +1194,7 @@ chm_op(struct Client *source_p, struct Channel *chptr,
 		return;
 	}
 
-	if(MyClient(source_p) && (++mode_limit > MAXMODEPARAMS))
+	if(MyClient(source_p) && (++mode_limit > ConfigFileEntry.max_mode_params))
 		return;
 
 	if(dir == MODE_ADD)
@@ -1304,7 +1304,7 @@ chm_voice(struct Client *source_p, struct Channel *chptr,
 		return;
 	}
 
-	if(MyClient(source_p) && (++mode_limit > MAXMODEPARAMS))
+	if(MyClient(source_p) && (++mode_limit > ConfigFileEntry.max_mode_params))
 		return;
 
 	if(dir == MODE_ADD)
