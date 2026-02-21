@@ -1284,10 +1284,21 @@ svc_db_flush_dirty(void)
 
 	struct flush_cb_state st = { .count = 0 };
 
-	db_exec("BEGIN TRANSACTION;");
+	/*
+	 * Do NOT wrap with an outer BEGIN/COMMIT here.  svc_db_account_save()
+	 * and svc_db_chanreg_save() each manage their own transaction
+	 * internally.  SQLite does not support nested transactions via BEGIN;
+	 * the outer BEGIN would succeed, then each inner BEGIN would silently
+	 * fail, causing the inner COMMIT to commit the outer transaction
+	 * prematurely and leaving subsequent saves without a transaction.
+	 *
+	 * Each save is individually atomic.  For throughput-sensitive paths
+	 * (e.g. large post-split dirty flushes) callers should prefer the
+	 * S2S SVCSREG/SVCSCHAN burst path which batches records via TCP
+	 * send-queue coalescing rather than individual SQLite transactions.
+	 */
 	rb_radixtree_foreach(svc_account_dict, flush_account_cb, &st);
 	rb_radixtree_foreach(svc_chanreg_dict, flush_chanreg_cb, &st);
-	db_exec("COMMIT;");
 
 	if(st.count > 0)
 		ilog(L_MAIN, "services_db: flushed %d dirty records", st.count);
