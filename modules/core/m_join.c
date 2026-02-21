@@ -146,6 +146,11 @@ check_cloneable(struct Client *source_p, struct Channel *chptr, char *key)
 		if (isnew && chptr->mode.limit > 0)
 			clone->mode.limit = chptr->mode.limit;
 
+		/* IRCX CLONE notification: alert parent channel members of the new clone */
+		if (isnew)
+			sendto_channel_local(NULL, ALL_MEMBERS, chptr,
+				":%s CLONE %s %s", me.name, chptr->chname, clone_name);
+
 		return clone;
 	}
 

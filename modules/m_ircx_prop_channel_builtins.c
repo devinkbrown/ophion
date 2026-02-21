@@ -155,6 +155,45 @@ h_prop_list_append(void *vdata)
 				data->target, "MEMBERKEY", chptr->mode.key);
 		}
 	}
+
+	/* MEMBERLIMIT: current +l value (wraps mode, read-only via PROP listing) */
+	if (key_matches(data->keys, "MEMBERLIMIT") && chptr->mode.limit > 0)
+	{
+		snprintf(buf, sizeof buf, "%d", chptr->mode.limit);
+		sendto_one_numeric(data->client, RPL_PROPLIST, form_str(RPL_PROPLIST),
+			data->target, "MEMBERLIMIT", buf);
+	}
+
+	/* PICS: content rating string (stored in prop_list, chanop write) */
+	if (key_matches(data->keys, "PICS"))
+	{
+		struct Property *p = propertyset_find(&chptr->prop_list, "PICS");
+		if (p && p->value)
+			sendto_one_numeric(data->client, RPL_PROPLIST, form_str(RPL_PROPLIST),
+				data->target, "PICS", p->value);
+	}
+
+	/* LAG: per-channel message delay 0-2 seconds (stored in prop_list) */
+	if (key_matches(data->keys, "LAG"))
+	{
+		struct Property *p = propertyset_find(&chptr->prop_list, "LAG");
+		if (p && p->value)
+			sendto_one_numeric(data->client, RPL_PROPLIST, form_str(RPL_PROPLIST),
+				data->target, "LAG", p->value);
+	}
+
+	/* CLIENT: client metadata string, visible to channel operators only */
+	if (key_matches(data->keys, "CLIENT"))
+	{
+		struct membership *msptr = find_channel_membership(chptr, data->client);
+		if (msptr != NULL && (is_chanop(msptr) || is_admin(msptr)))
+		{
+			struct Property *p = propertyset_find(&chptr->prop_list, "CLIENT");
+			if (p && p->value)
+				sendto_one_numeric(data->client, RPL_PROPLIST, form_str(RPL_PROPLIST),
+					data->target, "CLIENT", p->value);
+		}
+	}
 }
 
 /*
@@ -194,6 +233,56 @@ h_prop_chan_write(void *vdata)
 		data->approved = data->alevel >= CHFL_CHANOP;
 		return;
 	}
+
+	/* MEMBERLIMIT: requires chanop; value must be a non-negative integer */
+	if (!rb_strcasecmp(data->key, "MEMBERLIMIT"))
+	{
+		if (data->alevel < CHFL_CHANOP)
+		{
+			data->approved = 0;
+			return;
+		}
+		if (data->value)
+		{
+			int lim = atoi(data->value);
+			data->approved = (lim >= 0);
+		}
+		else
+			data->approved = 1;  /* NULL value = clear limit (-l) */
+		return;
+	}
+
+	/* PICS: content rating string — requires chanop to write */
+	if (!rb_strcasecmp(data->key, "PICS"))
+	{
+		data->approved = data->alevel >= CHFL_CHANOP;
+		return;
+	}
+
+	/* LAG: 0-2 second fake lag — requires chanop; validate range */
+	if (!rb_strcasecmp(data->key, "LAG"))
+	{
+		if (data->alevel < CHFL_CHANOP)
+		{
+			data->approved = 0;
+			return;
+		}
+		if (data->value)
+		{
+			int lag_val = atoi(data->value);
+			data->approved = (lag_val >= 0 && lag_val <= 2);
+		}
+		else
+			data->approved = 1;  /* NULL value = clear LAG */
+		return;
+	}
+
+	/* CLIENT: client metadata — requires chanop to write */
+	if (!rb_strcasecmp(data->key, "CLIENT"))
+	{
+		data->approved = data->alevel >= CHFL_CHANOP;
+		return;
+	}
 }
 
 /*
@@ -211,6 +300,20 @@ h_prop_show(void *vdata)
 
 	if (!rb_strcasecmp(data->key, "MEMBERKEY"))
 		data->approved = 0;
+
+	/* CLIENT is visible only to channel operators */
+	if (!rb_strcasecmp(data->key, "CLIENT"))
+	{
+		struct Channel *chptr2 = find_channel(data->target);
+		if (chptr2 == NULL)
+		{
+			data->approved = 0;
+			return;
+		}
+		struct membership *msptr = find_channel_membership(chptr2,
+			(struct Client *)data->client);
+		data->approved = (msptr != NULL && (is_chanop(msptr) || is_admin(msptr)));
+	}
 }
 
 /*
@@ -268,6 +371,25 @@ h_prop_change(void *vdata)
 
 		/* remove from prop_list since this is stored as a mode */
 		propertyset_delete((rb_dlink_list *)data->prop_list, "MEMBERKEY");
+		return;
+	}
+
+	/* MEMBERLIMIT property -> +l/-l mode (mirrors MEMBERKEY pattern exactly) */
+	if (!rb_strcasecmp(data->key, "MEMBERLIMIT"))
+	{
+		if (data->value && *data->value && atoi(data->value) > 0)
+		{
+			const char *para[] = {"+l", data->value};
+			set_channel_mode((struct Client *)data->client, &me, chptr, NULL, 2, para);
+		}
+		else
+		{
+			const char *para[] = {"-l"};
+			set_channel_mode((struct Client *)data->client, &me, chptr, NULL, 1, para);
+		}
+
+		/* remove from prop_list since this is stored as a mode */
+		propertyset_delete((rb_dlink_list *)data->prop_list, "MEMBERLIMIT");
 		return;
 	}
 }

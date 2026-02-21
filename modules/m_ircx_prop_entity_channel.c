@@ -64,7 +64,8 @@ mapi_hfn_list_av1 ircx_prop_entity_channel_hfnlist[] = {
 };
 
 static bool
-can_write_to_channel_property(struct Client *source_p, struct Channel *chptr, const char *key, int alevel)
+can_write_to_channel_property(struct Client *source_p, struct Channel *chptr,
+                               const char *key, const char *value, int alevel)
 {
 	hook_data_prop_activity prop_activity;
 
@@ -72,9 +73,11 @@ can_write_to_channel_property(struct Client *source_p, struct Channel *chptr, co
 	prop_activity.target = chptr->chname;
 	prop_activity.prop_list = &chptr->prop_list;
 	prop_activity.key = key;
+	prop_activity.value = value;   /* proposed value for range/format validation */
 	prop_activity.alevel = alevel;
 	prop_activity.approved = alevel >= CHFL_CHANOP;
 	prop_activity.target_ptr = chptr;
+	prop_activity.min_broadcast_alevel = 0;
 
 	call_hook(h_prop_chan_write, &prop_activity);
 
@@ -118,7 +121,7 @@ h_prop_match(void *vdata)
 			prop_match->match_grant = PROP_WRITE;
 		else
 			prop_match->match_grant =
-				can_write_to_channel_property(prop_match->source_p, chan, prop_match->key, prop_match->alevel) ? PROP_WRITE : PROP_READ;
+				can_write_to_channel_property(prop_match->source_p, chan, prop_match->key, prop_match->value, prop_match->alevel) ? PROP_WRITE : PROP_READ;
 	}
 	else
 		prop_match->match_grant = prop_match->match_request;

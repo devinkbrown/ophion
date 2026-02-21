@@ -98,6 +98,56 @@ MEMBERKEY / +k Integration
     MODE #channel +k mykey         ->  MEMBERKEY reflects new key
     PROP #channel MEMBERKEY        ->  shows key to chanops only
 
+MEMBERLIMIT / +l Integration
+------------------------------
+
+  The IRCX MEMBERLIMIT property and IRC +l (member limit) mode are fully
+  synchronized (analogous to MEMBERKEY / +k):
+
+    PROP #channel MEMBERLIMIT 50   ->  sets +l 50
+    PROP #channel MEMBERLIMIT :    ->  removes +l
+    MODE #channel +l 50            ->  MEMBERLIMIT reflects new limit
+    PROP #channel MEMBERLIMIT      ->  shows limit to chanops only
+
+Channel Content and Metadata Properties
+-----------------------------------------
+
+  PICS   (chanop read/write)
+    Content-rating string for the channel (e.g. "GA", "PG", "R", "X").
+    Stored as a custom property; no mode side-effect.
+
+  LAG    (chanop read/write, value 0–2)
+    Per-channel fake-lag in whole seconds.  After a successful channel
+    message, the sending client's flood token bucket is charged by
+    lag * client_flood_message_num tokens, giving real per-channel
+    message throttling on top of the normal flood controls.
+
+  CLIENT (chanop-only read/write)
+    Arbitrary metadata string for use by client software.  Hidden from
+    non-operators in PROP output; chanop-only read and write.
+
+IRCX Pre-registration Probe
+-----------------------------
+
+  Per §3 of the IRCX draft, clients may probe for IRCX support before
+  completing registration:
+
+    MODE ISIRCX             ->  800 RPL_IRCX
+    MODE <nick> ISIRCX      ->  800 RPL_IRCX
+
+  Any other MODE usage before registration returns 451 ERR_NOTREGISTERED.
+
+IRCX Channel-context Nick Targeting (PRIVMSG/NOTICE)
+------------------------------------------------------
+
+  Ophion supports IRCX-style targeted channel messages:
+
+    PRIVMSG #channel nick1 nick2 :message text
+
+  Each nick must be a member of #channel; non-members yield
+  441 ERR_USERNOTINCHANNEL.  The message is delivered privately to each
+  target with the channel name retained as context.
+
 IRCX Module List
 -----------------
 
@@ -114,7 +164,7 @@ IRCX Module List
   m_ircx_oper_godmode     - God mode (+G), oper auto-promote, kick/ban protection
   m_ircx_prop             - PROP command core
   m_ircx_prop_ownerkey    - OWNERKEY channel property
-  m_ircx_prop_channel_builtins - OID/NAME/CREATION/TOPIC/MEMBERCOUNT/MEMBERKEY
+  m_ircx_prop_channel_builtins - OID/NAME/CREATION/TOPIC/MEMBERCOUNT/MEMBERKEY/MEMBERLIMIT/PICS/LAG/CLIENT
   m_ircx_prop_entity_account   - Account entity properties
   m_ircx_prop_entity_channel   - Channel entity properties
   m_ircx_prop_entity_user      - User entity properties

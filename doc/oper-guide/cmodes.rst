@@ -359,14 +359,13 @@ private team channels or moderated discussion forums.
 
 Per IRCX draft section 8.1.16, when ``+d`` is set on a channel, the
 channel is marked as cloneable. When the channel reaches its member
-limit (``+l``), the server may automatically create numbered clone
-channels (e.g., ``#chat`` -> ``#chat1``, ``#chat2``, etc.) and redirect
-new joiners to the clone.
+limit (``+l``), the server automatically creates numbered clone
+channels (e.g., ``#chat`` → ``#chat1``, ``#chat2``, etc.) and redirects
+new joiners to the clone.  When a new clone is created, the server
+sends a ``CLONE #parent #clone`` notification to all current members of
+the parent channel so clients can display the overflow channel.
 
-Currently, the ``+d`` flag is registered and can be set/queried, but the
-automatic clone creation behavior is designed to be implemented by
-services or extended in a future update. The clone channels themselves
-are marked with ``+E``.
+The clone channels themselves are marked with ``+E``.
 
 ``+E``, CLONE (IRCX)
 ---------------------
@@ -375,6 +374,13 @@ Per IRCX draft section 8.1.17, marks a channel as a numbered clone of
 a CLONEABLE (``+d``) channel. This flag is set automatically by the
 server when a clone channel is created due to overflow on a ``+d``
 channel.
+
+When the server creates a clone it broadcasts::
+
+    :<server> CLONE #parent #clone
+
+to all local members of the parent channel, allowing clients to display
+the overflow channel name.
 
 .. note:: The IRCX draft uses ``+e`` for CLONE, but since ``+e`` is
           used for ban exceptions in the charybdis lineage,
