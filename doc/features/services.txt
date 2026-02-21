@@ -1,65 +1,299 @@
-Services compatibility documentation
-------------------------------------
+Ophion Built-in Services
+------------------------
 
-Originally written by Lee Hardy for ircd-ratbox. Minor changes by Elizabeth
-Myers for modern services.
+Ophion provides NickServ, ChanServ, MemoServ, HostServ, and OperServ
+functionality directly inside the IRCd — no external services daemon is
+required.  All services state is stored in a SQLite database and synced
+across servers via the SVCS* S2S protocol.
+
+Services are enabled by adding a services{} block to ircd.conf:
+
+    services {
+        enabled             = yes;
+        hub                 = yes;
+        db_path             = "/var/lib/ophion/services.db";
+        nick_expire_days    = 30;
+        chan_expire_days    = 60;
+        enforce_delay_secs  = 30;
+        maxnicks            = 10;
+        maxmemos            = 20;
+        registration_open   = yes;
+    };
+
+When services are disabled (enabled = no), the IDENTIFY command reverts
+to its IRCX channel-key form only.  All other services commands return
+ERR_UNKNOWNCOMMAND (421).  JUPE/UNJUPE/JUPELIST are available to opers
+regardless of this setting.
 
 
-Compatibility with services is always enabled.  Supported services include
-atheme and anope. They add the following features to Charybdis:
+User Commands
+=============
 
-1. Channel mode +r
+Account registration and authentication
+----------------------------------------
 
-   A simple mode taking no parameters, will require users are logged in
-   with user services before they may join the channel.
+REGISTER <email> <password>
+    Register the current nick as a new account.  The nick becomes the
+    account name.  The client is automatically identified on success
+    (RPL_LOGGEDIN 900).
 
-   Gives numeric 477 to users who arent logged in:
-   :<server> 477 <nick> <channel> :Cannot join channel (+r)
+IDENTIFY [account] <password>
+    Identify to a services account.  If account is omitted, the current
+    nick is used.  Returns RPL_LOGGEDIN (900) on success.
 
-2. service block to ircd.conf
+IDENTIFY #channel <key>
+    IRCX channel-key form.  Always available even when services are
+    disabled.  Used by channel founders to recover ops using the
+    registered mlock key.
 
-   Ability to specify the names of services servers in ircd.conf:
-   service {
-       name = "services.charybdis.io";
-       name = "backup-services.charybdis.io";
-   };
+LOGOUT
+    Log out of the current services account.  Returns RPL_LOGGEDOUT (901).
 
-   These must be specified for certain features to work.  You may specify as
-   many name entries as you wish, however you must define only one service
-   block.
+DROP <password>
+    Permanently delete your own account.  The current password must be
+    provided as confirmation.  All grouped nicks, TLS fingerprints, and
+    the account record are removed immediately.  The deletion is synced
+    network-wide via SVCSDROP.
 
-   Entries will be listed in stats U with the flag 's'.
+SENDPASS <account>
+    Request a one-time password reset token for the named account.  If
+    the account has a registered email address and sendmail(8) is
+    available on the server, the token is delivered by email.
+    Regardless, IRC operators receive the token in a server notice
+    (SNO_GENERAL) so they can relay it manually.
 
-3. Services protection
+    The response is always identical whether or not the account exists,
+    preventing account enumeration.  Tokens expire after 15 minutes.
 
-   Services will be protected from being deopped or kicked from a channel.
+SENDPASS <account> <token> <new-password>
+    Apply a reset token obtained via the request form above.  Sets the
+    new password immediately.
 
-4. Username tracking through netsplits
+GHOST <nick> [password]
+    Kill a session using your nick.  If the target session is identified
+    to the same account, no password is required.  Otherwise the account
+    password must be provided.
 
-   When users are logged in, the username they are logged in with will be
-   preserved on a netsplit, so users will not have to relogin when the
-   network merges together.
+REGAIN <nick> [password]
+    Like GHOST, but also forces a nick change to take the nick.
 
-5. Username given on WHOIS
+GROUP
+    Add the current nick to your account's nick group.  Grouped nicks
+    are protected and auto-identified on connect.
 
-   When users are logged in, WHOIS will also give numeric 330:
-   :<server> 330 <yournick> <targetnick> <loginname> :is logged in as
+UNGROUP <nick>
+    Remove a grouped nick.  The primary nick (account name) cannot be
+    ungrouped.
 
-6. Forced nick change
+CERTADD [fingerprint]
+    Add a TLS certificate fingerprint to your account for SASL EXTERNAL
+    authentication.  If no fingerprint is given, the current connection's
+    certificate is used.
 
-   When using nickname services and a client requests they regain a
-   nickname, services can perform a forced nick change on the client.
-   This forcibly changes the clients nickname to the one they requested
-   they regain, ensuring they can always regain their nickname.
+CERTDEL <fingerprint>
+    Remove a TLS certificate fingerprint from your account.
 
-7. User mode +R
+CERTLIST
+    List all TLS certificate fingerprints on your account.
 
-   This user mode will require users are logged in with user services
-   before they may send private messages or notices to the user.
+SETPASS <old-password> <new-password>
+    Change your account password.  The current password must be provided.
 
-   As with user mode +g, IRC operators and accepted users can send even
-   if they are not logged in.
+SETEMAIL <email>
+    Change your registered email address.
 
-   Gives numeric 486 to users sending a PRIVMSG who are not logged in:
-   :<server> 486 <nick> <targetnick> :You must log in with services to message this user
+SET <option> <on|off>
+    Toggle account flags.  Available options:
 
+    ENFORCE      Kill or rename unidentified users after enforce_delay_secs.
+    PROTECT      Ghost/kill on nick collision.
+    SECURE       Require access-list match to identify.
+    PRIVATE      Hide account from searches.
+    HIDE EMAIL   Hide email from INFO output.
+    MEMONOTIFY   Notify on new memos (default: on).
+    NOMEMO       Reject incoming memos.
+    NOOP         Never auto-op on channel join.
+    SASLONLY     Reject IDENTIFY; require SASL PLAIN authentication.
+
+ACCOUNTINFO [account|#channel]
+    Display registration information for an account or registered channel.
+    If no argument is given, shows your own account information.
+
+
+Channel services
+----------------
+
+CREGISTER <#channel>
+    Register a channel you are currently op'd in.  You become the channel
+    founder.
+
+CDROP <#channel>
+    Drop a channel registration.  Must be the channel founder or an oper
+    with oper:admin privilege.
+
+CHANSET <#channel> <flag> [value]
+    Manage a registered channel.  Flags include:
+
+    TOPICLOCK on|off    Only access-listed ops may change the topic.
+    KEEPTOPIC on|off    Restore the registered topic when the channel empties.
+    MODELOCK <modes>    Lock channel modes (e.g. MODELOCK +nt).
+    RESTRICTED on|off   Only identified users may join.
+    SECURE on|off       Only access-listed users may join.
+    GUARD on|off        Server holds a virtual presence in the channel.
+    VERBOSE on|off      Notify founder of access changes.
+    URL <url>           Set a channel URL.
+    DESC <text>         Set a channel description.
+    SUCCESSOR <account> Set a successor account (inherits channel on founder drop).
+    ACCESS LIST         List the channel access entries.
+    ACCESS ADD <entity> <level>   Add an access entry (vop/hop/aop/sop/founder).
+    ACCESS DEL <entity>           Remove an access entry.
+
+
+Memos
+-----
+
+MEMO SEND <account> <text>
+    Send a memo to another account.
+
+MEMO LIST
+    List received memos.
+
+MEMO READ <id>
+    Read a specific memo.
+
+MEMO DEL <id|ALL>
+    Delete a specific memo or all memos.
+
+
+Virtual hosts
+-------------
+
+VHOST REQUEST <hostname>
+    Request a custom virtual host for your account.  Requires operator
+    approval before activation.
+
+VHOST TAKE <hostname>
+    Activate a vhost that an operator has offered to you.
+
+VHOFFERLIST
+    List all vhosts currently offered by operators.
+
+
+Oper-only Services Commands
+===========================
+
+DROP <account>
+    Force-drop another user's account without requiring their password.
+    Removes all grouped nicks, TLS fingerprints, and the account record.
+    Online clients identified to the account are logged out immediately.
+
+    Hierarchy restriction: an oper may not force-drop an account linked
+    to an admin-level oper block (oper:admin / oper:hidden_admin).  This
+    prevents less-privileged opers from dropping admin accounts.
+
+SENDPASS <account>
+    (See above.)  Generates a reset token and notifies opers via
+    SNO_GENERAL with the token so they can relay it if email fails.
+
+ACCOUNTOPER <account> <oper-block-name|->
+    Link or unlink an account to an oper block.  When linked, SASL
+    authentication against the account also applies oper status.
+
+SUSPEND <account>
+    Prevent an account from authenticating.  Does not forcibly log out
+    currently identified users but blocks re-authentication.
+
+UNSUSPEND <account>
+    Remove a suspension.
+
+FORBID <nick|#channel>
+    Reserve a nick or channel name to prevent registration.
+
+UNFORBID <nick|#channel>
+    Remove a reservation.
+
+NOEXPIRE <account> on|off
+    Toggle the no-expiry flag on an account.
+
+CHANNOEXPIRE <#channel> on|off
+    Toggle the no-expiry flag on a channel registration.
+
+SETACCOUNT <nick> <account|->
+    Force-identify an online client to a specific account (or log them
+    out with -).
+
+
+Server Jupes
+============
+
+JUPE, UNJUPE, and JUPELIST are oper-only commands that are always
+available regardless of whether services are enabled.
+
+JUPE <servername> [:<reason>]
+    Prevent a server from linking.  If the named server is currently
+    connected, it is SQUITted immediately.  Broadcasts a global WALLOPS.
+    Jupe entries are in-memory and do not survive a restart.  For
+    permanent exclusions, use deny_server{} in ircd.conf.
+
+UNJUPE <servername>
+    Remove an active jupe.  Broadcasts a global WALLOPS.
+
+JUPELIST
+    List all active jupes with setter name, timestamp, and reason.
+
+
+IRC Protocol Integration
+========================
+
+SASL authentication
+    Accounts created via /REGISTER can authenticate at connect time
+    using SASL PLAIN or SASL EXTERNAL (TLS certificate fingerprint).
+    Successful SASL authentication returns RPL_LOGGEDIN (900).
+
+Account tags (IRCv3)
+    The ``account-tag`` capability propagates the logged-in account name
+    as a message tag on PRIVMSG and NOTICE.
+
+Extended join
+    With the ``extended-join`` capability, the JOIN message includes the
+    account name and realname so clients don't need a separate WHOIS.
+
+WHOIS 330
+    When a user is identified, WHOIS includes numeric 330
+    (RPL_WHOISACCOUNT): "<yournick> <targetnick> <account> :is logged
+    in as".
+
+Channel mode +r
+    Requires users to be identified to an account before joining.
+    Returns ERR_NEEDREGGEDNICK (477) to unidentified users.
+
+User mode +R
+    Requires senders to be identified before sending PRIVMSG or NOTICE.
+    Returns 486 to unidentified senders.  IRC operators and users on
+    the target's accept list are exempt.
+
+
+Hub / Leaf Topology
+===================
+
+On multi-server networks, one server holds the authoritative SQLite
+database (hub = yes).  Leaf servers maintain a local cache and operate
+autonomously during hub netsplits (SVCS_MODE_SPLIT).  Dirty records are
+reconciled when the hub reconnects using last-write-wins semantics.
+
+S2S sync messages (SVCS* commands):
+    SVCSREG     — account registration / update
+    SVCSDROP    — account deletion
+    SVCSPWD     — password change propagation
+    SVCSCERT    — certificate fingerprint add/remove
+    SVCSNICK    — grouped nick add/remove
+    SVCSID      — client identification notification
+    SVCSCHAN    — channel registration / update
+    SVCSCDROP   — channel deregistration
+    SVCSACCESS  — channel access list entry add/remove
+    SVCSOPER    — oper block link/unlink
+    SVCSBURST   — burst start/end marker
+    SVCSMODE    — hub/leaf mode announcement
+
+All sync messages carry an HMAC-SHA256 authentication tag keyed by the
+TLS certificate fingerprints of both link endpoints.

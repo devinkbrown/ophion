@@ -858,3 +858,112 @@ provide accountability tracking.
 ``EVENT LIST [type]``
     List current event subscriptions. If a type is given, show only
     that subscription.
+
+JUPE
+----
+
+::
+
+   JUPE <servername> [:<reason>]
+
+Prevent a server from linking to the network. If the named server is
+currently connected, it is immediately disconnected (SQUITted). The server
+name is added to an in-memory jupe list; any subsequent attempt by that
+server to link is refused with the jupe reason until the jupe is removed.
+
+A global ``WALLOPS`` is broadcast so all opers with ``+w`` are notified.
+Jupe entries are stored in memory only — they do not survive a daemon
+restart. For permanent exclusions, use ``deny_server{}`` in ``ircd.conf``.
+
+Requires IRC operator status.
+
+::
+
+   UNJUPE <servername>
+
+Remove an active jupe, allowing the server to link again. Broadcasts a
+global ``WALLOPS`` confirming the removal.
+
+::
+
+   JUPELIST
+
+List all currently active jupes, including which oper set each one, when
+it was set, and the reason.
+
+Services oper commands
+----------------------
+
+The following commands are provided by the built-in services layer
+(``services { enabled = yes; }`` in ``ircd.conf``). They require IRC
+operator status.
+
+::
+
+   DROP <account>
+
+Force-drop another user's account without requiring their password.
+Removes all grouped nicks, TLS certificate fingerprints, and the account
+record itself. Any online clients currently identified to the account are
+logged out immediately. All changes are synced network-wide.
+
+**Hierarchy restriction:** An oper may not force-drop an account that is
+linked to an admin-level oper block (``oper:admin`` or
+``oper:hidden_admin`` privilege). This protects admin accounts from being
+dropped by less-privileged opers. An account holder can always self-drop
+with ``DROP <password>`` regardless of their oper link.
+
+::
+
+   SENDPASS <account>
+
+Generate a one-time password reset token for the named account and
+(optionally) deliver it by email via sendmail. Regardless of email
+availability, opers receive the token in a ``SNO_GENERAL`` server notice
+so they can relay it manually:
+
+   ``SENDPASS: reset token for account <name> requested by ... — token: <hex> (valid 15 min)``
+
+The response always looks the same whether or not the account exists,
+preventing account enumeration.
+
+The account holder then resets their password with::
+
+   SENDPASS <account> <token> <new-password>
+
+Tokens expire after 15 minutes. Only one pending token exists per account
+at a time; issuing a new request replaces the previous token.
+
+::
+
+   SUSPEND <account>
+   UNSUSPEND <account>
+
+Suspend or unsuspend an account. Suspended accounts cannot authenticate
+via IDENTIFY or SASL. Online clients identified to a suspended account
+are not forcibly logged out, but cannot re-authenticate after disconnect.
+
+::
+
+   FORBID <nick|#channel>
+   UNFORBID <nick|#channel>
+
+Reserve a nick or channel name so that it cannot be registered. Adds a
+temporary RESV for nicks. UNFORBID removes the reservation.
+
+::
+
+   ACCOUNTOPER <account> <oper-block-name|->
+
+Link (or unlink with ``-``) an account to an oper block. When linked,
+successful SASL authentication against that account also applies oper
+status using the referenced block. Useful for allowing oper-up via SASL
+without maintaining a separate oper password.
+
+::
+
+   NOEXPIRE <account> on|off
+   CHANNOEXPIRE <#channel> on|off
+
+Toggle the no-expiry flag on a nick or channel registration. Accounts and
+channels with this flag never expire regardless of inactivity.
