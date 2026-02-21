@@ -58,6 +58,7 @@
 #include "monitor.h"
 #include "patchlevel.h"
 #include "serno.h"
+#include "services.h"
 #include "sslproc.h"
 #include "wsproc.h"
 #include "chmode.h"
@@ -240,6 +241,7 @@ ircd_shutdown(const char *reason)
 			me.name, reason);
 	}
 
+	services_shutdown();
 	ilog(L_MAIN, "Server Terminating. %s", reason);
 	close_logfiles();
 
@@ -925,6 +927,10 @@ charybdis_main(int argc, char * const argv[])
 	write_pidfile(pidFileName);
 	load_help();
 	open_logfiles();
+
+	/* Initialise the built-in services layer (NickServ, ChanServ, etc.).
+	 * Must be called after config is read and modules are loaded. */
+	services_init();
 
 	configure_authd();
 
