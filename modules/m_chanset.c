@@ -250,8 +250,8 @@ chanset_access_add(struct Client *source_p, struct svc_chanreg *reg,
 			rb_strlcpy(ca->setter, source_p->user->suser, sizeof(ca->setter));
 			ca->set_ts = rb_current_time();
 			svc_db_chanaccess_add(reg->channel, ca);
-			svc_db_chanreg_save(reg);
-			svc_sync_chanreg(reg);
+			/* Targeted access-entry sync — no need to burst full chanreg */
+			svc_sync_chanaccess_set(reg, ca);
 			svc_notice(source_p, "ChanServ",
 				"Updated access for \2%s\2 on %s to 0x%08x.",
 				entity, reg->channel, flags);
@@ -269,8 +269,8 @@ chanset_access_add(struct Client *source_p, struct svc_chanreg *reg,
 	rb_dlinkAddTail(ca, &ca->node, &reg->access);
 
 	svc_db_chanaccess_add(reg->channel, ca);
-	svc_db_chanreg_save(reg);
-	svc_sync_chanreg(reg);
+	/* Targeted access-entry sync */
+	svc_sync_chanaccess_set(reg, ca);
 
 	svc_notice(source_p, "ChanServ",
 		"Added \2%s\2 to access list of %s with flags 0x%08x.",
@@ -294,8 +294,8 @@ chanset_access_del(struct Client *source_p, struct svc_chanreg *reg,
 		{
 			rb_dlinkDelete(ptr, &reg->access);
 			svc_db_chanaccess_delete(reg->channel, entity);
-			svc_db_chanreg_save(reg);
-			svc_sync_chanreg(reg);
+			/* Targeted access-entry sync — no need to burst full chanreg */
+			svc_sync_chanaccess_del(reg->channel, entity);
 			rb_free(ca);
 			svc_notice(source_p, "ChanServ",
 				"Removed \2%s\2 from access list of %s.",

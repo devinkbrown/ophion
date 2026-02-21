@@ -197,17 +197,12 @@ services_enter_connected_mode(struct Client *hub_p)
 	services.hub_server = hub_p;
 	ilog(L_MAIN, "services: entered CONNECTED mode (hub: %s)",
 	     hub_p ? hub_p->name : "<unknown>");
-
 	/*
-	 * Flush any records dirtied during the split back to the hub now
-	 * that we are reconnected.  svc_db_flush_dirty() returns the number
-	 * of records written; log it so operators can monitor reconciliation.
+	 * Do NOT flush dirty records here — they are still needed by the
+	 * ms_svcsburst() SVCSBURST-0 handler which sends them to the hub
+	 * via S2S SVCSREG/SVCSCHAN after the burst completes.  Flushing here
+	 * would clear the dirty flags prematurely before the S2S sync runs.
 	 */
-	int flushed = svc_db_flush_dirty();
-	if(flushed > 0)
-		ilog(L_MAIN,
-		     "services: flushed %d dirty record(s) to hub after split",
-		     flushed);
 }
 
 void

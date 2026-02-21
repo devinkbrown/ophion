@@ -399,6 +399,61 @@ svc_sync_server_lost(struct Client *server_p)
  * Hub → leaf burst
  * ========================================================================= */
 
+/* =========================================================================
+ * Internal helper: build SVCSREG payload string (shared by burst and prop)
+ *
+ * Format: "name passhash email ts flags oper_block vhost"
+ * ========================================================================= */
+static void
+build_svcsreg_payload(struct svc_account *acct, char *buf, size_t bufsz)
+{
+	snprintf(buf, bufsz,
+	         "%s %s %s %ld %u %s %s",
+	         acct->name, acct->passhash, acct->email,
+	         (long)acct->registered_ts, acct->flags,
+	         *acct->oper_block ? acct->oper_block : "-",
+	         *acct->vhost      ? acct->vhost      : "-");
+}
+
+/* =========================================================================
+ * Internal helper: build SVCSCHAN payload string (shared by burst and prop)
+ *
+ * Format: "channel founder ts flags mlock_on mlock_off mlock_limit mlock_key topic"
+ *
+ * Topic is always last; spaces in topic are preserved because the IRC
+ * message puts topic as the trailing parameter (after the hmac field so
+ * the hmac itself can be a fixed-position token).
+ *
+ * Message wire format:
+ *   SVCSCHAN channel founder ts flags mlock_on mlock_off mlock_limit
+ *            mlock_key hmac :topic
+ * ========================================================================= */
+static void
+build_svcschan_payload(struct svc_chanreg *reg, char *buf, size_t bufsz)
+{
+	snprintf(buf, bufsz,
+	         "%s %s %ld %u %u %u %d %s %s",
+	         reg->channel, reg->founder,
+	         (long)reg->registered_ts, reg->flags,
+	         reg->mlock_on, reg->mlock_off, reg->mlock_limit,
+	         *reg->mlock_key ? reg->mlock_key : "-",
+	         *reg->topic     ? reg->topic     : "-");
+}
+
+/* =========================================================================
+ * Hub → leaf burst
+ *
+ * Order:
+ *   1. SVCSMODE HUB
+ *   2. SVCSBURST <account_count>
+ *   3. SVCSREG × N           (all accounts)
+ *   4. SVCSCERT ADD × M      (all certfps)
+ *   5. SVCSNICK ADD × P      (all grouped nicks)
+ *   6. SVCSCHAN × Q          (all channel registrations)
+ *   7. SVCSACCESS SET × R    (all channel access entries)
+ *   8. SVCSBURST 0           (burst end marker)
+ * ========================================================================= */
+
 void
 svc_sync_burst_to(struct Client *server_p)
 {
@@ -414,63 +469,114 @@ svc_sync_burst_to(struct Client *server_p)
 	RB_RADIXTREE_FOREACH(acct, &iter, svc_account_dict)
 		count++;
 
-	/* Announce our hub mode */
+	/* Announce hub mode so the leaf knows who the authoritative server is */
 	sendto_one(server_p, ":%s SVCSMODE HUB", me.id);
 
-	/* Burst start marker */
+	/* Burst start marker — count lets the leaf pre-allocate and log */
 	sendto_one(server_p, ":%s SVCSBURST %d", me.id, count);
 
-	/* Send all accounts */
+	/* ---- Phase 1: Account records ---------------------------------------- */
 	RB_RADIXTREE_FOREACH(acct, &iter, svc_account_dict) {
-		char hmac[65];
 		char payload[BUFSIZE];
-		snprintf(payload, sizeof(payload),
-		         "%s %s %s %ld %u %s",
-		         acct->name, acct->passhash, acct->email,
-		         (long)acct->registered_ts, acct->flags,
-		         *acct->oper_block ? acct->oper_block : "-");
+		build_svcsreg_payload(acct, payload, sizeof(payload));
 
-		svc_sync_hmac(me.certfp,
-		              server_p->certfp,
-		              payload, strlen(payload),
-		              hmac, sizeof(hmac));
+		char hmac[65];
+		svc_sync_hmac(me.certfp, server_p->certfp,
+		              payload, strlen(payload), hmac, sizeof(hmac));
 
 		sendto_one(server_p,
-		           ":%s SVCSREG %s %s %s %ld %u %s %s",
+		           ":%s SVCSREG %s %s %s %ld %u %s %s %s",
 		           me.id,
-		           acct->name,
-		           acct->passhash,
-		           acct->email,
-		           (long)acct->registered_ts,
-		           acct->flags,
+		           acct->name, acct->passhash, acct->email,
+		           (long)acct->registered_ts, acct->flags,
 		           *acct->oper_block ? acct->oper_block : "-",
+		           *acct->vhost      ? acct->vhost      : "-",
 		           hmac);
 	}
 
-	/* Send all channel registrations */
-	RB_RADIXTREE_FOREACH(reg, &iter, svc_chanreg_dict) {
-		char hmac[65];
-		char payload[BUFSIZE];
-		snprintf(payload, sizeof(payload),
-		         "%s %s %ld %u %s",
-		         reg->channel, reg->founder,
-		         (long)reg->registered_ts, reg->flags,
-		         *reg->topic ? reg->topic : "-");
+	/* ---- Phase 2: Certificate fingerprints -------------------------------- */
+	RB_RADIXTREE_FOREACH(acct, &iter, svc_account_dict) {
+		rb_dlink_node *ptr;
+		RB_DLINK_FOREACH(ptr, acct->certfps.head) {
+			struct svc_certfp *cf = ptr->data;
+			char payload[BUFSIZE];
+			snprintf(payload, sizeof(payload), "%s ADD %s %ld",
+			         acct->name, cf->fingerprint, (long)cf->added_ts);
 
-		svc_sync_hmac(me.certfp,
-		              server_p->certfp,
-		              payload, strlen(payload),
-		              hmac, sizeof(hmac));
+			char hmac[65];
+			svc_sync_hmac(me.certfp, server_p->certfp,
+			              payload, strlen(payload), hmac, sizeof(hmac));
+
+			sendto_one(server_p,
+			           ":%s SVCSCERT %s ADD %s %ld %s",
+			           me.id, acct->name, cf->fingerprint,
+			           (long)cf->added_ts, hmac);
+		}
+	}
+
+	/* ---- Phase 3: Grouped nicks ------------------------------------------ */
+	RB_RADIXTREE_FOREACH(acct, &iter, svc_account_dict) {
+		rb_dlink_node *ptr;
+		RB_DLINK_FOREACH(ptr, acct->nicks.head) {
+			struct svc_nick *sn = ptr->data;
+			char payload[BUFSIZE];
+			snprintf(payload, sizeof(payload), "ADD %s %s %ld",
+			         sn->nick, acct->name, (long)sn->registered_ts);
+
+			char hmac[65];
+			svc_sync_hmac(me.certfp, server_p->certfp,
+			              payload, strlen(payload), hmac, sizeof(hmac));
+
+			sendto_one(server_p,
+			           ":%s SVCSNICK ADD %s %s %ld %s",
+			           me.id, sn->nick, acct->name,
+			           (long)sn->registered_ts, hmac);
+		}
+	}
+
+	/* ---- Phase 4: Channel registrations ---------------------------------- */
+	RB_RADIXTREE_FOREACH(reg, &iter, svc_chanreg_dict) {
+		char payload[BUFSIZE];
+		build_svcschan_payload(reg, payload, sizeof(payload));
+
+		char hmac[65];
+		svc_sync_hmac(me.certfp, server_p->certfp,
+		              payload, strlen(payload), hmac, sizeof(hmac));
 
 		sendto_one(server_p,
-		           ":%s SVCSCHAN %s %s %ld %u :%s %s",
+		           ":%s SVCSCHAN %s %s %ld %u %u %u %d %s %s :%s",
 		           me.id,
-		           reg->channel,
-		           reg->founder,
-		           (long)reg->registered_ts,
-		           reg->flags,
-		           *reg->topic ? reg->topic : "-",
-		           hmac);
+		           reg->channel, reg->founder,
+		           (long)reg->registered_ts, reg->flags,
+		           reg->mlock_on, reg->mlock_off, reg->mlock_limit,
+		           *reg->mlock_key ? reg->mlock_key : "-",
+		           hmac,
+		           *reg->topic ? reg->topic : "-");
+	}
+
+	/* ---- Phase 5: Channel access entries --------------------------------- */
+	RB_RADIXTREE_FOREACH(reg, &iter, svc_chanreg_dict) {
+		rb_dlink_node *ptr;
+		RB_DLINK_FOREACH(ptr, reg->access.head) {
+			struct svc_chanaccess *ca = ptr->data;
+			char payload[BUFSIZE];
+			snprintf(payload, sizeof(payload),
+			         "SET %s %s %u %s %ld",
+			         reg->channel, ca->entity, ca->flags,
+			         *ca->setter ? ca->setter : "-",
+			         (long)ca->set_ts);
+
+			char hmac[65];
+			svc_sync_hmac(me.certfp, server_p->certfp,
+			              payload, strlen(payload), hmac, sizeof(hmac));
+
+			sendto_one(server_p,
+			           ":%s SVCSACCESS SET %s %s %u %s %ld %s",
+			           me.id,
+			           reg->channel, ca->entity, ca->flags,
+			           *ca->setter ? ca->setter : "-",
+			           (long)ca->set_ts, hmac);
+		}
 	}
 
 	/* Burst end marker */
@@ -483,9 +589,10 @@ svc_sync_burst_to(struct Client *server_p)
  * Each sends the appropriate S2S message to all servers using
  * sendto_server(NULL, NULL, CAP_TS6, NOCAPS, ...).
  *
- * HMAC is computed with me.certfp as both key components in this
- * simplified broadcast path; per-link HMACs with individual peer certfps
- * are left for future enhancement.
+ * HMAC uses me.certfp for both endpoints in the broadcast path (all links
+ * share a key derived from our own cert).  Per-link HMACs with individual
+ * peer certfps would require iterating over server list — left as a future
+ * enhancement for very high-security deployments.
  * ========================================================================= */
 
 void
@@ -495,25 +602,19 @@ svc_sync_account_reg(struct svc_account *acct)
 		return;
 
 	char payload[BUFSIZE];
-	snprintf(payload, sizeof(payload),
-	         "%s %s %s %ld %u %s",
-	         acct->name, acct->passhash, acct->email,
-	         (long)acct->registered_ts, acct->flags,
-	         *acct->oper_block ? acct->oper_block : "-");
+	build_svcsreg_payload(acct, payload, sizeof(payload));
 
 	char hmac[65];
 	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
 	              hmac, sizeof(hmac));
 
 	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
-	              ":%s SVCSREG %s %s %s %ld %u %s %s",
+	              ":%s SVCSREG %s %s %s %ld %u %s %s %s",
 	              me.id,
-	              acct->name,
-	              acct->passhash,
-	              acct->email,
-	              (long)acct->registered_ts,
-	              acct->flags,
+	              acct->name, acct->passhash, acct->email,
+	              (long)acct->registered_ts, acct->flags,
 	              *acct->oper_block ? acct->oper_block : "-",
+	              *acct->vhost      ? acct->vhost      : "-",
 	              hmac);
 }
 
@@ -538,9 +639,10 @@ svc_sync_account_pwd(struct svc_account *acct)
 	if(!services.enabled || acct == NULL)
 		return;
 
+	time_t now = rb_current_time();
 	char payload[BUFSIZE];
 	snprintf(payload, sizeof(payload), "%s %s %ld",
-	         acct->name, acct->passhash, (long)rb_current_time());
+	         acct->name, acct->passhash, (long)now);
 
 	char hmac[65];
 	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
@@ -548,11 +650,7 @@ svc_sync_account_pwd(struct svc_account *acct)
 
 	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 	              ":%s SVCSPWD %s %s %ld %s",
-	              me.id,
-	              acct->name,
-	              acct->passhash,
-	              (long)rb_current_time(),
-	              hmac);
+	              me.id, acct->name, acct->passhash, (long)now, hmac);
 }
 
 void
@@ -562,10 +660,10 @@ svc_sync_account_certfp(struct svc_account *acct,
 	if(!services.enabled || acct == NULL || certfp == NULL)
 		return;
 
+	time_t now = rb_current_time();
 	char payload[BUFSIZE];
 	snprintf(payload, sizeof(payload), "%s %s %s %ld",
-	         acct->name, adding ? "ADD" : "DEL", certfp,
-	         (long)rb_current_time());
+	         acct->name, adding ? "ADD" : "DEL", certfp, (long)now);
 
 	char hmac[65];
 	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
@@ -573,12 +671,8 @@ svc_sync_account_certfp(struct svc_account *acct,
 
 	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 	              ":%s SVCSCERT %s %s %s %ld %s",
-	              me.id,
-	              acct->name,
-	              adding ? "ADD" : "DEL",
-	              certfp,
-	              (long)rb_current_time(),
-	              hmac);
+	              me.id, acct->name,
+	              adding ? "ADD" : "DEL", certfp, (long)now, hmac);
 }
 
 void
@@ -587,9 +681,9 @@ svc_sync_account_oper(struct svc_account *acct)
 	if(!services.enabled || acct == NULL)
 		return;
 
-	const char *oper_block = *acct->oper_block ? acct->oper_block : "-";
+	const char *ob = *acct->oper_block ? acct->oper_block : "-";
 	char payload[BUFSIZE];
-	snprintf(payload, sizeof(payload), "%s %s", acct->name, oper_block);
+	snprintf(payload, sizeof(payload), "%s %s", acct->name, ob);
 
 	char hmac[65];
 	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
@@ -597,7 +691,7 @@ svc_sync_account_oper(struct svc_account *acct)
 
 	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 	              ":%s SVCSOPER %s %s %s",
-	              me.id, acct->name, oper_block, hmac);
+	              me.id, acct->name, ob, hmac);
 }
 
 void
@@ -606,7 +700,11 @@ svc_sync_client_id(struct Client *client_p, struct svc_account *acct)
 	if(!services.enabled || client_p == NULL || acct == NULL)
 		return;
 
-	/* No HMAC for SVCSID — transient state already over TLS */
+	/*
+	 * SVCSID propagates client→account identification network-wide.
+	 * No HMAC: this is transient session state, already protected by TLS,
+	 * and the receiving server validates the account name exists.
+	 */
 	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 	              ":%s SVCSID %s %s",
 	              me.id, use_id(client_p), acct->name);
@@ -619,24 +717,29 @@ svc_sync_chanreg(struct svc_chanreg *reg)
 		return;
 
 	char payload[BUFSIZE];
-	snprintf(payload, sizeof(payload), "%s %s %ld %u %s",
-	         reg->channel, reg->founder,
-	         (long)reg->registered_ts, reg->flags,
-	         *reg->topic ? reg->topic : "-");
+	build_svcschan_payload(reg, payload, sizeof(payload));
 
 	char hmac[65];
 	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
 	              hmac, sizeof(hmac));
 
+	/*
+	 * Wire format:
+	 *   SVCSCHAN channel founder ts flags mlock_on mlock_off
+	 *            mlock_limit mlock_key hmac :topic
+	 *
+	 * hmac is a fixed-position token; topic is the trailing parameter
+	 * (after ':') so it can safely contain spaces.
+	 */
 	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
-	              ":%s SVCSCHAN %s %s %ld %u :%s %s",
+	              ":%s SVCSCHAN %s %s %ld %u %u %u %d %s %s :%s",
 	              me.id,
-	              reg->channel,
-	              reg->founder,
-	              (long)reg->registered_ts,
-	              reg->flags,
-	              *reg->topic ? reg->topic : "-",
-	              hmac);
+	              reg->channel, reg->founder,
+	              (long)reg->registered_ts, reg->flags,
+	              reg->mlock_on, reg->mlock_off, reg->mlock_limit,
+	              *reg->mlock_key ? reg->mlock_key : "-",
+	              hmac,
+	              *reg->topic ? reg->topic : "-");
 }
 
 void
@@ -652,4 +755,84 @@ svc_sync_chandrop(const char *channel)
 	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
 	              ":%s SVCSCDROP %s %s",
 	              me.id, channel, hmac);
+}
+
+void
+svc_sync_chanaccess_set(struct svc_chanreg *reg, struct svc_chanaccess *ca)
+{
+	if(!services.enabled || reg == NULL || ca == NULL)
+		return;
+
+	char payload[BUFSIZE];
+	snprintf(payload, sizeof(payload),
+	         "SET %s %s %u %s %ld",
+	         reg->channel, ca->entity, ca->flags,
+	         *ca->setter ? ca->setter : "-",
+	         (long)ca->set_ts);
+
+	char hmac[65];
+	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
+	              hmac, sizeof(hmac));
+
+	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+	              ":%s SVCSACCESS SET %s %s %u %s %ld %s",
+	              me.id,
+	              reg->channel, ca->entity, ca->flags,
+	              *ca->setter ? ca->setter : "-",
+	              (long)ca->set_ts, hmac);
+}
+
+void
+svc_sync_chanaccess_del(const char *channel, const char *entity)
+{
+	if(!services.enabled || channel == NULL || entity == NULL)
+		return;
+
+	char payload[BUFSIZE];
+	snprintf(payload, sizeof(payload), "DEL %s %s", channel, entity);
+
+	char hmac[65];
+	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
+	              hmac, sizeof(hmac));
+
+	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+	              ":%s SVCSACCESS DEL %s %s %s",
+	              me.id, channel, entity, hmac);
+}
+
+void
+svc_sync_nick_group(const char *nick, const char *account_name, time_t ts)
+{
+	if(!services.enabled || nick == NULL || account_name == NULL)
+		return;
+
+	char payload[BUFSIZE];
+	snprintf(payload, sizeof(payload), "ADD %s %s %ld",
+	         nick, account_name, (long)ts);
+
+	char hmac[65];
+	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
+	              hmac, sizeof(hmac));
+
+	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+	              ":%s SVCSNICK ADD %s %s %ld %s",
+	              me.id, nick, account_name, (long)ts, hmac);
+}
+
+void
+svc_sync_nick_ungroup(const char *nick)
+{
+	if(!services.enabled || nick == NULL)
+		return;
+
+	char payload[BUFSIZE];
+	snprintf(payload, sizeof(payload), "DEL %s", nick);
+
+	char hmac[65];
+	svc_sync_hmac(me.certfp, me.certfp, payload, strlen(payload),
+	              hmac, sizeof(hmac));
+
+	sendto_server(NULL, NULL, CAP_TS6, NOCAPS,
+	              ":%s SVCSNICK DEL %s %s",
+	              me.id, nick, hmac);
 }

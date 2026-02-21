@@ -555,7 +555,18 @@ svc_db_account_save(struct svc_account *acct)
 	}
 
 	db_exec("COMMIT;");
-	acct->dirty = false;
+	/*
+	 * In SPLIT mode (hub unreachable) keep dirty=true so the reconnect
+	 * handler in ms_svcsburst() can re-sync this record to the hub.
+	 * In all other modes a successful save means the record is clean.
+	 */
+	if(services.mode == SVCS_MODE_SPLIT) {
+		if(!acct->dirty)
+			services.dirty_count++;
+		acct->dirty = true;
+	} else {
+		acct->dirty = false;
+	}
 	return true;
 }
 
@@ -967,7 +978,14 @@ svc_db_chanreg_save(struct svc_chanreg *reg)
 	}
 
 	db_exec("COMMIT;");
-	reg->dirty = false;
+	/* Same split-mode dirty-flag logic as svc_db_account_save() */
+	if(services.mode == SVCS_MODE_SPLIT) {
+		if(!reg->dirty)
+			services.dirty_count++;
+		reg->dirty = true;
+	} else {
+		reg->dirty = false;
+	}
 	return true;
 }
 

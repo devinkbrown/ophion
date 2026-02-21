@@ -116,6 +116,7 @@ m_group(struct MsgBuf *msgbuf_p, struct Client *client_p,
 	}
 
 	/* Add the nick to the group. */
+	time_t now = rb_current_time();
 	if(!svc_db_nick_add(nick, acct->name))
 	{
 		svc_notice(source_p, "Services",
@@ -123,8 +124,8 @@ m_group(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		return;
 	}
 
-	/* Propagate the change to the network. */
-	svc_sync_account_reg(acct);
+	/* Propagate just the nick add; no need to burst the full account. */
+	svc_sync_nick_group(nick, acct->name, now);
 
 	svc_notice(source_p, "Services",
 		"Nick \2%s\2 has been added to your account group.", nick);
@@ -210,8 +211,8 @@ m_ungroup(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		return;
 	}
 
-	/* Propagate. */
-	svc_sync_account_reg(acct);
+	/* Propagate just the nick removal; leaves update their nick index. */
+	svc_sync_nick_ungroup(nick);
 
 	svc_notice(source_p, "Services",
 		"Nick \2%s\2 has been removed from your account group.", nick);

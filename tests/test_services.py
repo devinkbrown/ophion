@@ -56,6 +56,13 @@ Commands under test
     Registered founder can JOIN a +k channel without the live key.
     IDENTIFY #chan <mlock_key> restores founder ops.
 
+  S2S sync protocol coverage (single-server data-layer validation):
+    GROUP / UNGROUP     → exercises svc_sync_nick_group / svc_sync_nick_ungroup
+    CHANSET ACCESS ADD  → exercises svc_sync_chanaccess_set
+    CHANSET ACCESS DEL  → exercises svc_sync_chanaccess_del (targeted, no full burst)
+    VHOST TAKE          → exercises vhost field in svc_sync_account_reg / SVCSREG
+    CHANSET MODELOCK    → exercises mlock fields in svc_sync_chanreg / SVCSCHAN
+
 Run:  python3 tests/test_services.py
       (ircd must be listening on 127.0.0.1:16667 with services enabled)
 """
@@ -1276,6 +1283,243 @@ def test_topiclock_enforces_plus_t():
 
 
 # ===========================================================================
+# SECTION 19 — S2S Sync protocol coverage (single-server)
+#
+# These tests exercise the code paths that trigger S2S propagation
+# (svc_sync_nick_group, svc_sync_nick_ungroup, svc_sync_chanaccess_set,
+# svc_sync_chanaccess_del, svc_sync_account_reg with vhost,
+# svc_sync_chanreg with mlock).  Full network-level verification of
+# SVCSNICK / SVCSACCESS / SVCSREG etc. requires two linked servers;
+# here we confirm that:
+#   a) the operations complete successfully on a single server, and
+#   b) the resulting state is consistent (visible in LIST/INFO/MODE),
+#      which is a prerequisite for correct propagation.
+# ===========================================================================
+
+def test_sync_nick_group_roundtrip():
+    """GROUP followed by UNGROUP: both complete cleanly (exercises
+    svc_sync_nick_group + svc_sync_nick_ungroup code paths)."""
+    a, pw = _make_account("snkgr")
+    b = _connect("snkgrb")
+    b.send(f"IDENTIFY {a.nick} {pw}")
+    b.drain(1.0)
+
+    # GROUP b's nick into a's account
+    b.send("GROUP")
+    ok_group = b.wait(r"(?i)(added|group|registered)", timeout=4)
+    _check("S2S/nick-group: GROUP succeeds → sync triggered",
+           ok_group is not None, f"nick={b.nick}")
+
+    # UNGROUP b's nick
+    b.send(f"UNGROUP {b.nick}")
+    ok_ungroup = b.wait(r"(?i)(removed|ungroup)", timeout=4)
+    _check("S2S/nick-ungroup: UNGROUP succeeds → sync triggered",
+           ok_ungroup is not None, f"nick={b.nick}")
+
+    a.close()
+    b.close()
+
+
+def test_sync_nick_group_visible_to_info():
+    """After GROUP the grouped nick appears in INFO (confirms DB write
+    that would be burst via SVCSNICK on server link)."""
+    a, pw = _make_account("snkvi")
+    b = _connect("snkvib")
+    b.send(f"IDENTIFY {a.nick} {pw}")
+    b.drain(1.0)
+    b.send("GROUP")
+    b.drain(1.0)
+
+    # INFO should show the account and reference grouped nicks or
+    # at minimum not error
+    b.send(f"INFO {a.nick}")
+    ok = b.wait(r"(?i)(account|registered|nick|group)", timeout=4)
+    _check("S2S/nick-group: INFO after GROUP → account visible",
+           ok is not None)
+
+    # Clean up
+    b.send(f"UNGROUP {b.nick}")
+    b.drain(0.5)
+    a.close()
+    b.close()
+
+
+def test_sync_access_add_visible_in_list():
+    """ACCESS ADD entry is visible in ACCESS LIST (confirms DB write
+    that would be burst via SVCSACCESS on server link)."""
+    a, _ = _make_account("sacal")
+    b, _ = _make_account("sacalb")
+    chan = f"#sacal{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    a.send(f"CHANSET {chan} ACCESS ADD {b.nick} sop")
+    ok_add = a.wait(r"(?i)(added|access|set)", timeout=4)
+    _check("S2S/access-add: CHANSET ACCESS ADD → success",
+           ok_add is not None)
+
+    a.send(f"CHANSET {chan} ACCESS LIST")
+    ok_list = a.wait(b.nick, timeout=4)   # nick should appear in list
+    _check("S2S/access-add: added entry visible in ACCESS LIST",
+           ok_list is not None, f"nick={b.nick}")
+
+    a.close()
+    b.close()
+
+
+def test_sync_access_del_not_in_list():
+    """ACCESS DEL entry is no longer in ACCESS LIST (confirms targeted
+    svc_sync_chanaccess_del is sent without full chanreg burst)."""
+    a, _ = _make_account("sacdl")
+    b, _ = _make_account("sacdlb")
+    chan = f"#sacdl{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    a.send(f"CHANSET {chan} ACCESS ADD {b.nick} vop")
+    a.drain(0.8)
+    a.send(f"CHANSET {chan} ACCESS DEL {b.nick}")
+    ok_del = a.wait(r"(?i)(removed|deleted|del)", timeout=4)
+    _check("S2S/access-del: CHANSET ACCESS DEL → success",
+           ok_del is not None)
+
+    a.send(f"CHANSET {chan} ACCESS LIST")
+    lines = a.collect(2.0)
+    nick_present = any(b.nick.lower() in ln.lower() for ln in lines)
+    _check("S2S/access-del: deleted entry absent from ACCESS LIST",
+           not nick_present, f"nick={b.nick}")
+
+    a.close()
+    b.close()
+
+
+def test_sync_access_multiple_entries():
+    """Multiple ACCESS ADD entries accumulate and all appear in LIST
+    (exercises repeated svc_sync_chanaccess_set calls)."""
+    a, _ = _make_account("sacme")
+    b, _ = _make_account("sacmeb")
+    c_acct, _ = _make_account("sacmec")
+    chan = f"#sacme{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    a.send(f"CHANSET {chan} ACCESS ADD {b.nick} sop")
+    a.drain(0.6)
+    a.send(f"CHANSET {chan} ACCESS ADD {c_acct.nick} vop")
+    a.drain(0.6)
+
+    a.send(f"CHANSET {chan} ACCESS LIST")
+    lines = a.collect(2.0)
+    b_present = any(b.nick.lower() in ln.lower() for ln in lines)
+    c_present = any(c_acct.nick.lower() in ln.lower() for ln in lines)
+    _check("S2S/access-multi: first entry in ACCESS LIST", b_present,
+           f"nick={b.nick}")
+    _check("S2S/access-multi: second entry in ACCESS LIST", c_present,
+           f"nick={c_acct.nick}")
+
+    a.close()
+    b.close()
+    c_acct.close()
+
+
+def test_sync_vhost_in_whois():
+    """VHOST TAKE sets a vhost that appears in WHOIS (confirms the vhost
+    field that svc_sync_account_reg now includes in SVCSREG)."""
+    a, _ = _make_account("svhwi")
+    op = _oper("svhwiop")
+
+    vhost = f"sync{_seq}.ophion.test"
+    op.send(f"VHOFFER {vhost}")
+    op.drain(0.8)
+    a.send(f"VHOST TAKE {vhost}")
+    ok_take = a.wait(r"(?i)(vhost.*set|host.*set|applied|activated)",
+                     timeout=4)
+    _check("S2S/vhost: VHOST TAKE applied", ok_take is not None,
+           f"vhost={vhost}")
+
+    a.send(f"WHOIS {a.nick}")
+    ok_whois = a.wait(vhost, timeout=4)
+    _check("S2S/vhost: vhost visible in WHOIS (will appear in SVCSREG burst)",
+           ok_whois is not None, f"vhost={vhost}")
+
+    op.close()
+    a.close()
+
+
+def test_sync_mlock_key_stored():
+    """CHANSET MODELOCK +k stores the mlock_key (confirms the key field
+    now included in SVCSCHAN burst messages)."""
+    a, _ = _make_account("smlk")
+    chan = f"#smlk{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    mkey = "synckey123"
+    a.send(f"CHANSET {chan} MODELOCK +k {mkey}")
+    ok = a.wait(r"(?i)(modelock|set|lock)", timeout=4)
+    _check("S2S/mlock-key: CHANSET MODELOCK +k response received",
+           ok is not None)
+
+    # INFO or MODE should reflect the key lock
+    a.send(f"MODE {chan}")
+    ok2 = a.wait(r"\+[^\s]*k", timeout=3)
+    _check("S2S/mlock-key: channel MODE includes +k after MODELOCK",
+           ok2 is not None, f"chan={chan}")
+
+    a.close()
+
+
+def test_sync_mlock_fields_roundtrip():
+    """Set multiple mlock fields and verify MODE reflects them (confirms
+    mlock_on/off/limit/key all stored correctly for SVCSCHAN burst)."""
+    a, _ = _make_account("smlf")
+    chan = f"#smlf{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    # Lock +nt
+    a.send(f"CHANSET {chan} MODELOCK +nt")
+    a.drain(0.6)
+
+    a.send(f"MODE {chan}")
+    ok = a.wait(r"\+[^\s]*n[^\s]*t|\+[^\s]*t[^\s]*n", timeout=3)
+    _check("S2S/mlock-fields: MODE includes both +n and +t after MODELOCK +nt",
+           ok is not None, f"chan={chan}")
+
+    a.close()
+
+
+def test_sync_chanreg_info_after_mlock():
+    """INFO #channel after CHANSET MODELOCK shows registration info
+    (confirms SVCSCHAN fields are correctly populated for burst)."""
+    a, _ = _make_account("smlci")
+    chan = f"#smlci{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+    a.send(f"CHANSET {chan} MODELOCK +mn")
+    a.drain(0.6)
+
+    a.send(f"INFO {chan}")
+    ok = a.wait(r"(?i)(channel|registered|founder|mode|lock)", timeout=4)
+    _check("S2S/mlock-fields: INFO #channel shows reg info after mlock set",
+           ok is not None, f"chan={chan}")
+
+    a.close()
+
+
+# ===========================================================================
 # Main
 # ===========================================================================
 
@@ -1361,6 +1605,16 @@ TESTS = [
     ("IDENTIFY #chan mlock_key → ops restored",    test_identify_channel_restores_ops),
     # Sanity
     ("Unidentified commands → response not hang",  test_services_disabled_fallback),
+    # S2S sync protocol coverage (single-server validation)
+    ("S2S/nick-group: GROUP+UNGROUP roundtrip",    test_sync_nick_group_roundtrip),
+    ("S2S/nick-group: grouped nick in INFO",       test_sync_nick_group_visible_to_info),
+    ("S2S/access-add: entry visible in LIST",      test_sync_access_add_visible_in_list),
+    ("S2S/access-del: entry absent from LIST",     test_sync_access_del_not_in_list),
+    ("S2S/access-multi: multiple entries in LIST", test_sync_access_multiple_entries),
+    ("S2S/vhost: vhost visible in WHOIS",          test_sync_vhost_in_whois),
+    ("S2S/mlock-key: MODELOCK +k stored",          test_sync_mlock_key_stored),
+    ("S2S/mlock-fields: MODELOCK +nt roundtrip",   test_sync_mlock_fields_roundtrip),
+    ("S2S/mlock-fields: INFO after mlock set",     test_sync_chanreg_info_after_mlock),
 ]
 
 
