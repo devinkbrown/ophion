@@ -303,7 +303,6 @@ isupport_nicklen(const void *ptr)
 void
 init_isupport(void)
 {
-	static int maxmodes = MAXMODEPARAMS;
 	static int channellen = LOC_CHANNELLEN;
 	static int topiclen = TOPICLEN;
 	static int maxnicklen = NICKLEN - 1;
@@ -315,7 +314,7 @@ init_isupport(void)
 	add_isupport("CHANLIMIT", isupport_chanlimit, NULL);
 	add_isupport("PREFIX", isupport_string, "(qov).@+");
 	add_isupport("MAXLIST", isupport_maxlist, NULL);
-	add_isupport("MODES", isupport_intptr, &maxmodes);
+	add_isupport("MODES", isupport_intptr, &ConfigFileEntry.max_mode_params);
 	add_isupport("NETWORK", isupport_stringptr, &ServerInfo.network_name);
 	add_isupport("STATUSMSG", isupport_string, ".@+");
 	add_isupport("CASEMAPPING", isupport_string, "rfc1459");
