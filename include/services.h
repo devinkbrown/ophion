@@ -285,6 +285,7 @@ extern struct services_state services;
 extern rb_radixtree *svc_account_dict;    /* name  → svc_account *         */
 extern rb_radixtree *svc_nick_dict;       /* nick  → svc_nick *            */
 extern rb_radixtree *svc_chanreg_dict;    /* chan  → svc_chanreg *         */
+extern rb_radixtree *svc_certfp_dict;     /* fp    → svc_account *         */
 
 /* =========================================================================
  * Core API

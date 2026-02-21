@@ -60,6 +60,7 @@ struct services_state services = {
 rb_radixtree *svc_account_dict = NULL;  /* name  → struct svc_account *  */
 rb_radixtree *svc_nick_dict    = NULL;  /* nick  → struct svc_nick *      */
 rb_radixtree *svc_chanreg_dict = NULL;  /* chan  → struct svc_chanreg *   */
+rb_radixtree *svc_certfp_dict  = NULL;  /* fp    → struct svc_account *  */
 
 /* -------------------------------------------------------------------------
  * Forward declarations of file-private functions
@@ -88,6 +89,7 @@ services_init(void)
 	svc_account_dict = rb_radixtree_create("svc_accounts", irccasecanon);
 	svc_nick_dict    = rb_radixtree_create("svc_nicks",    irccasecanon);
 	svc_chanreg_dict = rb_radixtree_create("svc_chanregs", irccasecanon);
+	svc_certfp_dict  = rb_radixtree_create("svc_certfps",  irccasecanon);
 
 	if(!svc_db_init(services.db_path))
 	{
@@ -264,49 +266,23 @@ svc_account_find_nick(const char *nick)
 }
 
 /*
- * svc_account_find_certfp — linear scan over all accounts looking for a
- * matching certificate fingerprint.  Case-insensitive comparison.
+ * svc_account_find_certfp — O(1) lookup via the secondary svc_certfp_dict.
  *
- * This is O(n*m) where n = accounts and m = certfps per account.  Given that
- * the total number of certfps across all accounts is expected to be small
- * (< few thousand), this is acceptable.  A secondary hash could be added if
- * profiling shows it is a bottleneck.
+ * Previously this was an O(n*m) radixtree_foreach over all accounts,
+ * scanning each account's certfp dlink list.  The secondary dictionary maps
+ * fingerprint → svc_account * directly, making SASL EXTERNAL authentication
+ * a single radixtree lookup regardless of network size.
+ *
+ * svc_certfp_dict is maintained in svc_db_certfp_add/delete and during the
+ * initial DB load in services_db.c.
  */
-
-struct certfp_search {
-	const char *certfp;
-	struct svc_account *result;
-};
-
-static int
-certfp_search_cb(const char *key, void *data, void *privdata)
-{
-	(void)key;
-	struct svc_account *acct = data;
-	struct certfp_search *s  = privdata;
-
-	rb_dlink_node *ptr;
-	RB_DLINK_FOREACH(ptr, acct->certfps.head)
-	{
-		struct svc_certfp *scf = ptr->data;
-		if(rb_strcasecmp(scf->fingerprint, s->certfp) == 0)
-		{
-			s->result = acct;
-			return 1; /* non-zero stops iteration */
-		}
-	}
-	return 0;
-}
-
 struct svc_account *
 svc_account_find_certfp(const char *certfp)
 {
-	if(svc_account_dict == NULL || certfp == NULL)
+	if(svc_certfp_dict == NULL || certfp == NULL)
 		return NULL;
 
-	struct certfp_search s = { .certfp = certfp, .result = NULL };
-	rb_radixtree_foreach(svc_account_dict, certfp_search_cb, &s);
-	return s.result;
+	return rb_radixtree_retrieve(svc_certfp_dict, certfp);
 }
 
 /*
@@ -370,6 +346,9 @@ svc_account_free(struct svc_account *acct)
 	RB_DLINK_FOREACH_SAFE(ptr, nptr, acct->certfps.head)
 	{
 		struct svc_certfp *scf = ptr->data;
+		/* Keep secondary certfp dict consistent */
+		if(svc_certfp_dict != NULL)
+			rb_radixtree_delete(svc_certfp_dict, scf->fingerprint);
 		rb_dlinkDestroy(ptr, &acct->certfps);
 		rb_free(scf);
 	}

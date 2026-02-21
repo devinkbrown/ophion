@@ -126,7 +126,29 @@ static const char svc_schema[] =
     "  vhost       TEXT    PRIMARY KEY,"
     "  offered_by  TEXT    NOT NULL,"
     "  offered_ts  INTEGER NOT NULL"
-    ");";
+    ");"
+
+    /*
+     * Secondary indexes — not created by the initial table DDL because the
+     * tables only declare their PRIMARY KEY constraints.  These four indexes
+     * cover the most common non-PK lookup patterns:
+     *
+     *   svc_nicks.account      — startup bulk-load "all nicks for account X"
+     *   svc_certfps.fingerprint — SASL EXTERNAL cert lookup by raw fingerprint
+     *   svc_memos.to_account    — MemoServ "get all memos for account X"
+     *   svc_chanaccess.entity   — "all channels where entity has access"
+     *
+     * Without these, each such query does a full table scan; with them the
+     * queries become single B-tree lookups — O(log n) instead of O(n).
+     */
+    "CREATE INDEX IF NOT EXISTS idx_svc_nicks_account"
+    "    ON svc_nicks(account);"
+    "CREATE INDEX IF NOT EXISTS idx_svc_certfps_fp"
+    "    ON svc_certfps(fingerprint);"
+    "CREATE INDEX IF NOT EXISTS idx_svc_memos_to_account"
+    "    ON svc_memos(to_account);"
+    "CREATE INDEX IF NOT EXISTS idx_svc_chanaccess_entity"
+    "    ON svc_chanaccess(entity);";
 
 /* -------------------------------------------------------------------------
  * Internal helpers
@@ -187,7 +209,17 @@ svc_db_init(const char *path)
 {
 	const char *db_path = (path && *path) ? path : services.db_path;
 
-	if(sqlite3_open(db_path, &svc_db) != SQLITE_OK)
+	/*
+	 * SQLITE_OPEN_NOMUTEX — the IRCd is single-threaded; SQLite's default
+	 * "serialised" threading model adds a pthread_mutex_lock/unlock pair
+	 * around every API call.  NOMUTEX selects the "multi-thread" mode which
+	 * skips those locks when only one thread uses each connection, cutting
+	 * syscall overhead on every DB operation.
+	 */
+	if(sqlite3_open_v2(db_path, &svc_db,
+	                   SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+	                   SQLITE_OPEN_NOMUTEX,
+	                   NULL) != SQLITE_OK)
 	{
 		ilog(L_MAIN, "services_db: cannot open database '%s': %s",
 		     db_path, sqlite3_errmsg(svc_db));
@@ -200,6 +232,30 @@ svc_db_init(const char *path)
 	sqlite3_exec(svc_db, "PRAGMA journal_mode = WAL;", NULL, NULL, NULL);
 	sqlite3_exec(svc_db, "PRAGMA synchronous = NORMAL;", NULL, NULL, NULL);
 	sqlite3_exec(svc_db, "PRAGMA foreign_keys = ON;", NULL, NULL, NULL);
+	/*
+	 * cache_size = -65536  →  64 MB page cache.
+	 *   Keeps hot account and channel pages in RAM; the default 2 MB fills
+	 *   up quickly on networks with tens of thousands of registrations.
+	 *   Negative value is interpreted as kibibytes by SQLite.
+	 *
+	 * mmap_size = 134217728  →  128 MB memory-mapped I/O.
+	 *   On Linux and BSD, SQLite maps this many bytes of the database file
+	 *   into the process address space.  Reads from the mapped region go
+	 *   directly from the kernel page cache to SQLite's btree without an
+	 *   extra memcpy(), halving read latency for cold-cache startup loads.
+	 *
+	 * temp_store = MEMORY  →  all temporary tables go to RAM.
+	 *   SQLite creates temp tables for complex JOINs and sorts; putting
+	 *   them in memory eliminates /tmp file I/O entirely.
+	 *
+	 * busy_timeout = 5000  →  retry WAL locks for up to 5 seconds.
+	 *   Prevents SQLITE_BUSY failures if a concurrent reader (e.g. a
+	 *   backup tool) holds the WAL read lock during startup.
+	 */
+	sqlite3_exec(svc_db, "PRAGMA cache_size   = -65536;",    NULL, NULL, NULL);
+	sqlite3_exec(svc_db, "PRAGMA mmap_size    = 134217728;", NULL, NULL, NULL);
+	sqlite3_exec(svc_db, "PRAGMA temp_store   = MEMORY;",    NULL, NULL, NULL);
+	sqlite3_exec(svc_db, "PRAGMA busy_timeout = 5000;",      NULL, NULL, NULL);
 
 	/* Create schema if needed */
 	char *errmsg = NULL;
@@ -362,6 +418,10 @@ svc_db_account_load_all(void)
 				scf->added_ts = ats;
 
 				rb_dlinkAdd(scf, &scf->node, &acct->certfps);
+				/* Populate secondary O(1) certfp → account index */
+				if(svc_certfp_dict != NULL)
+					rb_radixtree_add(svc_certfp_dict,
+					                 scf->fingerprint, acct);
 			}
 			sqlite3_finalize(cs);
 		}
@@ -746,6 +806,9 @@ svc_db_certfp_add(const char *account_name, const char *certfp)
 	rb_strlcpy(scf->fingerprint, certfp, sizeof scf->fingerprint);
 	scf->added_ts = now;
 	rb_dlinkAdd(scf, &scf->node, &acct->certfps);
+	/* Keep secondary O(1) certfp → account index in sync */
+	if(svc_certfp_dict != NULL)
+		rb_radixtree_add(svc_certfp_dict, scf->fingerprint, acct);
 	return true;
 }
 
@@ -778,6 +841,10 @@ svc_db_certfp_delete(const char *account_name, const char *certfp)
 		struct svc_certfp *scf = ptr->data;
 		if(rb_strcasecmp(scf->fingerprint, certfp) == 0)
 		{
+			/* Keep secondary O(1) certfp → account index in sync */
+			if(svc_certfp_dict != NULL)
+				rb_radixtree_delete(svc_certfp_dict,
+				                    scf->fingerprint);
 			rb_dlinkDestroy(ptr, &acct->certfps);
 			rb_free(scf);
 			break;

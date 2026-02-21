@@ -572,8 +572,34 @@ svc_sync_burst_to(struct Client *server_p)
 #if defined(TCP_CORK) || defined(TCP_NOPUSH)
 	rb_fde_t *burst_F = (server_p->localClient) ? server_p->localClient->F : NULL;
 	int cork_fd = (burst_F && !rb_fd_ssl(burst_F)) ? (int)burst_F->fd : -1;
+	int orig_sndbuf = -1;
 	if(cork_fd >= 0) {
 		int on = 1;
+		/*
+		 * SO_SNDBUF — expand the kernel send buffer to 256 KB before
+		 * the burst so the kernel can buffer the entire burst in one
+		 * shot.  Without this, a small default send buffer (often 8–
+		 * 32 KB) fills up mid-burst and forces sendto_one() into a
+		 * series of short writes, each triggering a system call and a
+		 * TCP segment.  Enlarging the buffer amortises that overhead
+		 * across the whole burst.  Restored after the burst completes.
+		 */
+#if defined(SO_SNDBUF)
+		{
+			socklen_t sndbuf_len = sizeof(orig_sndbuf);
+			if(getsockopt(cork_fd, SOL_SOCKET, SO_SNDBUF,
+			              &orig_sndbuf, &sndbuf_len) < 0)
+				orig_sndbuf = -1;
+			if(orig_sndbuf >= 0 && orig_sndbuf < 262144) {
+				int burst_sndbuf = 262144;  /* 256 KB burst window */
+				if(setsockopt(cork_fd, SOL_SOCKET, SO_SNDBUF,
+				              &burst_sndbuf, sizeof(burst_sndbuf)) < 0)
+					orig_sndbuf = -1; /* failed; nothing to restore */
+			} else {
+				orig_sndbuf = -1; /* already large; no resize needed */
+			}
+		}
+#endif /* SO_SNDBUF */
 #if defined(TCP_CORK)
 		setsockopt(cork_fd, IPPROTO_TCP, TCP_CORK, &on, sizeof(on));
 #else
@@ -581,7 +607,8 @@ svc_sync_burst_to(struct Client *server_p)
 #endif
 	}
 #else
-	int cork_fd = -1;  /* silence unused-variable warning on unsupported platforms */
+	int cork_fd = -1;   /* silence unused-variable warning on unsupported platforms */
+	int orig_sndbuf = -1;
 #endif
 
 	/*
@@ -695,9 +722,41 @@ svc_sync_burst_to(struct Client *server_p)
 	if(cork_fd >= 0) {
 		int off = 0;
 #if defined(TCP_CORK)
+		/* Linux: clearing TCP_CORK immediately flushes all buffered data. */
 		setsockopt(cork_fd, IPPROTO_TCP, TCP_CORK, &off, sizeof(off));
 #else
+		/*
+		 * BSD TCP_NOPUSH flush sequence:
+		 *
+		 * Clearing TCP_NOPUSH tells the kernel it may now send partial
+		 * segments, but Nagle's algorithm may still hold the final
+		 * sub-MSS chunk for up to 200 ms waiting for an ACK.  To force
+		 * an immediate flush of that last segment, we momentarily enable
+		 * TCP_NODELAY (which disables Nagle) and then restore it.  The
+		 * enable call alone triggers a transmit of any buffered data;
+		 * the immediate disable restores normal Nagle behaviour for
+		 * subsequent normal IRC traffic on this link.
+		 *
+		 * This is the same pattern used by nginx and Apache for BSD
+		 * sendfile() acceleration and eliminates the Nagle stall on the
+		 * burst's final partial segment.
+		 */
 		setsockopt(cork_fd, IPPROTO_TCP, TCP_NOPUSH, &off, sizeof(off));
+#if defined(TCP_NODELAY)
+		{
+			int nodelay_on = 1;
+			setsockopt(cork_fd, IPPROTO_TCP, TCP_NODELAY,
+			           &nodelay_on, sizeof(nodelay_on));
+			setsockopt(cork_fd, IPPROTO_TCP, TCP_NODELAY,
+			           &off, sizeof(off));  /* off == 0: restore Nagle */
+		}
+#endif /* TCP_NODELAY */
+#endif /* TCP_CORK */
+		/* Restore original send buffer so normal IRC traffic is unaffected */
+#if defined(SO_SNDBUF)
+		if(orig_sndbuf > 0)
+			setsockopt(cork_fd, SOL_SOCKET, SO_SNDBUF,
+			           &orig_sndbuf, sizeof(orig_sndbuf));
 #endif
 	}
 #endif
