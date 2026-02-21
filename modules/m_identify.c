@@ -193,7 +193,7 @@ m_identify_channel(struct Client *source_p, const char *channame,
 
 static void
 m_identify_account(struct Client *source_p, const char *account,
-                   const char *password)
+                   const char *password, bool noprivs)
 {
 	if(!IsPerson(source_p))
 	{
@@ -253,9 +253,12 @@ m_identify_account(struct Client *source_p, const char *account,
 	           source_p->name, source_p->username, source_p->host,
 	           acct->name, acct->name);
 
-	/* Oper up if account links to an oper block */
-	if(oper_p != NULL)
+	/* Oper up if account links to an oper block, unless suppressed */
+	if(oper_p != NULL && !noprivs)
 		oper_up(source_p, oper_p);
+	else if(oper_p != NULL && noprivs)
+		svc_notice(source_p, "Services",
+		           "Operator privileges suppressed. Use OPER to activate them.");
 
 	/* Apply services vhost */
 	if(!EmptyString(acct->vhost))
@@ -322,8 +325,13 @@ m_identify(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		return;
 	}
 
+	/* Optional trailing -noprivs flag suppresses automatic oper-up */
+	bool noprivs = (parc >= 2 &&
+	                !rb_strcasecmp(parv[parc - 1], "-noprivs"));
+	int effective_parc = noprivs ? parc - 1 : parc;
+
 	const char *account, *password;
-	if(parc >= 3)
+	if(effective_parc >= 3)
 	{
 		account  = parv[1];
 		password = parv[2];
@@ -334,5 +342,5 @@ m_identify(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		password = parv[1];
 	}
 
-	m_identify_account(source_p, account, password);
+	m_identify_account(source_p, account, password, noprivs);
 }
