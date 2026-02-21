@@ -39,11 +39,12 @@ static const char ping_desc[] =
 	"Provides the PING command to ensure a client or server is still alive";
 
 static void m_ping(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
+static void m_ping_unreg(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void ms_ping(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 
 struct Message ping_msgtab = {
 	"PING", 0, 0, 0, 0,
-	{mg_unreg, {m_ping, 2}, {ms_ping, 2}, {ms_ping, 2}, mg_ignore, {m_ping, 2}}
+	{{m_ping_unreg, 2}, {m_ping, 2}, {ms_ping, 2}, {ms_ping, 2}, mg_ignore, {m_ping, 2}}
 };
 
 mapi_clist_av1 ping_clist[] = { &ping_msgtab, NULL };
@@ -109,4 +110,19 @@ ms_ping(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		sendto_one(source_p, ":%s PONG %s :%s",
 			   get_id(&me, source_p), me.name,
 			   get_id(source_p, source_p));
+}
+
+/* m_ping_unreg — respond to PING from unregistered clients with a plain PONG.
+ * This lets raw connection probes (e.g. NUL-byte survival tests) verify
+ * server liveness without needing a fully registered IRC session.
+ */
+static void
+m_ping_unreg(struct MsgBuf *msgbuf_p, struct Client *client_p,
+             struct Client *source_p, int parc, const char *parv[])
+{
+	(void)msgbuf_p;
+	(void)client_p;
+
+	const char *token = (parc >= 2 && !EmptyString(parv[1])) ? parv[1] : "*";
+	sendto_one(source_p, ":%s PONG %s :%s", me.name, me.name, token);
 }

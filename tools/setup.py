@@ -35,10 +35,11 @@ import struct
 import base64
 
 # ---------------------------------------------------------------------------
-# Default config path
+# Default config path — overridden by meson configure_file at install time.
+# When run directly from the source tree use --config to specify the path.
 # ---------------------------------------------------------------------------
-DEFAULT_CONF = "/usr/local/etc/ircd.conf"
-DEFAULT_TLS_DIR = "/usr/local/etc/tls"
+DEFAULT_CONF = "@ETC_DIR@/ircd.conf"
+DEFAULT_TLS_DIR = "@ETC_DIR@/tls"
 
 # ---------------------------------------------------------------------------
 # Built-in privset definitions (shown as suggestions)
@@ -414,7 +415,7 @@ def setup_renew_crontab(domain):
 def setup_keepalive_crontab(conf_path, run_as="daemon"):
     """Add a crontab entry that restarts ophion if it is not running."""
     binary = shutil.which("ophion") or "/usr/local/bin/ophion"
-    logfile = "/usr/local/logs/ircd-out.log"
+    logfile = "@LOG_DIR@/ircd-out.log"
     line = (
         f"* * * * * pgrep -x ophion > /dev/null || "
         f"su -s /bin/sh {run_as} -c "
@@ -621,6 +622,38 @@ class IrcdConf:
             rf'(?:/\*[^*]*\*/\s*)?connect\s+"{re.escape(name)}"\s*\{{[^}}]*\}};?\s*',
             '', self.text, flags=re.DOTALL | re.IGNORECASE
         )
+
+    # ---- services ---------------------------------------------------------
+
+    def upsert_services(self, enabled=None, hub=None, db_path=None,
+                        nick_expire_days=None, chan_expire_days=None,
+                        enforce_delay_secs=None, maxnicks=None,
+                        maxmemos=None, registration_open=None):
+        block = self._get_block("services")
+        if not block:
+            block = 'services {\n};\n'
+            self.text += '\n' + block
+        new = block
+        if enabled is not None:
+            new = self._upsert_key_in_block(new, 'enabled', 'yes' if enabled else 'no')
+        if hub is not None:
+            new = self._upsert_key_in_block(new, 'hub', 'yes' if hub else 'no')
+        if db_path is not None:
+            new = self._upsert_key_in_block(new, 'db_path', f'"{db_path}"')
+        if nick_expire_days is not None:
+            new = self._upsert_key_in_block(new, 'nick_expire_days', str(nick_expire_days))
+        if chan_expire_days is not None:
+            new = self._upsert_key_in_block(new, 'chan_expire_days', str(chan_expire_days))
+        if enforce_delay_secs is not None:
+            new = self._upsert_key_in_block(new, 'enforce_delay_secs', str(enforce_delay_secs))
+        if maxnicks is not None:
+            new = self._upsert_key_in_block(new, 'maxnicks', str(maxnicks))
+        if maxmemos is not None:
+            new = self._upsert_key_in_block(new, 'maxmemos', str(maxmemos))
+        if registration_open is not None:
+            new = self._upsert_key_in_block(new, 'registration_open',
+                                            'yes' if registration_open else 'no')
+        self.text = self.text.replace(block, new, 1)
 
     # ---- persistence ------------------------------------------------------
 
@@ -1010,6 +1043,63 @@ def menu_servers(conf):
 
 
 # ---------------------------------------------------------------------------
+# Services menu
+# ---------------------------------------------------------------------------
+
+def menu_services(conf, mode):
+    section("Services Configuration")
+    info("Services provide nick/channel registration, memos, vhosts, and more.")
+
+    enable = prompt_yn("Enable services?", default="yes")
+    if not enable:
+        conf.upsert_services(enabled=False)
+        ok("Services disabled")
+        return
+
+    db_path = prompt("Services database path", default="/usr/local/etc/services.db")
+    reg_open = prompt_yn("Allow new user registrations?", default="yes")
+
+    hub = False
+    nick_expire = 30
+    chan_expire = 60
+    enforce_delay = 30
+    maxnicks = 10
+    maxmemos = 20
+
+    if mode != "simple":
+        hub = prompt_yn("Is this server a hub (routes between other servers)?",
+                        default="no")
+        nick_expire = prompt_int("Nick expiry in days (0 = never expire)",
+                                 default=30, min_val=0)
+        chan_expire  = prompt_int("Channel expiry in days (0 = never expire)",
+                                  default=60, min_val=0)
+
+    if mode == "advanced":
+        enforce_delay = prompt_int(
+            "Enforce delay: seconds after connect before nick enforcement",
+            default=30, min_val=0)
+        maxnicks  = prompt_int("Max nicks per account", default=10, min_val=1)
+        maxmemos  = prompt_int("Max memos per account", default=20, min_val=1)
+
+    conf.upsert_services(
+        enabled=True,
+        hub=hub,
+        db_path=db_path,
+        nick_expire_days=nick_expire,
+        chan_expire_days=chan_expire,
+        enforce_delay_secs=enforce_delay,
+        maxnicks=maxnicks,
+        maxmemos=maxmemos,
+        registration_open=reg_open,
+    )
+    ok("Services configured")
+    if reg_open:
+        info("Users can register with: REGISTER <password> <email>")
+    else:
+        info("Registration is closed — accounts must be created by an oper.")
+
+
+# ---------------------------------------------------------------------------
 # Keep-alive menu
 # ---------------------------------------------------------------------------
 
@@ -1040,11 +1130,12 @@ def menu_main(conf):
         print("  5) Manage server links")
         print("  6) SSL / TLS setup (self-signed or Let's Encrypt)")
         print("  7) Install keep-alive crontab")
-        print("  8) Save & exit")
+        print("  8) Configure services (nick/channel registration)")
+        print("  9) Save & exit")
         print("  0) Exit without saving")
 
-        choice = prompt("Choice", default="8",
-                        choices=["0","1","2","3","4","5","6","7","8"])
+        choice = prompt("Choice", default="9",
+                        choices=["0","1","2","3","4","5","6","7","8","9"])
         if choice == "0":
             if prompt_yn("Exit WITHOUT saving?", default="no"):
                 sys.exit(0)
@@ -1055,7 +1146,8 @@ def menu_main(conf):
         elif choice == "5": menu_servers(conf)
         elif choice == "6": menu_tls(conf, "advanced")
         elif choice == "7": menu_keepalive(conf)
-        elif choice == "8":
+        elif choice == "8": menu_services(conf, "advanced")
+        elif choice == "9":
             conf.save()
             break
 
@@ -1075,6 +1167,11 @@ def wizard_new(conf, mode):
     menu_listen(conf, mode)
     menu_classes_auth(conf, mode)
     menu_general(conf, mode)
+
+    section("Services")
+    if prompt_yn("Configure services (nick/channel registration, memos, vhosts)?",
+                 default="yes"):
+        menu_services(conf, mode)
 
     if mode != "simple":
         section("SSL / TLS")

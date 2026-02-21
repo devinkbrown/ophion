@@ -60,12 +60,16 @@ struct Message set_msgtab = {
 };
 
 mapi_clist_av1 accountset_clist[] = {
-	&setpass_msgtab, &setemail_msgtab, &set_msgtab, NULL
+	&setpass_msgtab, &setemail_msgtab, NULL
 };
 
 DECLARE_MODULE_AV2(m_accountset, NULL, NULL, accountset_clist, NULL, NULL, NULL, NULL, accountset_desc);
 
 /* ---- salt/hash helpers (shared with m_register) ------------------------- */
+
+/* rb_random_uint32 is not exported from libircd; use rb_get_random instead */
+extern int rb_get_random(void *buf, size_t len);
+static uint32_t rand_u32(void) { uint32_t v; rb_get_random(&v, sizeof(v)); return v; }
 
 static const char salt_chars[] =
 	"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -81,7 +85,7 @@ build_sha512_salt(char *out, size_t outlen)
 	out[2] = '$';
 
 	for(int i = 0; i < 16; i++)
-		out[3 + i] = salt_chars[rb_random_uint32() % 64];
+		out[3 + i] = salt_chars[rand_u32() % 64];
 
 	out[19] = '$';
 	out[20] = '\0';

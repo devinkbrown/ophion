@@ -93,7 +93,7 @@ m_cregister(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 
 	/* Must be an op or higher */
 	msptr = find_channel_membership(chptr, source_p);
-	if (msptr == NULL || !is_chanop(msptr))
+	if (msptr == NULL || !(is_chanop(msptr) || is_owner(msptr)))
 	{
 		svc_notice(source_p, "ChanServ",
 			"You must be a channel operator in %s to register it.", chname);

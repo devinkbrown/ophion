@@ -18,8 +18,6 @@ charybdis and extended with:
    an existing user nickname, and
  * an interactive setup and configuration manager (`tools/setup.py`).
 
-Come chat with us at irc.ophion.dev #ophion.
-
 ## IRCv3 Support
 
 Ophion implements a broad set of IRCv3 capabilities. Capabilities marked
@@ -268,14 +266,31 @@ are mutually exclusive per the IRCX draft.
 | `LISTX` | m_ircx_listx | Extended channel listing with properties and modes |
 | `PROP` | m_ircx_prop | Get/set/list properties on channels, users, and accounts |
 | `WHISPER` | m_ircx_whisper | Private message to a specific channel member |
-| `ACCESS` | m_ircx_access | Channel access list management (OWNER/HOST/VOICE/DENY/GRANT) |
+| `ACCESS` | m_ircx_access | Channel access list management (OWNER/HOST/VOICE/DENY/GRANT); persists to services DB for registered channels |
 | `EVENT` | m_ircx_event | Oper event subscription system (CHANNEL/MEMBER/USER/SERVER) |
 | `GAG` | m_ircx_oper | Toggle or set GAG mode on a user (oper-only) |
 | `OPFORCE` | m_ircx_oper | Unified oper channel force: JOIN/OP/KICK/MODE (oper+admin) |
 
 ### Property System (PROP)
 
-The PROP command provides a key-value property system for channels and users:
+The PROP command provides a key-value property system for channels and users.
+
+#### PROP Verb Reference
+
+| Form | Verb | Description |
+|------|------|-------------|
+| `PROP #chan` | list | List all properties (custom and built-in) — returns 818/819 |
+| `PROP #chan key` | get | Read a single named property — returns 818/819 or **919** if absent |
+| `PROP #chan key*` | list | Wildcard GET (returns all matching keys; empty result = 819 only) |
+| `PROP #chan key :value` | set | Write a property value (chanop or higher required) |
+| `PROP #chan key :` | delete | Delete a property by writing an empty value |
+
+> **Note on `919 ERR_PROP_MISSING`:** Reading a specific, non-wildcard key that
+> does not exist returns `919 ERR_PROP_MISSING` rather than an empty 819 end.
+> Wildcard patterns and the delete form (`key :`) are exempt — an empty wildcard
+> result is valid, and deleting a non-existent key is a harmless no-op.
+
+The PROP command provides a key-value property system for channels and users.
 
 **User profile properties** (m_ircx_prop_user_profile):
 `URL`, `GENDER`, `PICTURE`, `LOCATION`, `BIO`, `REALNAME`, `EMAIL`
@@ -482,13 +497,221 @@ python3 tools/setup.py --config /usr/local/etc/ircd.conf --manage
 
 ## Building
 
-Ophion uses the Meson build system:
+### Prerequisites
+
+Ophion requires the following tools and libraries at build time:
+
+| Dependency | Minimum version | Purpose |
+|------------|-----------------|---------|
+| [Meson](https://mesonbuild.com/) | 0.56 | Build system |
+| [Ninja](https://ninja-build.org/) | 1.8 | Build executor |
+| GCC or Clang | GCC 9 / Clang 10 | C compiler (C11 required) |
+| OpenSSL or wolfSSL | OpenSSL 1.1 | TLS + SASL crypto |
+| SQLite3 | 3.35 | Services database |
+| libsodium | 1.0.18 | Optional: NaCl-based crypto (for extensions) |
+| Python 3.8+ | — | Setup wizard (`ophion-setup`) |
+
+**Debian/Ubuntu:**
 
 ```sh
-meson setup builddir
-ninja -C builddir
-ninja -C builddir install
+apt-get install build-essential meson ninja-build \
+    libssl-dev libsqlite3-dev python3
 ```
+
+**Fedora/RHEL:**
+
+```sh
+dnf install gcc meson ninja-build \
+    openssl-devel sqlite-devel python3
+```
+
+**macOS (Homebrew):**
+
+```sh
+brew install meson ninja openssl sqlite python3
+```
+
+### Build Steps
+
+```sh
+# 1. Configure
+meson setup build
+
+# 2. Compile
+ninja -C build
+
+# 3. Install (default prefix: /usr/local)
+ninja -C build install
+
+# 4. Install to a custom prefix
+meson setup build --prefix=/opt/ophion
+ninja -C build install
+```
+
+After installation the following layout is created under the prefix:
+
+```
+bin/
+  ophion           — the ircd binary
+  ophion-setup     — interactive setup and configuration tool
+  mkpasswd         — password hash helper (SHA-512 crypt)
+etc/
+  ircd.conf        — main server configuration
+  tls/             — default TLS certificate directory
+lib/
+  ophion/modules/  — core modules (.so)
+  ophion/extensions/ — optional extensions (.so)
+logs/              — default log directory
+```
+
+### Build Options
+
+Pass `-D<option>=<value>` to `meson setup`:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `prefix` | `/usr/local` | Installation root |
+| `sysconfdir` | `$prefix/etc` | Config file location |
+| `localstatedir` | `$prefix` | Writable runtime data |
+| `b_ndebug` | `false` | Disable debug assertions |
+| `b_lto` | `false` | Link-time optimisation |
+
+Example:
+
+```sh
+meson setup build --prefix=/opt/ophion -Db_lto=true -Db_ndebug=true
+```
+
+### Running Without Installing
+
+```sh
+ninja -C build
+# Launch directly from the build tree:
+./build/ircd/ophion -configfile ircd/ircd.conf.example -foreground
+```
+
+---
+
+## Configuration Tool
+
+`ophion-setup` (installed to `bin/ophion-setup` after `ninja install`) is an
+interactive setup and configuration manager.  It edits `ircd.conf` in-place
+without destroying comments or custom formatting.
+
+### Running the Tool
+
+```sh
+# First-time setup wizard (after install)
+ophion-setup
+
+# Manage an existing installation
+ophion-setup --config /usr/local/etc/ircd.conf --manage
+
+# Run directly from the source tree (uses build-tree paths)
+python3 tools/setup.py --config /path/to/ircd.conf
+```
+
+When run from the installed location, `ophion-setup` automatically uses the
+installation's `etc/` and `logs/` directories as defaults.  Pass `--config`
+to override.
+
+### First-Time Wizard
+
+On first run (or with `--new`), the wizard asks a series of guided questions
+and writes a complete `ircd.conf`:
+
+```
+$ ophion-setup
+
+  ============================================================
+  Ophion IRC Server — Setup Wizard
+  ============================================================
+
+  Mode: [simple | intermediate | advanced]
+```
+
+| Wizard mode | What it covers |
+|-------------|----------------|
+| `simple` | Server name, network, admin info, one port (6667), one oper |
+| `intermediate` | + TLS listener, flood limits, server linking |
+| `advanced` | Full: privsets, certfp opers, Let's Encrypt, services tuning |
+
+The wizard covers these sections in order:
+
+1. **General settings** — server name, description, network name, admin contact
+2. **Ports** — plain (6667), TLS (6697), WebSocket listeners
+3. **Flood controls** — KICK, MODE, PROP counts and time windows
+4. **Operators** — at least one oper block; supports SHA-512 password or certfp
+5. **Server links** — optional connect blocks for multi-server networks
+6. **Services** — nick/channel registration, memos, vhosts (see below)
+7. **TLS** — self-signed certificate generation or Let's Encrypt integration
+8. **Keep-alive** — optional cron job to auto-restart Ophion if it dies
+
+### Interactive Management Menu
+
+Re-run with `--manage` to enter the management menu at any time:
+
+```
+  1) Edit general settings
+  2) Manage ports (add/remove listeners)
+  3) Configure flood controls
+  4) Manage operators (add/remove oper blocks)
+  5) Manage server links (connect blocks)
+  6) Configure TLS/SSL
+  7) Configure keep-alive (cron)
+  8) Configure services (nick/channel registration)
+  9) Save & exit
+```
+
+### Services Configuration
+
+The `services {}` block enables the built-in services layer (NickServ,
+ChanServ, MemoServ, and VHost management).  The wizard prompts for:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `yes` | Enable or disable services entirely |
+| `hub` | `no` | Set to `yes` on hub servers that relay SVCSSYNC bursts |
+| `db_path` | `$etc/services.db` | Path to the SQLite3 services database |
+| `nick_expire_days` | `30` | Days before an unvisited nick registration expires (0 = never) |
+| `chan_expire_days` | `60` | Days before an unused channel registration expires (0 = never) |
+| `enforce_delay_secs` | `30` | Grace period (seconds) before a nick is force-renamed after login conflict |
+| `maxnicks` | `10` | Maximum grouped nicks per account |
+| `maxmemos` | `20` | Maximum stored memos per account |
+| `registration_open` | `yes` | Allow new user registrations (set `no` to freeze signups) |
+
+The resulting block in `ircd.conf`:
+
+```
+services {
+    enabled             = yes;
+    hub                 = no;
+    db_path             = "/usr/local/etc/services.db";
+    nick_expire_days    = 30;
+    chan_expire_days    = 60;
+    enforce_delay_secs  = 30;
+    maxnicks            = 10;
+    maxmemos            = 20;
+    registration_open   = yes;
+};
+```
+
+### Feature Summary
+
+| Feature | Description |
+|---------|-------------|
+| **Server info** | Name, description, network, admin contacts |
+| **Listen ports** | Add/remove plain, TLS, and WebSocket listeners |
+| **Flood limits** | KICK/MODE/PROP flood counts and window sizes |
+| **Operators** | Add, remove, list operators; SHA-512 password or certfp |
+| **Server links** | Add, remove, list connect blocks; cleartext, encrypted, or certfp-only auth |
+| **Services** | Full services block configuration via guided prompts |
+| **TLS / SSL** | Self-signed certificate or Let's Encrypt (certbot auto-installed on apt/dnf) |
+| **Keep-alive** | Cron job that restarts Ophion if it is not running |
+| **Password hashing** | SHA-512 crypt computed in-process; no external tools required |
+| **CertFP fingerprint** | Computes SHA-512 fingerprint of a PEM certificate for oper/connect blocks |
+
+---
 
 ## Documentation
 

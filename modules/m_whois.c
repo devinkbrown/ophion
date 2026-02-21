@@ -176,39 +176,43 @@ do_whois(struct Client *client_p, struct Client *source_p, int parc, const char 
 	char *nick;
 	char *p = NULL;
 	int operspy = 0;
+	char buf[BUFSIZE];
 
-	nick = LOCAL_COPY(parv[1]);
-	if((p = strchr(nick, ',')))
-		*p = '\0';
-
-	if(IsOperSpy(source_p) && *nick == '!')
+	/* Process each comma-separated nick individually. */
+	rb_strlcpy(buf, parv[1], sizeof(buf));
+	for(nick = rb_strtok_r(buf, ",", &p); nick; nick = rb_strtok_r(NULL, ",", &p))
 	{
-		operspy = 1;
-		nick++;
-	}
+		operspy = 0;
 
-	target_p = find_named_person(nick);
-	if(target_p != NULL)
-	{
-		if(operspy)
+		if(IsOperSpy(source_p) && *nick == '!')
 		{
-			char buffer[BUFSIZE];
-
-			snprintf(buffer, sizeof(buffer), "%s!%s@%s %s",
-				target_p->name, target_p->username,
-				target_p->host, target_p->servptr->name);
-			report_operspy(source_p, "WHOIS", buffer);
+			operspy = 1;
+			nick++;
 		}
 
-		single_whois(source_p, target_p, operspy);
-	}
-	else
-		sendto_one_numeric(source_p, ERR_NOSUCHNICK,
-				   form_str(ERR_NOSUCHNICK),
-				   nick);
+		target_p = find_named_person(nick);
+		if(target_p != NULL)
+		{
+			if(operspy)
+			{
+				char buffer[BUFSIZE];
 
-	sendto_one_numeric(source_p, RPL_ENDOFWHOIS,
-			   form_str(RPL_ENDOFWHOIS), parv[1]);
+				snprintf(buffer, sizeof(buffer), "%s!%s@%s %s",
+					target_p->name, target_p->username,
+					target_p->host, target_p->servptr->name);
+				report_operspy(source_p, "WHOIS", buffer);
+			}
+
+			single_whois(source_p, target_p, operspy);
+		}
+		else
+			sendto_one_numeric(source_p, ERR_NOSUCHNICK,
+					   form_str(ERR_NOSUCHNICK),
+					   nick);
+
+		sendto_one_numeric(source_p, RPL_ENDOFWHOIS,
+				   form_str(RPL_ENDOFWHOIS), nick);
+	}
 }
 
 /*

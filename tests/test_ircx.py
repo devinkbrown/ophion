@@ -648,6 +648,45 @@ def test_prop_delete():
         close(s)
 
 
+def test_prop_get_nonexistent_key():
+    """PROP #chan missingkey (no wildcard) → 919 ERR_PROP_MISSING."""
+    s, n = connect()
+    ch = chan()
+    try:
+        _send(s, f"JOIN {ch}")
+        _drain(s)
+        # Do NOT set this key — it must not exist
+        _send(s, f"PROP {ch} definitely_absent_key")
+        lines = _read_lines(s, 2.0)
+        has_919 = _has_num(lines, "919")
+        no_818  = not _has_num(lines, "818")
+        _report("PROP get nonexistent key → 919 ERR_PROP_MISSING",
+                has_919 and no_818, str(lines[:3]))
+    finally:
+        close(s)
+
+
+def test_prop_delete_nonexistent_key_ok():
+    """PROP #chan missingkey : (null value) on absent key → no 919.
+
+    The write/delete path must NOT return ERR_PROP_MISSING — nulling a key
+    that doesn't exist is a harmless no-op.
+    """
+    s, n = connect()
+    ch = chan()
+    try:
+        _send(s, f"JOIN {ch}")
+        _drain(s)
+        # Delete a key that was never set — must not produce 919
+        _send(s, f"PROP {ch} never_existed_key :")
+        lines = _read_lines(s, 2.0)
+        no_919 = not _has_num(lines, "919")
+        _report("PROP delete nonexistent key (null value) → no 919",
+                no_919, str(lines[:3]))
+    finally:
+        close(s)
+
+
 def test_prop_list_all():
     """PROP #chan lists all keys including builtins (818 entries + 819 end)."""
     s, n = connect()
@@ -2723,6 +2762,8 @@ ALL_TESTS = [
     ("PROP set chanop broadcasts change",            test_prop_set_chanop),
     ("PROP get specific key → 818 + 819",            test_prop_get_specific_key),
     ("PROP delete removes key",                      test_prop_delete),
+    ("PROP get nonexistent key → 919",               test_prop_get_nonexistent_key),
+    ("PROP delete nonexistent key → no 919",         test_prop_delete_nonexistent_key_ok),
     ("PROP list all → 818 entries + 819",            test_prop_list_all),
     ("PROP set non-chanop denied → 918/482",         test_prop_set_non_chanop_denied),
     ("PROP read non-chanop succeeds",                test_prop_non_chanop_can_read),
