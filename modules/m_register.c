@@ -1,216 +1,186 @@
 /*
- * modules/m_register.c
- * Copyright (c) 2020, 2021 Ariadne Conill <ariadne@dereferenced.org>
+ * modules/m_register.c — Services REGISTER command
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Register the current nick as a new account.
  *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
+ * Syntax: REGISTER <email> <password>
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) 2026 Ophion development team. GPL v2.
  */
 
 #include "stdinc.h"
-#include "capability.h"
 #include "client.h"
-#include "msg.h"
-#include "parse.h"
+#include "hash.h"
 #include "modules.h"
-#include "monitor.h"
+#include "msg.h"
 #include "numeric.h"
-#include "s_assert.h"
 #include "s_conf.h"
 #include "s_serv.h"
 #include "send.h"
-#include "supported.h"
-#include "hash.h"
-#include "propertyset.h"
-#include "account.h"
+#include "services.h"
+#include "services_db.h"
+#include "services_sync.h"
 
-static const char register_desc[] = "Provides REGISTER command and draft/account-registration capability";
+static const char register_desc[] =
+	"Services REGISTER command — registers the current nick as a new account";
 
-unsigned int CLICAP_REGISTER;
-
-static const char *
-register_data(struct Client *client_p)
-{
-	(void) client_p;
-
-	return "custom-accountname";
-}
-
-static struct ClientCapability register_cap = {
-	.data = register_data,
-	.flags = CLICAP_FLAGS_STICKY,
-};
-
-mapi_cap_list_av2 register_cap_list[] = {
-	{ MAPI_CAP_CLIENT, "draft/account-registration", &register_cap, &CLICAP_REGISTER },
-	{ 0, NULL, NULL, NULL },
-};
-
-static void mu_register(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[]);
-static void m_register(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[]);
+static void m_register(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 
 struct Message register_msgtab = {
 	"REGISTER", 0, 0, 0, 0,
-	{{mu_register, 0}, {m_register, 4}, mg_ignore, mg_ignore, mg_ignore, {m_register, 4}}
+	{mg_unreg, {m_register, 3}, mg_ignore, mg_ignore, mg_ignore, {m_register, 3}}
 };
 
-mapi_clist_av1 register_clist[] = {
-	&register_msgtab, NULL
-};
+mapi_clist_av1 register_clist[] = { &register_msgtab, NULL };
 
-static int h_ircx_account_login;
+DECLARE_MODULE_AV2(m_register, NULL, NULL, register_clist, NULL, NULL, NULL, NULL, register_desc);
 
-mapi_hlist_av1 register_hlist[] = {
-	{ "ircx_account_login", &h_ircx_account_login },
-	{ NULL, NULL }
-};
+/* ---- salt/hash helpers -------------------------------------------------- */
 
-DECLARE_MODULE_AV2(register, NULL, NULL, register_clist, register_hlist, NULL, register_cap_list, NULL, register_desc);
-
-static char saltChars[] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-	/* 0 .. 63, ascii - 64 */
-
-/* Passphrase encryption routines:
- *
- * Based on mkpasswd.c, originally by Nelson Minar (minar@reed.edu)
- * You can use this code in any way as long as these names remain.
- */
-static char *
-generate_poor_salt(char *salt, int length)
-{
-	int i;
-
-	srand(time(NULL));
-	for(i = 0; i < length; i++)
-		salt[i] = saltChars[rand() % 64];
-
-	return (salt);
-}
-
-static char *
-generate_random_salt(char *salt, int length)
-{
-	int fd, i;
-
-	if((fd = open("/dev/urandom", O_RDONLY)) < 0)
-		return (generate_poor_salt(salt, length));
-
-	if(read(fd, salt, (size_t)length) != length)
-	{
-		close(fd);
-		return (generate_poor_salt(salt, length));
-	}
-
-	for(i = 0; i < length; i++)
-		salt[i] = saltChars[abs(salt[i]) % 64];
-
-	close(fd);
-	return (salt);
-}
-
-static char *
-make_sha512_salt(int length)
-{
-	static char salt[21];
-	if(length > 16)
-	{
-		printf("SHA512 salt length too long\n");
-		exit(0);
-	}
-	salt[0] = '$';
-	salt[1] = '6';
-	salt[2] = '$';
-	generate_random_salt(&salt[3], length);
-	salt[length + 3] = '$';
-	salt[length + 4] = '\0';
-	return salt;
-}
+static const char salt_chars[] =
+	"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 /*
- * REGISTER - register an account with the authentication layer.
- * Parameters:
- *   parv[1] = account name or "*"
- *   parv[2] = email or "*" (ignored)
- *   parv[3] = credential
+ * build_sha512_salt — fill `out` with "$6$<16 random chars>$\0".
+ * `out` must be at least 21 bytes.
  */
 static void
-m_register(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+build_sha512_salt(char *out, size_t outlen)
 {
-	bool new_account = false;
-	const char *accountname = *parv[1] == '*' ? client_p->name : parv[1];
-
-	/* valid accountname? */
-	if (!clean_nick(accountname, TRUE, 0))
-	{
-		sendto_one(source_p, ":%s FAIL REGISTER BAD_ACCOUNTNAME %s :Invalid account name",
-			   me.name, accountname);
+	/* We need at least "$6$" (3) + 16 chars + "$" + NUL = 21 bytes. */
+	if(outlen < 21)
 		return;
-	}
 
-	/* is the user already logged in? */
-	if (*source_p->user->suser)
-	{
-		/* this should really be ALREADY_AUTHENTICATED in my opinion, see
-		 * https://github.com/ircv3/ircv3-specifications/pull/435#r650449903
-		 */
-		sendto_one(source_p, ":%s FAIL REGISTER ALREADY_REGISTERED %s :Already authenticated",
-			   me.name, source_p->user->suser);
-		return;
-	}
+	out[0] = '$';
+	out[1] = '6';
+	out[2] = '$';
 
-	/* find or create the account */
-	struct Account *account_p = account_find(accountname, true, &new_account);
+	for(int i = 0; i < 16; i++)
+		out[3 + i] = salt_chars[rb_random_uint32() % 64];
 
-	/* account already exists? */
-	if (account_p != NULL && !new_account)
-	{
-		sendto_one(source_p, ":%s FAIL REGISTER ACCOUNT_EXISTS %s :Account already exists",
-			   me.name, accountname);
-		return;
-	}
-
-	const char *salt = make_sha512_salt(16);
-	const char *crypted_passphrase = rb_crypt(parv[3], salt);
-
-	struct Property *prop = propertyset_add(&account_p->prop_list, "passphrase", crypted_passphrase, &me);
-
-	sendto_server(NULL, NULL, CAP_TS6, NOCAPS, ":%s TPROP account:%s %ld %ld %s :%s",
-		      use_id(&me), account_p->name, account_p->creation_ts, prop->set_at, prop->name, prop->value);
-
-	sendto_one(source_p, ":%s REGISTER SUCCESS %s :Account created successfully",
-		   me.name, accountname);
-
-	hook_data_account_login req;
-
-	req.source_p = source_p;
-	req.account_name = account_p->name;
-
-	call_hook(h_ircx_account_login, &req);
+	out[19] = '$';
+	out[20] = '\0';
 }
 
+/* ---- command handler ---------------------------------------------------- */
+
+/*
+ * m_register — REGISTER <email> <password>
+ *
+ * parv[1] = email
+ * parv[2] = password
+ */
 static void
-mu_register(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
+m_register(struct MsgBuf *msgbuf_p, struct Client *client_p,
+	   struct Client *source_p, int parc, const char *parv[])
 {
-	sendto_one(source_p, ":%s FAIL REGISTER COMPLETE_CONNECTION_REQUIRED :Early registration not yet supported, sorry",
-		   me.name);
+	(void)msgbuf_p;
+	(void)client_p;
+
+	/* Services must be enabled. */
+	if(!services.enabled)
+	{
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "REGISTER");
+		return;
+	}
+
+	/* Registrations may be administratively closed. */
+	if(!services.registration_open)
+	{
+		svc_notice(source_p, "Services",
+			"Registration is currently closed.");
+		return;
+	}
+
+	/* Must be a fully-registered user. */
+	if(!IsPerson(source_p))
+	{
+		svc_notice(source_p, "Services",
+			"You must complete connection registration before using REGISTER.");
+		return;
+	}
+
+	/* Must not already be identified. */
+	if(!EmptyString(source_p->user->suser))
+	{
+		svc_notice(source_p, "Services",
+			"You are already identified as \2%s\2.", source_p->user->suser);
+		return;
+	}
+
+	const char *email    = parv[1];
+	const char *password = parv[2];
+
+	/* Validate email — must contain '@'. */
+	if(strchr(email, '@') == NULL)
+	{
+		svc_notice(source_p, "Services",
+			"Invalid email address (must contain '@').");
+		return;
+	}
+
+	/* Password must be at least 5 characters. */
+	if(strlen(password) < 5)
+	{
+		svc_notice(source_p, "Services",
+			"Password must be at least 5 characters long.");
+		return;
+	}
+
+	const char *nick = source_p->name;
+
+	/* Nick must not already be a registered account. */
+	if(svc_account_find(nick) != NULL || svc_account_find_nick(nick) != NULL)
+	{
+		svc_notice(source_p, "Services",
+			"The nick \2%s\2 is already registered.", nick);
+		return;
+	}
+
+	/* Hash the password using SHA-512 crypt. */
+	char salt[21];
+	build_sha512_salt(salt, sizeof(salt));
+
+	const char *hash = rb_crypt(password, salt);
+	if(hash == NULL)
+	{
+		svc_notice(source_p, "Services",
+			"Internal error: password hashing failed. Please try again later.");
+		return;
+	}
+
+	/* Create the account record. */
+	struct svc_account *acct = svc_account_create(nick, hash, email);
+	if(acct == NULL)
+	{
+		svc_notice(source_p, "Services",
+			"Internal error: account creation failed. Please try again later.");
+		return;
+	}
+
+	/* Add the nick to the account's nick group (primary nick == account name). */
+	svc_db_nick_add(nick, nick);
+
+	/* Mark the client as identified. */
+	rb_strlcpy(source_p->user->suser, acct->name,
+		   sizeof(source_p->user->suser));
+
+	/* Propagate account to other servers. */
+	svc_sync_account_reg(acct);
+
+	/* Also inform other servers that this client is now logged in. */
+	sendto_server(NULL, NULL, CAP_ENCAP, NOCAPS,
+		":%s ENCAP * LOGIN %s",
+		use_id(source_p), source_p->user->suser);
+
+	/* RPL_LOGGEDIN (900): notify the client it is now logged in. */
+	sendto_one(source_p, form_str(RPL_LOGGEDIN),
+		me.name, source_p->name,
+		source_p->name, source_p->username, source_p->host,
+		acct->name, acct->name);
+
+	svc_notice(source_p, "Services",
+		"Your nick \2%s\2 has been registered. "
+		"You are now identified.", nick);
 }

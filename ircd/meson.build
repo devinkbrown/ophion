@@ -6,6 +6,9 @@ ircd_version_c = custom_target(
 )
 
 ircd_lib = shared_library('ircd',
+  'services_db.c',
+  'services_core.c',
+  'services_sync.c',
   'account.c',
   'auth_oper.c',
   'authproc.c',
@@ -60,7 +63,7 @@ ircd_lib = shared_library('ircd',
   'wsproc.c',
   serno_h,
   ircd_version_c,
-  dependencies: [wolfssl_dep, libdl_dep],
+  dependencies: [wolfssl_dep, libdl_dep, dependency('sqlite3', required: true)],
   include_directories: [librb_inc, base_inc],
   install: true,
   link_with: [librb_lib])

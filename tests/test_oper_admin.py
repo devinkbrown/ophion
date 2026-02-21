@@ -5,33 +5,42 @@ Comprehensive IRC Oper/Admin Tools Stress Test for the Ophion IRC Server.
 Server: 127.0.0.1:16667
 Oper credentials: testoper / testpass123 (SHA-512 hashed in ircd.conf)
 
+Authentication method: SASL PLAIN (via IRCX AUTH command or CAP-based SASL).
+Ophion uses SASL for all oper authentication; the traditional OPER command is
+a redirect stub.  Clients authenticate using:
+
+  AUTH PLAIN I :<base64(\x00<block>\x00<password>)>   (IRCX shorthand)
+or the full CAP REQ :sasl … AUTHENTICATE … exchange.
+
 Tests cover:
- 1. OPER authentication (correct/wrong password, numerics 381/464)
- 2. OPER umode flags set correctly (+o, +a for admin)
- 3. Non-oper STATS subcommands blocked or limited
- 4. Oper STATS subcommands work
- 5. WALLOPS — oper can send, non-oper cannot (481 / 723)
- 6. OPERWALL — oper can send, non-oper cannot
- 7. KILL — oper kill works, sends error to target
- 8. KLINE — oper adds temp kline
- 9. UNKLINE — oper removes kline
-10. DLINE — oper adds temp dline
-11. UNDLINE — oper removes dline
-12. XLINE — oper adds gecos ban
-13. UNXLINE — oper removes it
-14. REHASH — oper can rehash, non-oper cannot
-15. WHO with 'o' flag (oper flag visible in WHO response)
-16. WHOIS shows oper line (313) for opers
-17. TRACE — oper gets full trace, non-oper gets limited
-18. Oper snomask (+s) — set/unset snomask flags
-19. UMODE +o — cannot self-oper without OPER command
-20. God mode (+G) — oper with oper:god can set +G, non-oper cannot
-21. oper_kick_protection — opers cannot be kicked by non-opers when enabled
-22. Oper auto-op on channel join (oper gets +q automatically if oper_auto_op = yes)
-23. MODLIST — oper can list loaded modules
-24. User mode +D (deaf mode) and +g (caller-id)
+ 1. SASL PLAIN correct credentials → 903 RPL_SASLSUCCESS + oper_up at 001
+ 2. SASL PLAIN wrong password → 904 ERR_SASLFAIL
+ 3. Oper umode flags set correctly (+o, +a for admin) after SASL
+ 4. Non-oper STATS subcommands blocked or limited
+ 5. Oper STATS subcommands work
+ 6. WALLOPS — oper can send, non-oper cannot (481 / 723)
+ 7. OPERWALL — oper can send, non-oper cannot
+ 8. KILL — oper kill works, sends error to target
+ 9. KLINE — oper adds temp kline
+10. UNKLINE — oper removes kline
+11. DLINE — oper adds temp dline
+12. UNDLINE — oper removes dline
+13. XLINE — oper adds gecos ban
+14. UNXLINE — oper removes it
+15. REHASH — oper can rehash, non-oper cannot
+16. WHO with 'o' flag (oper flag visible in WHO response)
+17. WHOIS shows oper line (313) for opers
+18. TRACE — oper gets full trace, non-oper gets limited
+19. Oper snomask (+s) — set/unset snomask flags
+20. UMODE +o — cannot self-oper without SASL auth
+21. God mode (+G) — oper with oper:god can set +G, non-oper cannot
+22. oper_kick_protection — opers cannot be kicked by non-opers when enabled
+23. Oper auto-op on channel join (oper gets +q automatically if oper_auto_op = yes)
+24. MODLIST — oper can list loaded modules
+25. User mode +D (deaf mode) and +g (caller-id)
 """
 
+import base64
 import socket
 import time
 import sys
@@ -62,6 +71,9 @@ IRCD_PID = _read_ircd_pid()
 # Numeric constants (from include/numeric.h)
 RPL_YOUREOPER       = "381"
 RPL_REHASHING       = "382"
+RPL_LOGGEDIN        = "900"
+RPL_SASLSUCCESS     = "903"
+ERR_SASLFAIL        = "904"
 ERR_PASSWDMISMATCH  = "464"
 ERR_NOOPERHOST      = "491"
 ERR_NOPRIVILEGES    = "481"
@@ -70,6 +82,19 @@ ERR_NEEDMOREPARAMS  = "461"
 RPL_WHOISOPERATOR   = "313"
 RPL_ENDOFSTATS      = "219"
 RPL_STATSUPTIME     = "242"
+
+
+# ---------------------------------------------------------------------------
+# SASL PLAIN helper
+# ---------------------------------------------------------------------------
+
+def sasl_plain_b64(account: str, password: str) -> str:
+    """
+    Encode SASL PLAIN credentials as base64.
+    Payload: authzid NUL authcid NUL password  (authzid is empty)
+    """
+    payload = f"\x00{account}\x00{password}".encode()
+    return base64.b64encode(payload).decode()
 
 # ---------------------------------------------------------------------------
 # Test result tracking
@@ -97,22 +122,66 @@ class IRCClient:
         self.timeout = timeout
         self.sock = None
         self._buf = ""
+        self.is_oper = False          # set to True when 381 observed
+        self.sasl_result = None       # "903" or "904" after SASL attempt
 
-    def connect(self):
+    def connect(self, sasl_account=None, sasl_password=None):
+        """
+        Connect to the server and complete registration.
+
+        If sasl_account and sasl_password are provided, authenticate via the
+        IRCX AUTH PLAIN shorthand (AUTH PLAIN I :<b64>) before registration.
+        On SASL success, oper_up fires automatically at 001 if the oper block
+        linked to the account grants oper status.
+
+        Returns self for chaining.
+        """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(self.timeout)
         self.sock.connect((SERVER_HOST, SERVER_PORT))
+
+        if sasl_account is not None:
+            # IRCX AUTH: send pre-registration, before NICK/USER
+            b64 = sasl_plain_b64(sasl_account, sasl_password or "")
+            self.send(f"AUTH PLAIN I :{b64}")
+
         self.send(f"NICK {self.nick}")
         self.send(f"USER {self.user} 0 * :{self.realname}")
         self._wait_for_registration()
         return self
 
+    def connect_as_oper(self):
+        """Connect with SASL PLAIN using OPER_NAME / OPER_PASS credentials."""
+        return self.connect(sasl_account=OPER_NAME, sasl_password=OPER_PASS)
+
     def _wait_for_registration(self):
+        """
+        Wait for MOTD end (376) or MOTD missing (422).
+        Also capture SASL numerics (903/904) and oper-up (381/MODE +o).
+        """
         deadline = time.time() + 10
+        registered = False
         while time.time() < deadline:
             for line in self._readlines(deadline=deadline):
-                if f" 376 {self.nick} " in line or f" 422 {self.nick} " in line:
-                    return
+                # SASL outcome
+                if " 903 " in line:
+                    self.sasl_result = "903"
+                elif " 904 " in line:
+                    self.sasl_result = "904"
+                # Oper-up
+                if " 381 " in line:
+                    self.is_oper = True
+                # End of registration burst
+                if (f" 376 {self.nick} " in line
+                        or f" 422 {self.nick} " in line):
+                    registered = True
+            if registered:
+                # Drain a bit more to capture post-001 MODE lines (oper_up)
+                extra_deadline = time.time() + 1.5
+                for line in self._readlines(deadline=extra_deadline):
+                    if " 381 " in line:
+                        self.is_oper = True
+                return
         raise TimeoutError(f"Registration timed out for {self.nick}")
 
     def send(self, data):
@@ -172,12 +241,25 @@ class IRCClient:
         return None, None
 
     def oper_up(self):
-        """Send OPER command and wait for 381."""
-        self.send(f"OPER {OPER_NAME} {OPER_PASS}")
-        line = self.wait_for(r" 381 ", timeout=5)
-        if line is None:
-            raise RuntimeError(f"OPER failed for {self.nick}")
-        return line
+        """
+        Attempt oper authentication.
+
+        Ophion uses SASL for oper auth; authentication happens pre-registration
+        via AUTH PLAIN.  If this client was connected without SASL (plain
+        connect()), we check if we're already an oper (e.g. from a previous
+        connect_as_oper() call).  If not, raise an error.
+
+        For tests that require oper access, use connect_as_oper() at connect time
+        or call make_oper_client() instead.
+        """
+        if self.is_oper:
+            return f":server 381 {self.nick} :You are now an IRC Operator"
+        # Send OPER as a compatibility probe — in Ophion it returns a redirect
+        # notice and 491, not 381.  Raise to indicate this client is not an oper.
+        raise RuntimeError(
+            f"Client {self.nick!r} is not an oper. "
+            "Use connect_as_oper() / make_oper_client() for oper tests."
+        )
 
     def close(self):
         if self.sock:
@@ -193,6 +275,13 @@ def make_client(nick, **kwargs):
     """Connect a fresh client and return it."""
     c = IRCClient(nick, **kwargs)
     c.connect()
+    return c
+
+
+def make_oper_client(nick, **kwargs):
+    """Connect a fresh client with SASL PLAIN oper auth and return it."""
+    c = IRCClient(nick, **kwargs)
+    c.connect_as_oper()
     return c
 
 
@@ -246,50 +335,66 @@ def _sighup_ircd():
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# Test 1: OPER authentication — correct password → 381
+# Test 1: SASL PLAIN correct credentials → 903 RPL_SASLSUCCESS + oper at 001
 # ---------------------------------------------------------------------------
 def test_oper_auth_correct():
-    c = make_client(unique_nick("oa"))
+    """
+    Ophion authenticates operators via SASL PLAIN.
+    Connect with correct credentials; expect 903 and oper status at 001.
+    """
+    nick = unique_nick("oa")
+    c = IRCClient(nick)
     try:
-        c.send(f"OPER {OPER_NAME} {OPER_PASS}")
-        line = c.wait_for(r" 381 ", timeout=5)
-        _record("OPER correct password → 381 RPL_YOUREOPER", line is not None,
-                line.strip() if line else "no 381 received")
+        c.connect(sasl_account=OPER_NAME, sasl_password=OPER_PASS)
+        got_903  = c.sasl_result == "903"
+        got_oper = c.is_oper
+        _record(
+            "SASL PLAIN correct credentials → 903 + oper_up",
+            got_903 and got_oper,
+            f"sasl_result={c.sasl_result!r}, is_oper={c.is_oper}"
+        )
     finally:
         c.close()
 
 
 # ---------------------------------------------------------------------------
-# Test 2: OPER authentication — wrong password → 464
+# Test 2: SASL PLAIN wrong password → 904 ERR_SASLFAIL
 # ---------------------------------------------------------------------------
 def test_oper_auth_wrong():
-    c = make_client(unique_nick("ow"))
+    """
+    Connecting with a wrong password must produce 904 ERR_SASLFAIL.
+    """
+    nick = unique_nick("ow")
+    c = IRCClient(nick)
     try:
-        c.send(f"OPER {OPER_NAME} WRONGPASSWORD")
-        idx, line = c.wait_for_any([r" 464 ", r" 491 "], timeout=5)
-        _record("OPER wrong password → 464/491", idx is not None,
-                line.strip() if line else "no error numeric received")
+        c.connect(sasl_account=OPER_NAME, sasl_password="WRONGPASSWORD")
+        got_fail = c.sasl_result == "904"
+        _record(
+            "SASL PLAIN wrong password → 904 ERR_SASLFAIL",
+            got_fail,
+            f"sasl_result={c.sasl_result!r}"
+        )
     finally:
         c.close()
 
 
 # ---------------------------------------------------------------------------
-# Test 3: OPER umode flags (+o set, +a set for admin oper)
+# Test 3: Oper umode flags (+o set, +a for admin) after SASL auth
 # ---------------------------------------------------------------------------
 def test_oper_umode_flags():
-    c = make_client(unique_nick("om"))
+    """After SASL auth the server must set +o (and +a for admin opers)."""
+    c = make_oper_client(unique_nick("om"))
     try:
-        c.send(f"OPER {OPER_NAME} {OPER_PASS}")
-        c.wait_for(r" 381 ", timeout=5)
-        # Check for MODE line with +o (oper set it)
-        # The server sends a MODE line after OPER which includes +o
-        mode_line = c.wait_for(r"MODE.*\+.*o", timeout=3)
+        if not c.is_oper:
+            _record("SASL sets +o (313 in WHOIS)", False,
+                    "SASL auth did not grant oper status")
+            return
         # WHOIS ourselves to verify 313 (oper line)
         c.send(f"WHOIS {c.nick}")
         whois_lines = c.collect(seconds=3)
         has_313 = any(" 313 " in l for l in whois_lines)
-        _record("OPER sets +o (313 in WHOIS)", has_313,
-                f"mode_line={mode_line.strip()[:60] if mode_line else 'none'}")
+        _record("SASL sets +o (313 in WHOIS)", has_313,
+                "313 found" if has_313 else "no 313 in WHOIS response")
     finally:
         c.close()
 
@@ -312,9 +417,8 @@ def test_stats_nonoper_restricted():
 # Test 5: Oper STATS subcommands work (u = uptime → 242, i = auth → 215)
 # ---------------------------------------------------------------------------
 def test_stats_oper_works():
-    c = make_client(unique_nick("so"))
+    c = make_oper_client(unique_nick("so"))
     try:
-        c.oper_up()
         # STATS u → RPL_STATSUPTIME (242)
         c.send("STATS u")
         line242 = c.wait_for(r" 242 ", timeout=4)
@@ -334,9 +438,8 @@ def test_stats_oper_works():
 # Test 6: WALLOPS — oper (with oper:mass_notice) can send, non-oper cannot
 # ---------------------------------------------------------------------------
 def test_wallops_oper_can_send():
-    c = make_client(unique_nick("wo"))
+    c = make_oper_client(unique_nick("wo"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("WALLOPS :Test wallops from oper")
         lines = c.collect(seconds=2)
@@ -364,9 +467,8 @@ def test_wallops_nonoper_blocked():
 # Test 7: OPERWALL — oper can send, non-oper cannot
 # ---------------------------------------------------------------------------
 def test_operwall_oper_can_send():
-    c = make_client(unique_nick("owo"))
+    c = make_oper_client(unique_nick("owo"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("OPERWALL :Test operwall message")
         lines = c.collect(seconds=1.5)
@@ -393,11 +495,10 @@ def test_operwall_nonoper_blocked():
 # The killed user receives a KILL message and their connection is closed.
 # ---------------------------------------------------------------------------
 def test_kill_oper():
-    killer = make_client(unique_nick("ki"))
+    killer = make_oper_client(unique_nick("ki"))
     victim = make_client(unique_nick("vi"))
     victim_nick = victim.nick
     try:
-        killer.oper_up()
         killer.drain(0.3)
         killer.send(f"KILL {victim_nick} :Test kill reason")
         # Victim's socket gets closed; try to read from it
@@ -436,9 +537,8 @@ def test_kill_oper():
 # Test 9: KLINE — oper adds temporary kline
 # ---------------------------------------------------------------------------
 def test_kline_add():
-    c = make_client(unique_nick("kl"))
+    c = make_oper_client(unique_nick("kl"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("KLINE 1 klinetest@192.0.2.10 :Test kline stress")
         # Expect NOTICE confirming "Added ... K-Line"
@@ -453,9 +553,8 @@ def test_kline_add():
 # Test 10: UNKLINE — oper removes kline
 # ---------------------------------------------------------------------------
 def test_unkline():
-    c = make_client(unique_nick("ukl"))
+    c = make_oper_client(unique_nick("ukl"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("KLINE 1 unktest@192.0.2.20 :Test unkline")
         c.wait_for(r"Added.*K-Line", timeout=5)
@@ -472,9 +571,8 @@ def test_unkline():
 # Test 11: DLINE — oper adds temporary dline
 # ---------------------------------------------------------------------------
 def test_dline_add():
-    c = make_client(unique_nick("dl"))
+    c = make_oper_client(unique_nick("dl"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("DLINE 1 192.0.2.100 :Test dline stress")
         line = c.wait_for(r"Added.*D-Line", timeout=5)
@@ -488,9 +586,8 @@ def test_dline_add():
 # Test 12: UNDLINE — oper removes dline
 # ---------------------------------------------------------------------------
 def test_undline():
-    c = make_client(unique_nick("udl"))
+    c = make_oper_client(unique_nick("udl"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("DLINE 1 192.0.2.101 :Test undline")
         c.wait_for(r"Added.*D-Line", timeout=5)
@@ -507,9 +604,8 @@ def test_undline():
 # Test 13: XLINE — oper adds gecos ban
 # ---------------------------------------------------------------------------
 def test_xline_add():
-    c = make_client(unique_nick("xl"))
+    c = make_oper_client(unique_nick("xl"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("XLINE 1 spamgecos :Test xline")
         line = c.wait_for(r"Added.*X-Line", timeout=5)
@@ -523,9 +619,8 @@ def test_xline_add():
 # Test 14: UNXLINE — oper removes xline
 # ---------------------------------------------------------------------------
 def test_unxline():
-    c = make_client(unique_nick("uxl"))
+    c = make_oper_client(unique_nick("uxl"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("XLINE 1 spamgecos2 :Test unxline")
         c.wait_for(r"Added.*X-Line", timeout=5)
@@ -542,9 +637,8 @@ def test_unxline():
 # Test 15: REHASH — oper can rehash (382), non-oper cannot (723)
 # ---------------------------------------------------------------------------
 def test_rehash_oper():
-    c = make_client(unique_nick("rh"))
+    c = make_oper_client(unique_nick("rh"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("REHASH")
         line = c.wait_for(r" 382 ", timeout=5)
@@ -573,9 +667,8 @@ def test_rehash_nonoper():
 # ---------------------------------------------------------------------------
 def test_who_oper_flag():
     viewer = make_client(unique_nick("wv"))
-    oper = make_client(unique_nick("wop"))
+    oper = make_oper_client(unique_nick("wop"))
     try:
-        oper.oper_up()
         oper.drain(0.3)
         # WHO <nick> to look up the oper specifically
         viewer.send(f"WHO {oper.nick}")
@@ -599,9 +692,8 @@ def test_who_oper_flag():
 # ---------------------------------------------------------------------------
 def test_whois_oper_line():
     c = make_client(unique_nick("wi"))
-    oper = make_client(unique_nick("wio"))
+    oper = make_oper_client(unique_nick("wio"))
     try:
-        oper.oper_up()
         oper.drain(0.3)
         c.send(f"WHOIS {oper.nick}")
         lines = c.collect(seconds=3)
@@ -617,9 +709,8 @@ def test_whois_oper_line():
 # Test 18: TRACE — oper gets full trace (200/201/206/207/208/209), non-oper limited
 # ---------------------------------------------------------------------------
 def test_trace_oper():
-    c = make_client(unique_nick("to"))
+    c = make_oper_client(unique_nick("to"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("TRACE")
         lines = c.collect(seconds=3)
@@ -649,9 +740,8 @@ def test_trace_nonoper():
 # Test 19: Oper snomask (+s) — set/unset snomask flags
 # ---------------------------------------------------------------------------
 def test_snomask_set():
-    c = make_client(unique_nick("ss"))
+    c = make_oper_client(unique_nick("ss"))
     try:
-        c.oper_up()
         c.drain(0.5)
         c.send(f"MODE {c.nick} +s +cg")
         lines = c.collect(seconds=2)
@@ -667,9 +757,8 @@ def test_snomask_set():
 
 
 def test_snomask_unset():
-    c = make_client(unique_nick("su"))
+    c = make_oper_client(unique_nick("su"))
     try:
-        c.oper_up()
         c.drain(0.5)
         c.send(f"MODE {c.nick} +s")
         c.drain(0.3)
@@ -706,9 +795,8 @@ def test_umode_no_self_oper():
 # Test 21: God mode (+G) — oper with oper:god can set +G, non-oper cannot
 # ---------------------------------------------------------------------------
 def test_godmode_oper_can_set():
-    c = make_client(unique_nick("go"))
+    c = make_oper_client(unique_nick("go"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send(f"MODE {c.nick} +G")
         lines = c.collect(seconds=2)
@@ -754,10 +842,9 @@ def test_oper_kick_protection():
     _sighup_ircd()
 
     chan = f"#kicktest{int(time.time()) % 10000}"
-    oper_c = make_client(unique_nick("kop"))
+    oper_c = make_oper_client(unique_nick("kop"))
     kicker = make_client(unique_nick("kik"))
     try:
-        oper_c.oper_up()
         oper_c.drain(0.3)
         oper_c.send(f"JOIN {chan}")
         oper_c.drain(1)
@@ -795,9 +882,8 @@ def test_oper_auto_op():
     _sighup_ircd()
 
     chan = f"#autooptest{int(time.time()) % 10000}"
-    c = make_client(unique_nick("aop"))
+    c = make_oper_client(unique_nick("aop"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send(f"JOIN {chan}")
         lines = c.collect(seconds=3)
@@ -826,9 +912,8 @@ def test_oper_auto_op():
 # Test 24: MODLIST — oper can list loaded modules
 # ---------------------------------------------------------------------------
 def test_modlist_oper():
-    c = make_client(unique_nick("ml"))
+    c = make_oper_client(unique_nick("ml"))
     try:
-        c.oper_up()
         c.drain(0.3)
         c.send("MODLIST")
         lines = c.collect(seconds=3)
@@ -911,9 +996,8 @@ def test_umode_callerid():
 # ---------------------------------------------------------------------------
 def test_stats_p_oper():
     c = make_client(unique_nick("sp"))
-    oper = make_client(unique_nick("spo"))
+    oper = make_oper_client(unique_nick("spo"))
     try:
-        oper.oper_up()
         oper.drain(0.3)
         c.send("STATS p")
         lines = c.collect(seconds=2)

@@ -30,6 +30,7 @@
 #include "privilege.h"
 #include "chmode.h"
 #include "certfp.h"
+#include "services.h"
 
 #define CF_TYPE(x) ((x) & CF_MTYPE)
 
@@ -2888,6 +2889,91 @@ static struct ConfEntry conf_sts_table[] =
 /* *INDENT-ON* */
 
 /* -------------------------------------------------------------------------
+ * Services configuration callbacks
+ *
+ * services {
+ *     enabled = yes;
+ *     hub = yes;                        # is this server the authoritative hub?
+ *     hub_name = "hub.example.com";    # (leaf-only) name of the hub server
+ *     db_path = "/var/lib/ophion/services.db";
+ *     nick_expire_days = 30;
+ *     chan_expire_days = 60;
+ *     enforce_delay_secs = 30;
+ *     maxnicks = 10;
+ *     maxmemos = 20;
+ *     registration_open = yes;
+ * };
+ * ---------------------------------------------------------------------- */
+
+static int
+conf_begin_services(struct TopConf *tc)
+{
+	(void)tc;
+	return 0;
+}
+
+static int
+conf_end_services(struct TopConf *tc)
+{
+	(void)tc;
+	return 0;
+}
+
+static void
+conf_set_services_enabled(void *data)
+{
+	services.enabled = *(int *)data ? true : false;
+}
+
+static void
+conf_set_services_hub(void *data)
+{
+	services.is_hub = *(int *)data ? true : false;
+}
+
+static void
+conf_set_services_db_path(void *data)
+{
+	rb_strlcpy(services.db_path, (char *)data, sizeof(services.db_path));
+}
+
+static void
+conf_set_services_nick_expire(void *data)
+{
+	services.nick_expire_days = *(int *)data;
+}
+
+static void
+conf_set_services_chan_expire(void *data)
+{
+	services.chan_expire_days = *(int *)data;
+}
+
+static void
+conf_set_services_enforce_delay(void *data)
+{
+	services.enforce_delay_secs = *(int *)data;
+}
+
+static void
+conf_set_services_maxnicks(void *data)
+{
+	services.maxnicks = *(int *)data;
+}
+
+static void
+conf_set_services_maxmemos(void *data)
+{
+	services.maxmemos = *(int *)data;
+}
+
+static void
+conf_set_services_registration_open(void *data)
+{
+	services.registration_open = *(int *)data ? true : false;
+}
+
+/* -------------------------------------------------------------------------
  * Discord bridge configuration callbacks
  * ---------------------------------------------------------------------- */
 
@@ -3041,4 +3127,16 @@ newconf_init()
 	add_conf_item("discord", "token",       CF_QSTRING,            conf_set_discord_token);
 	add_conf_item("discord", "guild_id",    CF_QSTRING,            conf_set_discord_guild_id);
 	add_conf_item("discord", "channel_map", CF_QSTRING | CF_FLIST, conf_set_discord_channel_map);
+
+	/* Ophion built-in account services */
+	add_top_conf("services", conf_begin_services, conf_end_services, NULL);
+	add_conf_item("services", "enabled",           CF_YESNO,   conf_set_services_enabled);
+	add_conf_item("services", "hub",               CF_YESNO,   conf_set_services_hub);
+	add_conf_item("services", "db_path",           CF_QSTRING, conf_set_services_db_path);
+	add_conf_item("services", "nick_expire_days",  CF_INT,     conf_set_services_nick_expire);
+	add_conf_item("services", "chan_expire_days",  CF_INT,     conf_set_services_chan_expire);
+	add_conf_item("services", "enforce_delay_secs",CF_INT,     conf_set_services_enforce_delay);
+	add_conf_item("services", "maxnicks",          CF_INT,     conf_set_services_maxnicks);
+	add_conf_item("services", "maxmemos",          CF_INT,     conf_set_services_maxmemos);
+	add_conf_item("services", "registration_open", CF_YESNO,   conf_set_services_registration_open);
 }

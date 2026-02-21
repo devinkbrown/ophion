@@ -717,3 +717,68 @@ modules {
 	path = "modules";
 	path = "modules/autoload";
 };
+
+/*
+ * services {} — Ophion built-in account services (NickServ, ChanServ, etc.)
+ *
+ * When enabled = yes, Ophion provides nick/channel registration, memo, vhost,
+ * and oper-account integration directly — no external services daemon needed.
+ *
+ * Hub/leaf topology:
+ *   - One server should set hub = yes.  It holds the authoritative SQLite DB.
+ *   - Leaf servers cache account data and operate autonomously during netsplits
+ *     (SVCS_MODE_SPLIT), then sync dirty records back when the hub reconnects.
+ *   - A standalone single-server network can set hub = yes and ignore hub_name.
+ *
+ * Commands made available when services are enabled:
+ *   /REGISTER <password> [email]     — register current nick
+ *   /IDENTIFY  [account] <password>  — identify to services account
+ *   /LOGOUT                          — drop services identification
+ *   /GHOST <nick> <password>         — kill a ghost using your password
+ *   /REGAIN <nick> [password]        — reclaim your nick from a ghost
+ *   /GROUP <nick>                    — add a nick to your account
+ *   /CREGISTER <#channel>            — register a channel you have ops in
+ *   /CHANSET <#chan> <flag> [value]   — manage channel registration settings
+ *   /MEMO SEND|READ|DEL|LIST ...     — inter-account memos
+ *   /VHOST REQUEST|TAKE|OFFER|LIST   — virtual host management
+ *   /CERTADD [certfp]                — add TLS cert fingerprint to account
+ *   /CERTDEL <certfp>                — remove TLS cert fingerprint
+ *   /ACCOUNTSET <option> <value>     — account settings (email, password, etc.)
+ *   /ACCOUNTINFO [account]           — display account information
+ *   /ACCOUNTOPER LINK|UNLINK|LIST    — link/unlink an oper block to your account
+ *
+ * When services are disabled (enabled = no), the IDENTIFY command reverts to
+ * its IRCX channel-key behaviour (/IDENTIFY #channel <key>); all other
+ * services commands return ERR_UNKNOWNCOMMAND.
+ */
+services {
+	/* Master switch.  Set to yes to enable the services layer. */
+	enabled = yes;
+
+	/* Is this server the authoritative services hub? */
+	hub = yes;
+
+	/* Path to the SQLite database file (created automatically on first run). */
+	db_path = "/var/lib/ophion/services.db";
+
+	/* Days before an unvisited nick registration expires. */
+	nick_expire_days = 30;
+
+	/* Days before an inactive channel registration expires. */
+	chan_expire_days = 60;
+
+	/*
+	 * Seconds after a user connects with a registered nick before they are
+	 * killed / renamed if they have not identified.  0 = no enforcement.
+	 */
+	enforce_delay_secs = 30;
+
+	/* Maximum number of grouped nicks per account. */
+	maxnicks = 10;
+
+	/* Maximum number of stored memos per account. */
+	maxmemos = 20;
+
+	/* Allow anyone to /REGISTER a new account. Set to no to freeze signups. */
+	registration_open = yes;
+};
