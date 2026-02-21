@@ -571,7 +571,7 @@ svc_sync_burst_to(struct Client *server_p)
 	 */
 #if defined(TCP_CORK) || defined(TCP_NOPUSH)
 	rb_fde_t *burst_F = (server_p->localClient) ? server_p->localClient->F : NULL;
-	int cork_fd = (burst_F && !rb_fd_ssl(burst_F)) ? (int)burst_F->fd : -1;
+	int cork_fd = (burst_F && !rb_fd_ssl(burst_F)) ? (int)rb_get_fd(burst_F) : -1;
 	int orig_sndbuf = -1;
 	if(cork_fd >= 0) {
 		int on = 1;

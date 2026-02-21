@@ -38,11 +38,15 @@
 #include "rb_radixtree.h"
 
 static rb_radixtree *monitor_tree;
+static rb_bh *monitor_heap;
 
 void
 init_monitor(void)
 {
 	monitor_tree = rb_radixtree_create("monitor lists", irccasecanon);
+	/* Pool-allocate monitor entries to avoid per-connection malloc overhead
+	 * when clients add/remove MONITOR entries frequently.               */
+	monitor_heap = rb_bh_create(sizeof(struct monitor), 256, "monitor_heap");
 }
 
 struct monitor *
@@ -56,7 +60,7 @@ find_monitor(const char *name, int add)
 
 	if(add)
 	{
-		monptr = rb_malloc(sizeof(*monptr));
+		monptr = rb_bh_alloc(monitor_heap);
 		rb_strlcpy(monptr->name, name, sizeof(monptr->name));
 		rb_radixtree_add(monitor_tree, monptr->name, monptr);
 
@@ -73,7 +77,7 @@ free_monitor(struct monitor *monptr)
 		return;
 
 	rb_radixtree_delete(monitor_tree, monptr->name);
-	rb_free(monptr);
+	rb_bh_free(monitor_heap, monptr);
 }
 
 /* monitor_signon()

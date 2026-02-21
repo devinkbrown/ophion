@@ -49,6 +49,9 @@ struct timeout_data
 
 rb_dlink_list *rb_fd_table;
 static rb_bh *fd_heap;
+static rb_bh *timeout_heap;
+static rb_bh *conn_heap;
+static rb_bh *accept_heap;
 
 static rb_dlink_list timeout_list;
 static rb_dlink_list closed_list;
@@ -257,7 +260,7 @@ rb_settimeout(rb_fde_t *F, time_t timeout, PF * callback, void *cbdata)
 		if(td == NULL)
 			return;
 		rb_dlinkDelete(&td->node, &timeout_list);
-		rb_free(td);
+		rb_bh_free(timeout_heap, td);
 		F->timeout = NULL;
 		if(rb_dlink_list_length(&timeout_list) == 0)
 		{
@@ -268,7 +271,7 @@ rb_settimeout(rb_fde_t *F, time_t timeout, PF * callback, void *cbdata)
 	}
 
 	if(F->timeout == NULL)
-		td = F->timeout = rb_malloc(sizeof(struct timeout_data));
+		td = F->timeout = rb_bh_alloc(timeout_heap);
 
 	td->F = F;
 	td->timeout = rb_current_time() + timeout;
@@ -310,7 +313,7 @@ rb_checktimeouts(void *notused __attribute__((unused)))
 			data = td->timeout_data;
 			rb_dlinkDelete(&td->node, &timeout_list);
 			F->timeout = NULL;
-			rb_free(td);
+			rb_bh_free(timeout_heap, td);
 			hdl(F, data);
 		}
 	}
@@ -502,7 +505,17 @@ static void rb_accept_tryaccept(rb_fde_t *F, void *data __attribute__((unused)))
 		memset(&st, 0, sizeof(st));
 		addrlen = sizeof(st);
 
+		/* accept4() (Linux ≥ 2.6.28, FreeBSD ≥ 10, BSDs) atomically sets
+		 * SOCK_NONBLOCK + SOCK_CLOEXEC, eliminating two fcntl() syscalls
+		 * per connection.  ENOSYS fallback handles older kernels.       */
+#ifdef SOCK_NONBLOCK
+		new_fd = accept4(F->fd, (struct sockaddr *)&st, &addrlen,
+		                 SOCK_NONBLOCK | SOCK_CLOEXEC);
+		if(new_fd < 0 && errno == ENOSYS)
+			new_fd = accept(F->fd, (struct sockaddr *)&st, &addrlen);
+#else
 		new_fd = accept(F->fd, (struct sockaddr *)&st, &addrlen);
+#endif
 		rb_get_errno();
 		if(new_fd < 0)
 		{
@@ -549,6 +562,21 @@ static void rb_accept_tryaccept(rb_fde_t *F, void *data __attribute__((unused)))
 				           &optval, sizeof(optval));
 			}
 #endif
+/* After enabling keepalives, tune the intervals so dead clients are
+ * detected within ~2 minutes: 60 s idle before first probe, 6 probes
+ * 10 s apart → drops at 120 s with no response.  Values are advisory;
+ * setsockopt() errors are silently ignored on systems that lack them. */
+#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+			{
+				int idle = 60, intvl = 10, cnt = 6;
+				setsockopt(new_F->fd, IPPROTO_TCP, TCP_KEEPIDLE,
+				           &idle, sizeof(idle));
+				setsockopt(new_F->fd, IPPROTO_TCP, TCP_KEEPINTVL,
+				           &intvl, sizeof(intvl));
+				setsockopt(new_F->fd, IPPROTO_TCP, TCP_KEEPCNT,
+				           &cnt, sizeof(cnt));
+			}
+#endif
 #if defined(IP_TOS) && defined(IPTOS_LOWDELAY)
 			{
 				int tos = IPTOS_LOWDELAY;
@@ -588,7 +616,7 @@ rb_accept_tcp(rb_fde_t *F, ACPRE * precb, ACCB * callback, void *data)
 		return;
 	lrb_assert(callback);
 
-	F->accept = rb_malloc(sizeof(struct acceptdata));
+	F->accept = rb_bh_alloc(accept_heap);
 	F->accept->callback = callback;
 	F->accept->data = data;
 	F->accept->precb = precb;
@@ -618,7 +646,7 @@ rb_connect_tcp(rb_fde_t *F, struct sockaddr *dest,
 		return;
 
 	lrb_assert(callback);
-	F->connect = rb_malloc(sizeof(struct conndata));
+	F->connect = rb_bh_alloc(conn_heap);
 	F->connect->callback = callback;
 	F->connect->data = data;
 
@@ -684,7 +712,7 @@ rb_connect_sctp(rb_fde_t *F, struct sockaddr_storage *dest, size_t dest_len,
 		return;
 
 	lrb_assert(callback);
-	F->connect = rb_malloc(sizeof(struct conndata));
+	F->connect = rb_bh_alloc(conn_heap);
 	F->connect->callback = callback;
 	F->connect->data = data;
 
@@ -841,8 +869,14 @@ rb_socketpair(int family, int sock_type, int proto, rb_fde_t **F1, rb_fde_t **F2
 		return -1;
 	}
 
+/* Use SOCK_NONBLOCK|SOCK_CLOEXEC atomically when available (Linux/BSDs),
+ * saving 4 fcntl() syscalls (2 per end) vs. the rb_set_nb() path.     */
 #ifdef HAVE_SOCKETPAIR
+# ifdef SOCK_NONBLOCK
+	if(socketpair(family, sock_type | SOCK_NONBLOCK | SOCK_CLOEXEC, proto, nfd))
+# else
 	if(socketpair(family, sock_type, proto, nfd))
+# endif
 #else
 	if(sock_type == SOCK_DGRAM)
 	{
@@ -1049,6 +1083,18 @@ rb_listen(rb_fde_t *F, int backlog, int defer_accept)
 	int result;
 
 	F->type = RB_FD_SOCKET | RB_FD_LISTEN | (F->type & RB_FD_INHERIT_TYPES);
+
+/* SO_REUSEPORT lets the kernel distribute incoming connections across
+ * multiple listener sockets on the same port (e.g. separate accept-loop
+ * threads or helper processes) without the thundering-herd problem.
+ * Best-effort: silently ignored on kernels that don't support it.     */
+#ifdef SO_REUSEPORT
+	{
+		int opt = 1;
+		(void)setsockopt(F->fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+	}
+#endif
+
 	result = listen(F->fd, backlog);
 
 #ifdef TCP_DEFER_ACCEPT
@@ -1066,6 +1112,27 @@ rb_listen(rb_fde_t *F, int backlog, int defer_accept)
 		rb_strlcpy(afa.af_name, "dataready", sizeof afa.af_name);
 		(void)setsockopt(F->fd, SOL_SOCKET, SO_ACCEPTFILTER, &afa,
 				sizeof afa);
+	}
+#endif
+
+/* TCP Fast Open (Linux ≥ 3.7, macOS ≥ 10.11) allows data to be sent in
+ * the SYN/SYN-ACK exchange, cutting one full round-trip from the IRC
+ * connection handshake.  The kernel queues the cookie negotiation
+ * transparently; connections that don't use TFO fall back normally.
+ * A queue depth of 128 is plenty for an IRC listener.                  */
+#if defined(TCP_FASTOPEN) && !defined(__APPLE__)
+	if (!result && !(F->type & RB_FD_SCTP))
+	{
+		int tfo_qlen = 128;
+		(void)setsockopt(F->fd, IPPROTO_TCP, TCP_FASTOPEN,
+		                 &tfo_qlen, sizeof(tfo_qlen));
+	}
+#elif defined(TCP_FASTOPEN) && defined(__APPLE__)
+	if (!result && !(F->type & RB_FD_SCTP))
+	{
+		int enabled = 1;
+		(void)setsockopt(F->fd, IPPROTO_TCP, TCP_FASTOPEN,
+		                 &enabled, sizeof(enabled));
 	}
 #endif
 
@@ -1097,6 +1164,14 @@ rb_fdlist_init(int closeall, int maxfds, size_t heapsize)
 		initialized = 1;
 	}
 	fd_heap = rb_bh_create(sizeof(rb_fde_t), heapsize, "librb_fd_heap");
+	/* timeout_data is allocated/freed for every connection that sets a
+	 * timeout (effectively every client).  Pool-allocating avoids the
+	 * per-call malloc overhead on the hot accept→settimeout path.      */
+	timeout_heap = rb_bh_create(sizeof(struct timeout_data), heapsize, "librb_timeout_heap");
+	/* conndata/acceptdata are allocated per outgoing/incoming connection
+	 * attempt.  Pool-allocating avoids per-connect malloc overhead.    */
+	conn_heap   = rb_bh_create(sizeof(struct conndata),   heapsize, "librb_conn_heap");
+	accept_heap = rb_bh_create(sizeof(struct acceptdata), heapsize, "librb_accept_heap");
 
 }
 
@@ -1158,8 +1233,8 @@ rb_close(rb_fde_t *F)
 
 	rb_setselect(F, RB_SELECT_WRITE | RB_SELECT_READ, NULL, NULL);
 	rb_settimeout(F, 0, NULL, NULL);
-	rb_free(F->accept);
-	rb_free(F->connect);
+	if(F->accept)  { rb_bh_free(accept_heap, F->accept);  F->accept  = NULL; }
+	if(F->connect) { rb_bh_free(conn_heap,   F->connect); F->connect = NULL; }
 	rb_free(F->desc);
 #ifdef HAVE_SSL
 	if(type & RB_FD_SSL)

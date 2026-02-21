@@ -32,6 +32,8 @@
 #include "hook.h"
 #include "send.h"
 #include "s_newconf.h"
+#include "s_serv.h"
+#include "numeric.h"
 #include "services.h"
 #include "services_db.h"
 #include "services_sync.h"
@@ -299,8 +301,8 @@ svc_account_create(const char *name, const char *passhash, const char *email)
 	if(svc_account_find(name) != NULL)
 		return NULL;
 
+	/* rb_malloc wraps calloc(1, size), so memory is already zeroed */
 	struct svc_account *acct = rb_malloc(sizeof *acct);
-	memset(acct, 0, sizeof *acct);
 
 	rb_strlcpy(acct->name, name, sizeof acct->name);
 	if(passhash && *passhash)
@@ -391,8 +393,8 @@ svc_chanreg_create(const char *channel, const char *founder_name)
 	if(svc_chanreg_find(channel) != NULL)
 		return NULL;
 
+	/* rb_malloc wraps calloc(1, size), so memory is already zeroed */
 	struct svc_chanreg *reg = rb_malloc(sizeof *reg);
-	memset(reg, 0, sizeof *reg);
 
 	rb_strlcpy(reg->channel, channel,      sizeof reg->channel);
 	rb_strlcpy(reg->founder, founder_name, sizeof reg->founder);

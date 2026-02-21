@@ -77,7 +77,16 @@ rb_init_netio_epoll(void)
 	can_do_timerfd = 0;
 	ep_info = rb_malloc(sizeof(struct epoll_info));
 	ep_info->pfd_size = EPOLL_MAX_EVENTS;
+	/* epoll_create1 with EPOLL_CLOEXEC sets close-on-exec atomically
+	 * (no window between create and fcntl).  Fall back to the older
+	 * two-step on kernels < 2.6.27.                                    */
+#ifdef EPOLL_CLOEXEC
+	ep_info->ep = epoll_create1(EPOLL_CLOEXEC);
+	if(ep_info->ep < 0)
+		ep_info->ep = epoll_create(EPOLL_MAX_EVENTS);
+#else
 	ep_info->ep = epoll_create(EPOLL_MAX_EVENTS);
+#endif
 	if(ep_info->ep < 0)
 	{
 		return -1;
@@ -148,6 +157,13 @@ rb_setselect_epoll(rb_fde_t *F, unsigned int type, PF * handler, void *client_da
 
 	if(op == EPOLL_CTL_ADD || op == EPOLL_CTL_MOD)
 		ep_event.events |= EPOLLET;
+/* EPOLLRDHUP (Linux ≥ 2.6.17) fires when the peer closes its write end
+ * (TCP FIN), allowing us to detect half-closed connections without
+ * waiting for a read() to return 0.  Fall back gracefully on older kernels. */
+#ifdef EPOLLRDHUP
+	if(ep_event.events & EPOLLIN)
+		ep_event.events |= EPOLLRDHUP;
+#endif
 
 	if(epoll_ctl(ep_info->ep, op, F->fd, &ep_event) != 0)
 	{
@@ -213,7 +229,11 @@ rb_select_epoll(long delay)
 	{
 		PF *hdl;
 		rb_fde_t *F = ep_info->pfd[i].data.ptr;
-		if(ep_info->pfd[i].events & (EPOLLIN | EPOLLHUP | EPOLLERR))
+		if(ep_info->pfd[i].events & (EPOLLIN | EPOLLHUP | EPOLLERR
+#ifdef EPOLLRDHUP
+		                             | EPOLLRDHUP
+#endif
+		                             ))
 		{
 			hdl = F->read_handler;
 			data = F->read_data;
@@ -263,6 +283,10 @@ rb_select_epoll(long delay)
 			ep_event.data.ptr = F;
 			if(op == EPOLL_CTL_MOD || op == EPOLL_CTL_ADD)
 				ep_event.events |= EPOLLET;
+#ifdef EPOLLRDHUP
+			if(ep_event.events & EPOLLIN)
+				ep_event.events |= EPOLLRDHUP;
+#endif
 
 			if(epoll_ctl(ep_info->ep, op, F->fd, &ep_event) != 0)
 			{
