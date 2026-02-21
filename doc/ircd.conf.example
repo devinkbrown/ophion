@@ -657,6 +657,28 @@ general {
 	 * when they join a channel.  See reference.conf for full details.
 	 */
 	oper_auto_op = no;
+
+	/* max_mode_params: maximum parameters per MODE command (MODES= in 005).
+	 * Default: 4.  Set to 6 for modern clients.
+	 */
+	#max_mode_params = 6;
+
+	/* mode_broadcast_params: params per broadcast MODE line (0=group all).
+	 * Set to 1 to broadcast one change per message.  Default: 0.
+	 */
+	#mode_broadcast_params = 0;
+
+	/* KICK / MODE / PROP flood limits.
+	 * Set count to 0 to disable.  Opers with oper:god or no_oper_flood
+	 * are always exempt.  Per-channel limits can be set by chanops via
+	 * PROP #channel KICKFLOOD/MODEFLOOD/PROPFLOOD :<count>/<seconds>.
+	 */
+	#kick_flood_count = 3;
+	#kick_flood_time  = 10;
+	#mode_flood_count = 3;
+	#mode_flood_time  = 10;
+	#prop_flood_count = 3;
+	#prop_flood_time  = 10;
 };
 
 modules {

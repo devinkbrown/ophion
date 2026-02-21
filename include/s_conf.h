@@ -264,6 +264,26 @@ struct config_file_entry
 	 */
 	int oper_kick_protection;
 	int oper_auto_op;
+
+	/*
+	 * Operation flood controls (global; 0 = disabled).
+	 *
+	 * kick_flood_count / kick_flood_time: max KICK operations a local user
+	 *   may issue within kick_flood_time seconds before being throttled.
+	 * mode_flood_count / mode_flood_time: same for MODE commands.
+	 * prop_flood_count / prop_flood_time: same for PROP SET commands.
+	 *
+	 * Per-channel tighter limits can be set via channel PROP keys:
+	 *   KICKFLOOD = "N/T"   MODEFLOOD = "N/T"   PROPFLOOD = "N/T"
+	 * Channel limits only apply to operations inside that channel;
+	 * the server-global limit is always enforced in addition.
+	 */
+	int kick_flood_count;
+	int kick_flood_time;
+	int mode_flood_count;
+	int mode_flood_time;
+	int prop_flood_count;
+	int prop_flood_time;
 };
 
 struct config_channel_entry

@@ -608,6 +608,35 @@ find_xline_mask(const char *gecos)
 	return NULL;
 }
 
+/*
+ * is_builtin_resv
+ *
+ * Returns true if 'name' is a permanently reserved identifier that cannot
+ * be used as a user nick or as a dotless server name.  This list is
+ * hardcoded into the server so that these names cannot be freed via
+ * UNRESV or config edits.
+ */
+bool
+is_builtin_resv(const char *name)
+{
+	/* Case-insensitive list of permanently reserved identifiers */
+	static const char *const reserved[] = {
+		"system",
+		"server",
+		"services",
+		"global",
+		"localhost",
+		"ircd",
+		NULL
+	};
+	for(const char *const *r = reserved; *r != NULL; r++)
+	{
+		if(irccmp(name, *r) == 0)
+			return true;
+	}
+	return false;
+}
+
 struct ConfItem *
 find_nick_resv(const char *name)
 {

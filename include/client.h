@@ -186,6 +186,16 @@ struct LocalUser
 	time_t last_whisper_time;
 	int whisper_count;
 
+	/* Global per-user flood tracking for KICK, MODE, and PROP operations.
+	 * Channel-level overrides (via PROP KICKFLOOD/MODEFLOOD/PROPFLOOD)
+	 * use the per-membership counters in struct membership instead. */
+	time_t flood_kick_time;
+	int    flood_kick_count;
+	time_t flood_mode_time;
+	int    flood_mode_count;
+	time_t flood_prop_time;
+	int    flood_prop_count;
+
 	time_t lasttime;	/* last time we parsed something */
 	time_t firsttime;	/* time client was created */
 
@@ -586,6 +596,7 @@ extern void check_one_kline(struct ConfItem *kline);
 extern void check_dlines(void);
 extern void check_xlines(void);
 extern void resv_nick_fnc(const char *mask, const char *reason, int temp_time);
+extern bool server_link_nick_fnc(const char *server_name);
 
 extern const char *get_client_name(struct Client *client, int show_ip);
 extern const char *log_client_name(struct Client *, int);

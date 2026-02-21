@@ -823,6 +823,103 @@ resv_nick_fnc(const char *mask, const char *reason, int temp_time)
 	}
 }
 
+/* server_link_nick_fnc
+ *
+ * inputs   - server_name: the dotless server name that is about to link
+ * outputs  - true  if any conflicting local nick was renamed (server may link)
+ *            false if the conflicting nick belongs to a remote user (caller
+ *                  should abort the link instead of force-renaming remotely)
+ * side effects
+ *   If a LOCAL user has a nick equal to server_name, they are force-renamed
+ *   to a free alternative nick and receive a clear notice explaining why.
+ *   Opers are notified of the rename.
+ */
+bool
+server_link_nick_fnc(const char *server_name)
+{
+	struct Client *victim = find_named_person(server_name);
+
+	if(victim == NULL)
+		return true;		/* no conflict — nothing to do */
+
+	if(!MyConnect(victim))
+		return false;		/* remote user — caller should reject link */
+
+	/* Generate an alternative nick.  Try <nick>_ first; if that is also
+	 * taken or too long, fall back to Guest<last-4-of-UID>. */
+	char new_nick[NICKLEN + 1];
+	bool found = false;
+
+	/* Try appending underscores (up to 3 attempts) */
+	rb_strlcpy(new_nick, server_name, sizeof(new_nick));
+	for(int attempt = 0; attempt < 3; attempt++)
+	{
+		size_t len = strlen(new_nick);
+		if(len + 1 < sizeof(new_nick))
+		{
+			new_nick[len]     = '_';
+			new_nick[len + 1] = '\0';
+			if(find_named_client(new_nick) == NULL)
+			{
+				found = true;
+				break;
+			}
+		}
+	}
+
+	/* Fall back: Guest<4-hex-digits-from-UID> */
+	if(!found)
+	{
+		const char *id = victim->id;
+		size_t idlen   = strlen(id);
+		const char *tail = idlen >= 4 ? id + idlen - 4 : id;
+		snprintf(new_nick, sizeof(new_nick), "Guest%s", tail);
+		/* If even that is taken, just use the UID */
+		if(find_named_client(new_nick) != NULL)
+			rb_strlcpy(new_nick, victim->id, sizeof(new_nick));
+	}
+
+	/* Notify opers */
+	sendto_realops_snomask(SNO_GENERAL, L_ALL,
+		"Server %s linking: forcing nick change for %s!%s@%s to %s",
+		server_name, victim->name, victim->username, victim->host, new_nick);
+
+	/* Notify the user with a clear, friendly message */
+	sendto_one_notice(victim,
+		":*** Your nickname \002%s\002 conflicts with the name of a server "
+		"that is linking to the network. You have been renamed to \002%s\002.",
+		victim->name, new_nick);
+
+	/* Perform the nick change — mirrors the logic in resv_nick_fnc */
+	victim->tsinfo = rb_current_time();
+	whowas_add_history(victim, 1);
+
+	monitor_signoff(victim);
+
+	invalidate_bancache_user(victim);
+
+	sendto_common_channels_local(victim, NOCAPS, NOCAPS,
+		":%s!%s@%s NICK :%s",
+		victim->name, victim->username, victim->host, new_nick);
+	sendto_server(victim, NULL, CAP_TS6, NOCAPS,
+		":%s NICK %s :%ld",
+		use_id(victim), new_nick, (long)victim->tsinfo);
+
+	del_from_client_hash(victim->name, victim);
+	rb_strlcpy(victim->name, new_nick, sizeof(victim->name));
+	add_to_client_hash(new_nick, victim);
+
+	monitor_signon(victim);
+
+	{
+		char note[NICKLEN + 10];
+		snprintf(note, sizeof(note), "Nick: %s", new_nick);
+		rb_note(victim->localClient->F, note);
+	}
+
+	return true;
+}
+
 /*
  * update_client_exit_stats
  *

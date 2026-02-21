@@ -169,7 +169,6 @@ static void
 conf_set_serverinfo_name(void *data)
 {
 	const char *s;
-	int dots = 0;
 
 	for(s = data; *s != '\0'; s++)
 	{
@@ -179,14 +178,6 @@ conf_set_serverinfo_name(void *data)
 					  "-- bogus servername.");
 			return;
 		}
-		else if(*s == '.')
-			++dots;
-	}
-
-	if(!dots)
-	{
-		conf_report_error("Ignoring serverinfo::name -- must contain '.'");
-		return;
 	}
 
 	s = data;
@@ -1754,7 +1745,6 @@ conf_set_service_name(void *data)
 {
 	const char *s;
 	char *tmp;
-	int dots = 0;
 
 	for(s = data; *s != '\0'; s++)
 	{
@@ -1764,14 +1754,6 @@ conf_set_service_name(void *data)
 					 "-- bogus servername.");
 			return;
 		}
-		else if(*s == '.')
-			 dots++;
-	}
-
-	if(!dots)
-	{
-		conf_report_error("Ignoring service::name -- must contain '.'");
-		return;
 	}
 
 	tmp = rb_strdup(data);
@@ -2788,6 +2770,12 @@ static struct ConfEntry conf_general_table[] =
 	{ "tls_ciphers_oper_only",	CF_YESNO, NULL, 0, &ConfigFileEntry.tls_ciphers_oper_only	},
 	{ "oper_kick_protection",	CF_YESNO, NULL, 0, &ConfigFileEntry.oper_kick_protection	},
 	{ "oper_auto_op",		CF_YESNO, NULL, 0, &ConfigFileEntry.oper_auto_op		},
+	{ "kick_flood_count",		CF_INT,   NULL, 0, &ConfigFileEntry.kick_flood_count		},
+	{ "kick_flood_time",		CF_TIME,  NULL, 0, &ConfigFileEntry.kick_flood_time		},
+	{ "mode_flood_count",		CF_INT,   NULL, 0, &ConfigFileEntry.mode_flood_count		},
+	{ "mode_flood_time",		CF_TIME,  NULL, 0, &ConfigFileEntry.mode_flood_time		},
+	{ "prop_flood_count",		CF_INT,   NULL, 0, &ConfigFileEntry.prop_flood_count		},
+	{ "prop_flood_time",		CF_TIME,  NULL, 0, &ConfigFileEntry.prop_flood_time		},
 	{ "\0", 		0, 	  NULL, 0, NULL }
 };
 

@@ -240,6 +240,7 @@ extern void disable_server_conf_autoconn(const char *name);
 
 extern struct ConfItem *find_xline(const char *, int);
 extern struct ConfItem *find_xline_mask(const char *);
+extern bool is_builtin_resv(const char *name);
 extern struct ConfItem *find_nick_resv(const char *name);
 extern struct ConfItem *find_nick_resv_mask(const char *name);
 

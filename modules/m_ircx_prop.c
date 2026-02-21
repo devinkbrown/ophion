@@ -43,6 +43,7 @@
 #include "hash.h"
 #include "match.h"
 #include "propertyset.h"
+#include "flood.h"
 
 static const char ircx_prop_desc[] = "Provides IRCX PROP command";
 
@@ -307,6 +308,12 @@ m_prop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 				sendto_one_numeric(source_p, ERR_PROPDENIED, form_str(ERR_PROPDENIED), parv[1]);
 				return;
 			}
+			{
+				struct Channel *flood_chptr = IsChanPrefix(*prop_match.target_name)
+					? (struct Channel *)prop_match.target : NULL;
+				if(check_prop_flood(source_p, flood_chptr))
+					return;
+			}
 			handle_prop_clear(&prop_match, source_p);
 		}
 		else
@@ -319,7 +326,12 @@ m_prop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 			sendto_one_numeric(source_p, ERR_PROPDENIED, form_str(ERR_PROPDENIED), parv[1]);
 			return;
 		}
-
+		{
+			struct Channel *flood_chptr = IsChanPrefix(*prop_match.target_name)
+				? (struct Channel *)prop_match.target : NULL;
+			if(check_prop_flood(source_p, flood_chptr))
+				return;
+		}
 		handle_prop_upsert_or_delete(&prop_match, source_p, parv[2], parv[3]);
 		break;
 

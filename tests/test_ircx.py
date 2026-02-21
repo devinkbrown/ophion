@@ -2120,13 +2120,16 @@ def test_kick_multi_target_two():
 
 
 def test_kick_multi_target_six():
-    """KICK 6 targets in a single command (up to max_mode_params)."""
+    """KICK 6 targets in a single command (up to max_mode_params).
+    Uses OPER (oper:god) to bypass flood controls so all 6 kicks land."""
     op_s, op_n = connect()
     victims = [connect() for _ in range(6)]
     ch = chan()
     try:
         _send(op_s, f"JOIN {ch}")
         _drain(op_s, 0.5)
+        oper_up(op_s)          # god-mode bypass for flood controls
+        _drain(op_s, 0.3)
         for vs, vn in victims:
             _send(vs, f"JOIN {ch}")
             time.sleep(0.1)
@@ -2148,7 +2151,9 @@ def test_kick_multi_target_six():
 
 
 def test_kick_multi_target_exceeds_limit():
-    """KICK beyond max_mode_params: only first max_mode_params targets are kicked."""
+    """KICK beyond max_mode_params: only first max_mode_params targets are kicked.
+    Uses OPER (oper:god) to bypass flood controls so the cap is enforced by
+    max_mode_params, not by the per-operation flood limiter."""
     op_s, op_n = connect()
     # 8 victims, limit is 6 → only 6 should be kicked
     victims = [connect() for _ in range(8)]
@@ -2156,6 +2161,8 @@ def test_kick_multi_target_exceeds_limit():
     try:
         _send(op_s, f"JOIN {ch}")
         _drain(op_s, 0.5)
+        oper_up(op_s)          # god-mode bypass for flood controls
+        _drain(op_s, 0.3)
         for vs, vn in victims:
             _send(vs, f"JOIN {ch}")
             time.sleep(0.1)
@@ -2380,6 +2387,310 @@ def test_rehash_server_rename():
 
 
 # ===========================================================================
+# 9. JOIN 0 comma-list and inline =key stress tests
+# ===========================================================================
+
+def test_join_zero_parts_all():
+    """JOIN 0 with no follow-on channels parts every channel the user is in."""
+    s, n = connect()
+    ch1, ch2 = chan(), chan()
+    try:
+        _send(s, f"JOIN {ch1}")
+        _send(s, f"JOIN {ch2}")
+        time.sleep(0.5)
+        _drain(s, 0.3)
+
+        _send(s, "JOIN 0")
+        time.sleep(0.5)
+        lines = _read_lines(s, 2.0)
+        parts = [l for l in lines if " PART " in l]
+        got_ch1 = any(ch1 in l for l in parts)
+        got_ch2 = any(ch2 in l for l in parts)
+        _report("JOIN 0 parts all joined channels",
+                got_ch1 and got_ch2,
+                f"parts={parts[:4]}")
+    finally:
+        close(s)
+
+
+def test_join_zero_comma_parts_then_joins():
+    """JOIN 0,#newchan parts all current channels then joins #newchan."""
+    s, n = connect()
+    old_ch = chan()
+    new_ch = chan()
+    try:
+        _send(s, f"JOIN {old_ch}")
+        time.sleep(0.4)
+        _drain(s, 0.3)
+
+        _send(s, f"JOIN 0,{new_ch}")
+        time.sleep(0.7)
+        lines = _read_lines(s, 2.0)
+        parted_old = any(old_ch in l and " PART " in l for l in lines)
+        joined_new = any(new_ch in l and " JOIN " in l for l in lines)
+        _report("JOIN 0,#newchan → parts old, joins new",
+                parted_old and joined_new,
+                f"part_old={parted_old} join_new={joined_new} lines={[l for l in lines if 'PART' in l or 'JOIN' in l][:4]}")
+    finally:
+        close(s)
+
+
+def test_join_zero_discards_channels_before_zero():
+    """Channels listed before 0 in JOIN are discarded (never joined)."""
+    s, n = connect()
+    before_ch = chan()
+    after_ch  = chan()
+    try:
+        _send(s, f"JOIN {before_ch},0,{after_ch}")
+        time.sleep(0.7)
+        lines = _read_lines(s, 2.0)
+        joined_before = any(before_ch in l and " JOIN " in l for l in lines)
+        joined_after  = any(after_ch  in l and " JOIN " in l for l in lines)
+        _report("JOIN ch,0,after → before is discarded, after is joined",
+                not joined_before and joined_after,
+                f"joined_before={joined_before} joined_after={joined_after}")
+    finally:
+        close(s)
+
+
+def test_join_inline_key_correct():
+    """JOIN #chan=key succeeds when the channel key matches the inline key."""
+    op_s, op_n = connect()
+    cl_s, cl_n = connect()
+    ch = chan()
+    key = "sekrit"
+    try:
+        _send(op_s, f"JOIN {ch}")
+        time.sleep(0.3)
+        _send(op_s, f"MODE {ch} +k {key}")
+        time.sleep(0.3)
+        _drain(op_s, 0.2)
+
+        _send(cl_s, f"JOIN {ch}={key}")
+        time.sleep(0.5)
+        lines = _read_lines(cl_s, 2.0)
+        joined = any(ch in l and " JOIN " in l for l in lines)
+        _report("JOIN #chan=key with correct key → join succeeds",
+                joined, f"lines={[l for l in lines if 'JOIN' in l or '475' in l][:3]}")
+    finally:
+        close(op_s)
+        close(cl_s)
+
+
+def test_join_inline_key_wrong():
+    """JOIN #chan=wrongkey is rejected with 475 when key doesn't match."""
+    op_s, op_n = connect()
+    cl_s, cl_n = connect()
+    ch = chan()
+    key = "sekrit"
+    try:
+        _send(op_s, f"JOIN {ch}")
+        time.sleep(0.3)
+        _send(op_s, f"MODE {ch} +k {key}")
+        time.sleep(0.3)
+
+        _send(cl_s, f"JOIN {ch}=badkey")
+        time.sleep(0.5)
+        lines = _read_lines(cl_s, 2.0)
+        denied = any("475" in l for l in lines)
+        _report("JOIN #chan=wrongkey → 475 bad channel key",
+                denied, f"lines={lines[:3]}")
+    finally:
+        close(op_s)
+        close(cl_s)
+
+
+def test_join_comma_list_inline_keys():
+    """JOIN #ch1=key1,#ch2=key2 joins both keyed channels in one command."""
+    op_s, op_n = connect()
+    cl_s, cl_n = connect()
+    ch1, ch2 = chan(), chan()
+    key1, key2 = "alpha", "beta"
+    try:
+        _send(op_s, f"JOIN {ch1}")
+        _send(op_s, f"JOIN {ch2}")
+        time.sleep(0.3)
+        _send(op_s, f"MODE {ch1} +k {key1}")
+        _send(op_s, f"MODE {ch2} +k {key2}")
+        time.sleep(0.4)
+
+        _send(cl_s, f"JOIN {ch1}={key1},{ch2}={key2}")
+        time.sleep(0.7)
+        lines = _read_lines(cl_s, 2.0)
+        got_ch1 = any(ch1 in l and " JOIN " in l for l in lines)
+        got_ch2 = any(ch2 in l and " JOIN " in l for l in lines)
+        _report("JOIN #ch1=key1,#ch2=key2 → both joins succeed",
+                got_ch1 and got_ch2,
+                f"got_ch1={got_ch1} got_ch2={got_ch2}")
+    finally:
+        close(op_s)
+        close(cl_s)
+
+
+# ===========================================================================
+# 10. KICK / MODE / PROP flood control stress tests
+# ===========================================================================
+
+def test_kick_flood_throttle():
+    """Regular user is throttled after kick_flood_count KICKs in the window."""
+    op_s, op_n = connect()
+    # Need more victims than the flood limit (3)
+    victims = [connect() for _ in range(6)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.4)
+        for vs, vn in victims:
+            _send(vs, f"JOIN {ch}")
+            time.sleep(0.1)
+        _drain(op_s, 0.4)
+
+        # Send individual KICKs one-at-a-time (not comma list)
+        # so each counts separately against the flood counter
+        for _, vn in victims:
+            _send(op_s, f"KICK {ch} {vn} :flood test")
+            time.sleep(0.05)
+
+        time.sleep(0.8)
+        lines = _read_lines(op_s, 2.0)
+        kick_lines   = [l for l in lines if " KICK " in l and ch in l]
+        notice_lines = [l for l in lines if "flood throttled" in l.lower() or "KICK flood" in l]
+        got_throttle = len(kick_lines) < len(victims) or len(notice_lines) > 0
+        _report("KICK flood: regular user throttled after flood_count kicks",
+                got_throttle,
+                f"kicks_landed={len(kick_lines)}/{len(victims)} notices={notice_lines[:2]}")
+    finally:
+        close(op_s)
+        for vs, _ in victims:
+            close(vs)
+
+
+def test_kick_flood_oper_exempt():
+    """IRC oper with oper:god is never throttled by KICK flood controls."""
+    op_s, op_n = connect()
+    victims = [connect() for _ in range(6)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.4)
+        oper_up(op_s)        # god-mode → flood exempt
+        _drain(op_s, 0.3)
+        for vs, vn in victims:
+            _send(vs, f"JOIN {ch}")
+            time.sleep(0.1)
+        _drain(op_s, 0.4)
+
+        for _, vn in victims:
+            _send(op_s, f"KICK {ch} {vn} :oper kick")
+            time.sleep(0.05)
+
+        time.sleep(0.8)
+        lines = _read_lines(op_s, 2.0)
+        kick_lines   = [l for l in lines if " KICK " in l and ch in l]
+        notice_lines = [l for l in lines if "flood throttled" in l.lower()]
+        _report("KICK flood: oper:god is fully exempt from flood limits",
+                len(kick_lines) == len(victims) and len(notice_lines) == 0,
+                f"kicks={len(kick_lines)}/{len(victims)} throttle_notices={notice_lines}")
+    finally:
+        close(op_s)
+        for vs, _ in victims:
+            close(vs)
+
+
+def test_mode_flood_throttle():
+    """Regular user is throttled after mode_flood_count MODE changes in the window."""
+    op_s, op_n = connect()
+    helpers = [connect() for _ in range(6)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.4)
+        for hs, hn in helpers:
+            _send(hs, f"JOIN {ch}")
+            time.sleep(0.05)
+        _drain(op_s, 0.4)
+
+        # Rapid-fire +v grants — each is one MODE change
+        for hs, hn in helpers:
+            _send(op_s, f"MODE {ch} +v {hn}")
+            time.sleep(0.05)
+
+        time.sleep(0.8)
+        lines = _read_lines(op_s, 2.0)
+        mode_lines   = [l for l in lines if " MODE " in l and ch in l and "+v" in l]
+        notice_lines = [l for l in lines if "flood throttled" in l.lower() or "MODE flood" in l]
+        got_throttle = len(mode_lines) < len(helpers) or len(notice_lines) > 0
+        _report("MODE flood: regular user throttled after flood_count MODE changes",
+                got_throttle,
+                f"modes_landed={len(mode_lines)}/{len(helpers)} notices={notice_lines[:2]}")
+    finally:
+        close(op_s)
+        for hs, _ in helpers:
+            close(hs)
+
+
+def test_prop_flood_throttle():
+    """Regular user is throttled after prop_flood_count PROP SETs in the window."""
+    op_s, op_n = connect()
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.5)
+
+        # Rapid PROP SET operations — each counts as one for flood
+        for i in range(6):
+            _send(op_s, f"PROP {ch} TESTKEY{i} :value{i}")
+            time.sleep(0.05)
+
+        time.sleep(0.8)
+        lines = _read_lines(op_s, 2.0)
+        notice_lines = [l for l in lines if "flood throttled" in l.lower() or "PROP flood" in l]
+        # We sent 6 PROPs with flood limit of 3 — at least one throttle notice expected
+        _report("PROP flood: regular user throttled after flood_count PROP SETs",
+                len(notice_lines) > 0,
+                f"throttle_notices={notice_lines[:2]}")
+    finally:
+        close(op_s)
+
+
+def test_prop_flood_channel_override():
+    """Channel KICKFLOOD PROP can impose a stricter limit than the server default."""
+    op_s, op_n = connect()
+    victims = [connect() for _ in range(4)]
+    ch = chan()
+    try:
+        _send(op_s, f"JOIN {ch}")
+        _drain(op_s, 0.4)
+        for vs, vn in victims:
+            _send(vs, f"JOIN {ch}")
+            time.sleep(0.1)
+        _drain(op_s, 0.4)
+
+        # Set a stricter per-channel KICKFLOOD (1 kick per 30 seconds)
+        _send(op_s, f"PROP {ch} KICKFLOOD :1/30")
+        time.sleep(0.3)
+        _drain(op_s, 0.2)
+
+        # Now kick 2 targets — second should be throttled by channel PROP
+        for _, vn in victims[:2]:
+            _send(op_s, f"KICK {ch} {vn} :prop override test")
+            time.sleep(0.1)
+
+        time.sleep(0.8)
+        lines = _read_lines(op_s, 2.0)
+        kick_lines   = [l for l in lines if " KICK " in l and ch in l]
+        notice_lines = [l for l in lines if "flood throttled" in l.lower()]
+        # Expect only 1 kick to land (channel limit = 1/30) and a throttle notice
+        _report("KICKFLOOD PROP: channel stricter limit (1/30) overrides server default (3/10)",
+                len(kick_lines) <= 1 and len(notice_lines) > 0,
+                f"kicks={len(kick_lines)} notices={notice_lines[:2]}")
+    finally:
+        close(op_s)
+        for vs, _ in victims:
+            close(vs)
+
+
+# ===========================================================================
 # Runner
 # ===========================================================================
 
@@ -2497,6 +2808,19 @@ ALL_TESTS = [
     # — REHASH: ISUPPORT re-burst + server rename —
     ("REHASH re-bursts ISUPPORT 005 to existing clients", test_rehash_isupport_reburst),
     ("REHASH live server rename → new name in 005",       test_rehash_server_rename),
+    # — JOIN 0 comma-list + inline =key —
+    ("JOIN 0 parts all joined channels",                  test_join_zero_parts_all),
+    ("JOIN 0,#newchan → parts old, joins new",            test_join_zero_comma_parts_then_joins),
+    ("JOIN ch,0,after → before discarded, after joined",  test_join_zero_discards_channels_before_zero),
+    ("JOIN #chan=key with correct key → join succeeds",   test_join_inline_key_correct),
+    ("JOIN #chan=wrongkey → 475 bad channel key",         test_join_inline_key_wrong),
+    ("JOIN #ch1=key1,#ch2=key2 → both joins succeed",    test_join_comma_list_inline_keys),
+    # — KICK/MODE/PROP flood controls —
+    ("KICK flood: regular user throttled",                test_kick_flood_throttle),
+    ("KICK flood: oper:god fully exempt",                 test_kick_flood_oper_exempt),
+    ("MODE flood: regular user throttled",                test_mode_flood_throttle),
+    ("PROP flood: regular user throttled",                test_prop_flood_throttle),
+    ("KICKFLOOD PROP: channel stricter limit wins",       test_prop_flood_channel_override),
 ]
 
 

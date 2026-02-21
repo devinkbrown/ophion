@@ -98,6 +98,14 @@ struct membership
 	unsigned int flags;
 
 	time_t bants;
+
+	/* Per-membership flood counters (channel PROP overrides server limit if stricter) */
+	time_t flood_kick_time;
+	int    flood_kick_count;
+	time_t flood_mode_time;
+	int    flood_mode_count;
+	time_t flood_prop_time;
+	int    flood_prop_count;
 };
 
 #define BANLEN 195
