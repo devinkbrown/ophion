@@ -82,7 +82,9 @@ static void
 mu_mode_isircx(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
                int parc, const char *parv[])
 {
-	if(parc >= 2 && !irccmp(parv[1], "ISIRCX"))
+	/* Match both "MODE ISIRCX" and "MODE nick ISIRCX" (parv[1] or parv[2]) */
+	if(parc >= 2 && (!irccmp(parv[1], "ISIRCX") ||
+	                 (parc >= 3 && !irccmp(parv[2], "ISIRCX"))))
 	{
 		sendto_one_numeric(client_p, RPL_IRCX, form_str(RPL_IRCX));
 		return;
