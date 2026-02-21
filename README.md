@@ -199,13 +199,39 @@ Ophion implements channel modes, user modes, and commands from the IRCX
 specification (draft-pfenning-irc-extensions-04). All IRCX features are
 provided as loadable modules and can be enabled/disabled independently.
 
+### IRCX Pre-registration Probe (ISIRCX)
+
+Per §3 of the IRCX draft, a client may probe for IRCX support before
+completing registration by sending:
+
+```
+MODE <nick> ISIRCX
+```
+
+or the shorter form `MODE ISIRCX`.  Ophion responds with `800 RPL_IRCX`
+to confirm support.  All other `MODE` usage before registration still
+returns `451 ERR_NOTREGISTERED`.
+
+### IRCX Channel-context Nick Targeting (PRIVMSG)
+
+Ophion supports IRCX-style targeted channel messages:
+
+```
+PRIVMSG #channel nick1 nick2 :message text
+```
+
+Each named nick must be a member of the channel; non-members receive
+`441 ERR_USERNOTINCHANNEL`.  The message is delivered privately to each
+target with the channel name as context, letting clients display it in
+the channel window.
+
 ### IRCX Channel Modes
 
 | Mode | Name | IRCX Spec | Description |
 |------|------|-----------|-------------|
 | `+a` | AUTHONLY | 8.1.15 | Only authenticated (services-identified) users may join |
 | `+d` | CLONEABLE | 8.1.16 | Channel creates numbered clones when full |
-| `+E` | CLONE | 8.1.17 | Marks channel as a clone of a CLONEABLE channel (IRCX `+e` remapped to avoid ban exception conflict) |
+| `+E` | CLONE | 8.1.17 | Marks channel as a clone of a CLONEABLE channel (IRCX `+e` remapped to avoid ban exception conflict); when a new clone is created the server broadcasts `CLONE #parent #clone` to all members of the parent channel |
 | `+f` | NOFORMAT | 8.1.10 | Raw text only, clients should not apply formatting |
 | `+h` | HIDDEN | 8.1.3 | Not in LIST/LISTX but queryable if channel name is known |
 | `+u` | KNOCK | 8.1.9 | Enables KNOCK notifications to channel hosts/owners |
@@ -255,7 +281,19 @@ The PROP command provides a key-value property system for channels and users:
 `URL`, `GENDER`, `PICTURE`, `LOCATION`, `BIO`, `REALNAME`, `EMAIL`
 
 **Channel built-in properties** (m_ircx_prop_channel_builtins):
-`TOPIC`, `MEMBERCOUNT`, `CREATION` (read-only computed properties)
+
+| Property | Access | Description |
+|----------|--------|-------------|
+| `OID` | read-only | Object ID (channel name) |
+| `NAME` | read-only | Channel name |
+| `CREATION` | read-only | Channel creation timestamp (Unix) |
+| `TOPIC` | read-only | Mirrors the current channel topic |
+| `MEMBERCOUNT` | read-only | Current member count |
+| `MEMBERKEY` | chanop read/write | Mirrors `+k` channel key |
+| `MEMBERLIMIT` | chanop read/write | Mirrors `+l` member limit; writing sets/clears `+l` |
+| `PICS` | chanop read/write | Content-rating string (e.g. `"GA"`, `"PG"`, `"R"`) |
+| `LAG` | chanop read/write | Per-channel fake-lag in seconds (integer 0–2); adds fake send delay for all channel messages |
+| `CLIENT` | chanop-only read/write | Arbitrary channel metadata string; hidden from non-operators |
 
 **Channel keys** (m_ircx_prop_ownerkey, m_ircx_prop_opkey):
 `OWNERKEY`, `OPKEY` -- grant channel-admin (+q) or chanop (+o) on join
@@ -287,7 +325,7 @@ All IRCX functionality is provided by loadable modules in `modules/`:
 | m_ircx_oper | GAG user mode (+z) and OPFORCE command |
 | m_ircx_prop | PROP command core |
 | m_ircx_prop_ownerkey | OWNERKEY channel property |
-| m_ircx_prop_channel_builtins | TOPIC/MEMBERCOUNT/CREATION properties |
+| m_ircx_prop_channel_builtins | OID/NAME/CREATION/TOPIC/MEMBERCOUNT/MEMBERKEY/MEMBERLIMIT/PICS/LAG/CLIENT properties |
 | m_ircx_prop_entity_account | Account entity properties |
 | m_ircx_prop_entity_channel | Channel entity properties |
 | m_ircx_prop_entity_user | User entity properties |

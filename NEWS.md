@@ -63,6 +63,26 @@ See LICENSE for licensing details (GPL v2).
 - **Interactive configuration tool** (`tools/setup.py`): full setup and
   management wizard for `ircd.conf`; see README for details.
 
+#### IRCX compliance (draft-pfenning-irc-extensions-04)
+- **MODE ISIRCX pre-registration probe** (`m_mode.c`): unregistered clients may
+  probe IRCX support via `MODE ISIRCX` or `MODE <nick> ISIRCX`; server responds
+  with `800 RPL_IRCX`.  All other pre-registration MODE use still returns
+  `451 ERR_NOTREGISTERED`.
+- **CLONE notification** (`m_join.c`): when `check_cloneable()` creates a new
+  numbered clone channel, the server broadcasts `CLONE #parent #clone` to all
+  local members of the parent channel so clients can display the overflow channel.
+- **Channel-context nick-list targeting** (`m_message.c`): supports IRCX-style
+  `PRIVMSG #channel nick1 nick2 :text`; each nick must be a member of the channel
+  (`441 ERR_USERNOTINCHANNEL` otherwise).
+- **LAG per-channel fake-lag** (`m_message.c`): if a channel has the `LAG` PROP
+  set (0–2 s), each successful channel message charges the sender's flood token
+  bucket by `lag * client_flood_message_num`, giving real per-channel throttling.
+- **New channel built-in PROP keys** (`m_ircx_prop_channel_builtins.c`):
+  - `MEMBERLIMIT` — mirrors `+l` mode; writing sets/clears `+l` on the channel.
+  - `PICS` — content-rating string (e.g. `"GA"`, `"PG"`, `"R"`); chanop write.
+  - `LAG` — per-channel fake-lag value (integer 0–2); chanop write; range-validated.
+  - `CLIENT` — arbitrary metadata; chanop-only read and write; hidden from non-ops.
+
 #### IRCX channel modes (m_ircx_modes module)
 - `+a` AUTHONLY — only services-authenticated users may join.
 - `+d` CLONEABLE — channel creates numbered clones when full.
