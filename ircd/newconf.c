@@ -314,6 +314,7 @@ static struct mode_table umode_table[] = {
 static struct mode_table oper_table[] = {
 	{"encrypted",		OPER_ENCRYPTED		},
 	{"need_ssl",		OPER_NEEDSSL		},
+	{"certfp_only",		OPER_CERTFP_ONLY	},
 	{NULL, 0}
 };
 
@@ -546,19 +547,48 @@ conf_end_oper(struct TopConf *tc)
 	}
 
 #ifdef HAVE_LIBCRYPTO
-	if(EmptyString(yy_oper->passwd) && EmptyString(yy_oper->rsa_pubkey_file))
+	if(EmptyString(yy_oper->passwd) && EmptyString(yy_oper->rsa_pubkey_file)
+	   && EmptyString(yy_oper->certfp))
 #else
 	if(EmptyString(yy_oper->passwd))
 #endif
 	{
-		conf_report_error("Ignoring operator block for %s -- missing password",
+		conf_report_error("Ignoring operator block for %s -- missing password or fingerprint",
 					yy_oper->name);
 		return 0;
 	}
 
+	/* certfp_only requires a fingerprint to be set */
+	if((yy_oper->flags & OPER_CERTFP_ONLY) && EmptyString(yy_oper->certfp))
+	{
+		conf_report_error("Ignoring operator block for %s -- certfp_only requires a fingerprint",
+					yy_oper->name);
+		return 0;
+	}
 
 	if (!yy_oper->privset)
 		yy_oper->privset = privilegeset_get("default");
+
+	/* certfp blocks may omit user{} lines; synthesise a wildcard entry so
+	 * find_oper_conf() can locate the block regardless of the client's host.
+	 * If no user lines and no certfp, report an error and bail out.
+	 */
+	if(rb_dlink_list_length(&yy_oper_list) == 0)
+	{
+		if(!EmptyString(yy_oper->certfp))
+		{
+			struct oper_conf *yy_wildoper = make_oper_conf();
+			yy_wildoper->username = rb_strdup("*");
+			yy_wildoper->host = rb_strdup("*");
+			rb_dlinkAddAlloc(yy_wildoper, &yy_oper_list);
+		}
+		else
+		{
+			conf_report_error("Ignoring operator block for %s -- no user entries",
+					yy_oper->name);
+			return 0;
+		}
+	}
 
 	/* now, yy_oper_list contains a stack of oper_conf's with just user
 	 * and host in, yy_oper contains the rest of the information which

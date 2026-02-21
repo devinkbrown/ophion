@@ -255,6 +255,16 @@ m_challenge(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 			}
 			return;
 		}
+
+		/* certfp_only: fingerprint alone is sufficient — skip challenge/password */
+		if(IsOperConfCertFPOnly(oper_p))
+		{
+			oper_up(source_p, oper_p);
+			ilog(L_OPERED, "OPER %s by %s!%s@%s (%s) [certfp]",
+			     parv[1], source_p->name, source_p->username, source_p->host,
+			     source_p->sockhost);
+			return;
+		}
 	}
 
 	if(generate_challenge(&challenge, &(source_p->localClient->challenge), oper_p->rsa_pubkey))

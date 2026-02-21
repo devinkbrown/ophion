@@ -139,11 +139,13 @@ extern void propagate_generic(struct Client *source_p, const char *command,
 extern void cluster_generic(struct Client *, const char *, int cltype,
 			int cap, const char *format, ...);
 
-#define OPER_ENCRYPTED	0x00001
-#define OPER_NEEDSSL    0x80000
+#define OPER_ENCRYPTED		0x00001
+#define OPER_NEEDSSL		0x80000
+#define OPER_CERTFP_ONLY	0x40000
 
-#define IsOperConfEncrypted(x)	((x)->flags & OPER_ENCRYPTED)
-#define IsOperConfNeedSSL(x)	((x)->flags & OPER_NEEDSSL)
+#define IsOperConfEncrypted(x)		((x)->flags & OPER_ENCRYPTED)
+#define IsOperConfNeedSSL(x)		((x)->flags & OPER_NEEDSSL)
+#define IsOperConfCertFPOnly(x)		((x)->flags & OPER_CERTFP_ONLY)
 
 #define HasPrivilege(x, y)	((x)->user != NULL && (x)->user->privset != NULL && privilegeset_in_set((x)->user->privset, (y)))
 #define MayHavePrivilege(x, y)	(HasPrivilege((x), (y)) || (IsOper((x)) && (x)->user != NULL && (x)->user->privset == NULL))

@@ -134,6 +134,16 @@ m_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 			}
 			return;
 		}
+
+		/* certfp_only: fingerprint alone is sufficient — skip password check */
+		if(IsOperConfCertFPOnly(oper_p))
+		{
+			oper_up(source_p, oper_p);
+			ilog(L_OPERED, "OPER %s by %s!%s@%s (%s) [certfp]",
+			     name, source_p->name, source_p->username, source_p->host,
+			     source_p->sockhost);
+			return;
+		}
 	}
 
 	if(match_oper_password(password, oper_p))
