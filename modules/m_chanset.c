@@ -323,7 +323,8 @@ m_chanset(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "ChanServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "CHANSET");
 		return;
 	}
 
@@ -442,7 +443,47 @@ m_chanset(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 		return; \
 	}
 
-	CHANSET_BOOL_FLAG("TOPICLOCK",  CHANREG_TOPICLOCK)
+	/*
+	 * TOPICLOCK — when ON, also locks +t in the modelock so that only
+	 * chanops (which ChanServ grants to CA_OP+ users automatically) can
+	 * change the topic.  When OFF, +t is removed from the modelock unless
+	 * the operator explicitly set it via MODELOCK.
+	 */
+	if(irccmp(option, "TOPICLOCK") == 0)
+	{
+		onoff = parse_onoff(value);
+		if(onoff < 0)
+		{
+			svc_notice(source_p, "ChanServ",
+				"Usage: CHANSET %s TOPICLOCK on|off", chname);
+			return;
+		}
+		if(onoff)
+		{
+			reg->flags |= CHANREG_TOPICLOCK;
+			reg->mlock_on  |=  MODE_TOPICLIMIT;
+			reg->mlock_off &= ~MODE_TOPICLIMIT;
+		}
+		else
+		{
+			reg->flags &= ~CHANREG_TOPICLOCK;
+			reg->mlock_on &= ~MODE_TOPICLIMIT;
+			/* Don't force-remove +t; let the channel keep it if ops want it */
+		}
+		svc_db_chanreg_save(reg);
+		svc_sync_chanreg(reg);
+		/* Immediately enforce the mlock change on the live channel */
+		{
+			struct Channel *chptr = find_channel(chname);
+			if(chptr != NULL)
+				svc_modelock_enforce(chptr, reg);
+		}
+		svc_notice(source_p, "ChanServ",
+			"TOPICLOCK for %s is now \2%s\2.%s", chname,
+			onoff ? "ON" : "OFF",
+			onoff ? "  Channel mode +t has been locked." : "");
+		return;
+	}
 	CHANSET_BOOL_FLAG("KEEPTOPIC",  CHANREG_KEEPTOPIC)
 	CHANSET_BOOL_FLAG("SECURE",     CHANREG_SECURE)
 	CHANSET_BOOL_FLAG("GUARD",      CHANREG_GUARD)

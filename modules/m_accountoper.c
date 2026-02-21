@@ -174,7 +174,8 @@ mo_accountoper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "OperServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "ACCOUNTOPER");
 		return;
 	}
 
@@ -241,7 +242,8 @@ mo_setaccount(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *s
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "OperServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "SETACCOUNT");
 		return;
 	}
 
@@ -313,7 +315,8 @@ mo_suspend(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "OperServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "SUSPEND");
 		return;
 	}
 
@@ -370,7 +373,8 @@ mo_unsuspend(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *so
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "OperServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "UNSUSPEND");
 		return;
 	}
 
@@ -565,7 +569,8 @@ mo_noexpire(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "OperServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "NOEXPIRE");
 		return;
 	}
 
@@ -623,7 +628,8 @@ mo_channoexpire(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client 
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "OperServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "CHANNOEXPIRE");
 		return;
 	}
 

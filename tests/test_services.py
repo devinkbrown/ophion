@@ -1155,6 +1155,127 @@ def test_services_disabled_fallback():
 
 
 # ===========================================================================
+# SECTION 18 — CHANREG_RESTRICTED and CHANREG_SECURE enforcement
+# ===========================================================================
+
+def test_restricted_blocks_unidentified():
+    """CHANREG_RESTRICTED blocks unidentified users from joining."""
+    a, _ = _make_account("rstr")
+    chan = f"#rstr{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+    a.send(f"CHANSET {chan} RESTRICTED on")
+    a.drain(0.5)
+
+    # Unidentified user attempts to join
+    b = _connect("rstrb")
+    b.send(f"JOIN {chan}")
+    ok = b.wait(r"(?i)(restricted|identify|473|registered users)", timeout=4)
+    _check("RESTRICTED: unidentified user blocked from joining",
+           ok is not None, f"chan={chan}")
+    a.close()
+    b.close()
+
+
+def test_restricted_allows_identified():
+    """CHANREG_RESTRICTED allows identified users to join."""
+    a, _ = _make_account("rsti")
+    chan = f"#rsti{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+    a.send(f"CHANSET {chan} RESTRICTED on")
+    a.drain(0.5)
+
+    b, _ = _make_account("rstib")   # identified
+    b.send(f"JOIN {chan}")
+    ok = b.wait(r"(?i)JOIN|366|473", timeout=4)
+    got_blocked = ok is not None and "473" in (ok or "")
+    _check("RESTRICTED: identified user can join (not 473)",
+           ok is not None and "473" not in (ok or ""), f"chan={chan}")
+    a.close()
+    b.close()
+
+
+def test_secure_blocks_non_access():
+    """CHANREG_SECURE blocks users not on the access list."""
+    a, _ = _make_account("sec")
+    chan = f"#sec{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+    a.send(f"CHANSET {chan} SECURE on")
+    a.drain(0.5)
+
+    b, _ = _make_account("secb")   # identified but NOT on access list
+    b.send(f"JOIN {chan}")
+    ok = b.wait(r"(?i)(secure|access|473|requires)", timeout=4)
+    _check("SECURE: identified user not on access list blocked",
+           ok is not None, f"chan={chan}")
+    a.close()
+    b.close()
+
+
+def test_secure_allows_access_list():
+    """CHANREG_SECURE allows users on the access list."""
+    a, _ = _make_account("seca")
+    chan = f"#seca{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    b, _ = _make_account("secab")
+
+    # Add b to access list before enabling SECURE
+    a.send(f"CHANSET {chan} ACCESS ADD {b.nick} vop")
+    a.drain(0.5)
+    a.send(f"CHANSET {chan} SECURE on")
+    a.drain(0.5)
+
+    b.send(f"JOIN {chan}")
+    lines = b.collect(2.0)
+    got_blocked = any("473" in ln for ln in lines)
+    _check("SECURE: access-listed user allowed in", not got_blocked,
+           f"chan={chan}")
+    a.close()
+    b.close()
+
+
+def test_topiclock_enforces_plus_t():
+    """CHANSET TOPICLOCK on locks +t via modelock so non-ops cannot set topic."""
+    a, _ = _make_account("tpl")
+    chan = f"#tpl{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+    a.send(f"CHANSET {chan} TOPICLOCK on")
+    a.drain(0.8)
+
+    # Check the channel now has +t
+    a.send(f"MODE {chan}")
+    ok = a.wait(r"\+[^\s]*t", timeout=3)
+    _check("CHANSET TOPICLOCK on → channel mode includes +t", ok is not None,
+           f"chan={chan}")
+
+    # Non-op cannot set topic in +t channel
+    b = _connect("tplb")
+    b.send(f"JOIN {chan}")
+    b.drain(0.5)
+    b.send(f"TOPIC {chan} :hack topic")
+    ok2 = b.wait(r" 482 ", timeout=3)  # ERR_CHANOPRIVSNEEDED
+    _check("TOPICLOCK: non-op cannot change topic in +t channel",
+           ok2 is not None, f"chan={chan}")
+    a.close()
+    b.close()
+
+
+# ===========================================================================
 # Main
 # ===========================================================================
 
@@ -1211,6 +1332,12 @@ TESTS = [
     ("CHANSET ACCESS ADD/DEL",                     test_chanset_access_add_del),
     ("CHANSET MODELOCK +nt",                       test_chanset_modelock),
     ("CHANSET by non-founder → denied",            test_chanset_not_founder),
+    # CHANREG_RESTRICTED / CHANREG_SECURE enforcement
+    ("RESTRICTED blocks unidentified users",       test_restricted_blocks_unidentified),
+    ("RESTRICTED allows identified users",         test_restricted_allows_identified),
+    ("SECURE blocks non-access-list users",        test_secure_blocks_non_access),
+    ("SECURE allows access-listed users",          test_secure_allows_access_list),
+    ("TOPICLOCK on → +t locked; non-op blocked",  test_topiclock_enforces_plus_t),
     # MEMO
     ("MEMO SEND → sent notice",                    test_memo_send),
     ("MEMO LIST → response",                       test_memo_list),
