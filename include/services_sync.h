@@ -3,9 +3,11 @@
  *
  * Commands added to the TS6 server-to-server protocol:
  *
- *   SVCSREG  <name> <passhash> <email> <registered_ts> <flags> <oper_block>
- *            <hmac>
- *     Register or update an account on all servers.
+ *   SVCSREG  <name> <passhash> <email> <registered_ts> <flags>
+ *            <oper_block|-> <vhost|-> <hmac>
+ *     Register or update an account on all servers.  The vhost field was
+ *     added so HostServ-assigned vhosts propagate to all leaves without a
+ *     separate message.
  *
  *   SVCSDROP <name> <hmac>
  *     Drop an account network-wide.
@@ -16,15 +18,30 @@
  *   SVCSCERT <name> ADD|DEL <certfp> <ts> <hmac>
  *     Certificate fingerprint add/remove.
  *
+ *   SVCSNICK ADD <nick> <account> <registered_ts> <hmac>
+ *   SVCSNICK DEL <nick> <hmac>
+ *     Grouped nick add/remove.  Keeps the nick→account index consistent
+ *     across leaves without requiring a full account re-burst.
+ *
  *   SVCSID   <uid> <account_name>
  *     Notify that a client has identified to an account (like ENCAP LOGIN
  *     but for the services DB layer).  No HMAC needed; already over TLS.
+ *     Receiving server validates the account name exists before applying.
  *
- *   SVCSCHAN <channel> <founder> <registered_ts> <flags> <topic> <hmac>
- *     Channel registration propagation.
+ *   SVCSCHAN <channel> <founder> <registered_ts> <flags>
+ *            <mlock_on> <mlock_off> <mlock_limit> <mlock_key|->
+ *            <hmac> :<topic|->
+ *     Channel registration propagation.  mlock fields are now included so
+ *     leaves can enforce mode locks without needing the hub.  Topic is the
+ *     trailing parameter (after hmac) so spaces are preserved.
  *
  *   SVCSCDROP <channel> <hmac>
  *     Drop channel registration.
+ *
+ *   SVCSACCESS SET <channel> <entity> <flags> <setter|-> <set_ts> <hmac>
+ *   SVCSACCESS DEL <channel> <entity> <hmac>
+ *     Channel access list synchronisation.  Each entry syncs independently
+ *     so point-in-time access changes propagate without a full chan re-burst.
  *
  *   SVCSOPER <account_name> <oper_block_name|-> <hmac>
  *     Link or unlink an account to an oper block.
@@ -39,29 +56,35 @@
  * HMAC key derivation
  * -------------------
  *   K   = SHA256( sort(fp_local, fp_remote) || ":ophion-services:" )
- *   tag = HMAC-SHA256( K, ts || ":" || account_name || ":" || payload )
+ *   tag = HMAC-SHA256( K, payload )
  *
- *   The fingerprints are the TLS cert fingerprints of both endpoints
- *   as configured in connect{} blocks (certfp or fingerprint=).
- *   If either endpoint has no TLS cert, tag is "none" and the check is
- *   skipped (the TLS channel itself is still the primary protection).
+ *   The fingerprints are the TLS cert fingerprints of both endpoints as
+ *   configured in connect{} blocks (certfp= or fingerprint=).  If either
+ *   endpoint has no TLS cert, the tag is the literal string "none" and the
+ *   HMAC check is skipped — the TLS channel itself is the primary guard.
  *
  * Hub/leaf state machine
  * ----------------------
  *   On LINK established:
- *     Hub → leaf: SVCSMODE HUB, then SVCSBURST <n>, then SVCSREG×n,
- *                 then SVCSBURST 0 (end marker).
+ *     Hub → leaf: SVCSMODE HUB
+ *                 SVCSBURST <account_count>
+ *                 SVCSREG × N   (all accounts)
+ *                 SVCSCERT × M  (all certfps)
+ *                 SVCSNICK × P  (all grouped nicks)
+ *                 SVCSCHAN × Q  (all channel registrations, with mlock)
+ *                 SVCSACCESS × R (all channel access entries)
+ *                 SVCSBURST 0   (burst end)
  *     Leaf stores records, marks clean.
  *
  *   On LINK lost (netsplit):
  *     Leaf transitions to SVCS_MODE_SPLIT.
- *     Local writes are committed to local DB and marked dirty.
+ *     Local writes are committed to local DB and kept dirty=true.
  *
  *   On LINK re-established (hub reconnects):
- *     Hub sends fresh burst.
- *     Leaf sends dirty records (SVCSREG for each dirty account).
+ *     Hub sends fresh burst (SVCSBURST N … SVCSBURST 0).
+ *     On burst end, leaf sends dirty records back to hub (SVCSREG/SVCSCHAN).
  *     Hub resolves conflicts by last-write-wins (registered_ts).
- *     Leaf clears dirty flags after hub ACKs.
+ *     Leaf clears dirty flags after sending.
  *
  * Copyright (c) 2026 Ophion development team.  GPL v2.
  */
@@ -117,7 +140,8 @@ void svc_sync_server_lost(struct Client *server_p);
  * Hub → leaf burst
  * ========================================================================= */
 
-void svc_sync_burst_to(struct Client *server_p);   /* send full account+chan burst */
+/* Send full account+channel+access burst to a newly-linked server */
+void svc_sync_burst_to(struct Client *server_p);
 
 /* =========================================================================
  * Propagation — called after local DB writes
@@ -130,29 +154,24 @@ void svc_sync_account_pwd(struct svc_account *acct);
 void svc_sync_account_certfp(struct svc_account *acct,
                               const char *certfp, bool adding);
 
+/* Grouped nick operations */
+void svc_sync_nick_group(const char *nick, const char *account_name,
+                         time_t registered_ts);
+void svc_sync_nick_ungroup(const char *nick);
+
 /* Oper linkage */
 void svc_sync_account_oper(struct svc_account *acct);
 
 /* Client identification (no HMAC needed; transient state) */
 void svc_sync_client_id(struct Client *client_p, struct svc_account *acct);
 
-/* Channel operations */
+/* Channel registration */
 void svc_sync_chanreg(struct svc_chanreg *reg);
 void svc_sync_chandrop(const char *channel);
 
-/* =========================================================================
- * S2S message handlers — registered by modules/m_services_sync.c
- * ========================================================================= */
-
-void ms_svcsreg  (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcsdrop (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcspwd  (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcscert (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcsid   (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcschan (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcscdrop(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcsoper (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcsburst(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-void ms_svcsmode (struct MsgBuf *, struct Client *, struct Client *, int, const char **);
+/* Channel access list entries */
+void svc_sync_chanaccess_set(struct svc_chanreg *reg,
+                             struct svc_chanaccess *ca);
+void svc_sync_chanaccess_del(const char *channel, const char *entity);
 
 #endif /* OPHION_SERVICES_SYNC_H */

@@ -158,7 +158,16 @@ struct svc_metadata {
  */
 struct svc_account {
 	char name[NICKLEN + 1];
-	char passhash[512];                 /* sha512crypt or ""             */
+	/*
+	 * 256 bytes covers every realistic password-hash format:
+	 *   SHA-512 crypt ($6$…):  ~106 chars
+	 *   bcrypt ($2b$…):         ~60 chars
+	 *   yescrypt ($y$…):       ~115 chars
+	 *   Argon2id PHC string:   <200 chars
+	 * Halved from the original 512 → saves 256 B per account
+	 * (2.56 MB per 10 000 accounts).
+	 */
+	char passhash[256];
 	char email[256];
 	time_t registered_ts;
 	time_t last_seen_ts;
@@ -211,8 +220,14 @@ struct svc_chanreg {
 	char topic_setter[NICKLEN + 1];
 	time_t topic_ts;
 	uint32_t flags;                     /* CHANREG_* bitmask             */
-	char url[512];
-	char description[512];
+	/*
+	 * url and description reduced from 512 → 256 bytes each.
+	 * Channel URLs fit comfortably in 256 chars; descriptions longer
+	 * than 256 are truncated to the stored limit on load.
+	 * Saves 512 B per chanreg (5.12 MB per 10 000 channels).
+	 */
+	char url[256];
+	char description[256];
 	uint32_t mlock_on;                  /* MODE bits to lock on          */
 	uint32_t mlock_off;                 /* MODE bits to lock off         */
 	int mlock_limit;                    /* +l limit (0 = not locked)     */
@@ -270,6 +285,7 @@ extern struct services_state services;
 extern rb_radixtree *svc_account_dict;    /* name  → svc_account *         */
 extern rb_radixtree *svc_nick_dict;       /* nick  → svc_nick *            */
 extern rb_radixtree *svc_chanreg_dict;    /* chan  → svc_chanreg *         */
+extern rb_radixtree *svc_certfp_dict;     /* fp    → svc_account *         */
 
 /* =========================================================================
  * Core API

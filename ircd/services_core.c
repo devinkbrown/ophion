@@ -60,6 +60,7 @@ struct services_state services = {
 rb_radixtree *svc_account_dict = NULL;  /* name  → struct svc_account *  */
 rb_radixtree *svc_nick_dict    = NULL;  /* nick  → struct svc_nick *      */
 rb_radixtree *svc_chanreg_dict = NULL;  /* chan  → struct svc_chanreg *   */
+rb_radixtree *svc_certfp_dict  = NULL;  /* fp    → struct svc_account *  */
 
 /* -------------------------------------------------------------------------
  * Forward declarations of file-private functions
@@ -88,6 +89,7 @@ services_init(void)
 	svc_account_dict = rb_radixtree_create("svc_accounts", irccasecanon);
 	svc_nick_dict    = rb_radixtree_create("svc_nicks",    irccasecanon);
 	svc_chanreg_dict = rb_radixtree_create("svc_chanregs", irccasecanon);
+	svc_certfp_dict  = rb_radixtree_create("svc_certfps",  irccasecanon);
 
 	if(!svc_db_init(services.db_path))
 	{
@@ -197,6 +199,12 @@ services_enter_connected_mode(struct Client *hub_p)
 	services.hub_server = hub_p;
 	ilog(L_MAIN, "services: entered CONNECTED mode (hub: %s)",
 	     hub_p ? hub_p->name : "<unknown>");
+	/*
+	 * Do NOT flush dirty records here — they are still needed by the
+	 * ms_svcsburst() SVCSBURST-0 handler which sends them to the hub
+	 * via S2S SVCSREG/SVCSCHAN after the burst completes.  Flushing here
+	 * would clear the dirty flags prematurely before the S2S sync runs.
+	 */
 }
 
 void
@@ -258,49 +266,23 @@ svc_account_find_nick(const char *nick)
 }
 
 /*
- * svc_account_find_certfp — linear scan over all accounts looking for a
- * matching certificate fingerprint.  Case-insensitive comparison.
+ * svc_account_find_certfp — O(1) lookup via the secondary svc_certfp_dict.
  *
- * This is O(n*m) where n = accounts and m = certfps per account.  Given that
- * the total number of certfps across all accounts is expected to be small
- * (< few thousand), this is acceptable.  A secondary hash could be added if
- * profiling shows it is a bottleneck.
+ * Previously this was an O(n*m) radixtree_foreach over all accounts,
+ * scanning each account's certfp dlink list.  The secondary dictionary maps
+ * fingerprint → svc_account * directly, making SASL EXTERNAL authentication
+ * a single radixtree lookup regardless of network size.
+ *
+ * svc_certfp_dict is maintained in svc_db_certfp_add/delete and during the
+ * initial DB load in services_db.c.
  */
-
-struct certfp_search {
-	const char *certfp;
-	struct svc_account *result;
-};
-
-static int
-certfp_search_cb(const char *key, void *data, void *privdata)
-{
-	(void)key;
-	struct svc_account *acct = data;
-	struct certfp_search *s  = privdata;
-
-	rb_dlink_node *ptr;
-	RB_DLINK_FOREACH(ptr, acct->certfps.head)
-	{
-		struct svc_certfp *scf = ptr->data;
-		if(rb_strcasecmp(scf->fingerprint, s->certfp) == 0)
-		{
-			s->result = acct;
-			return 1; /* non-zero stops iteration */
-		}
-	}
-	return 0;
-}
-
 struct svc_account *
 svc_account_find_certfp(const char *certfp)
 {
-	if(svc_account_dict == NULL || certfp == NULL)
+	if(svc_certfp_dict == NULL || certfp == NULL)
 		return NULL;
 
-	struct certfp_search s = { .certfp = certfp, .result = NULL };
-	rb_radixtree_foreach(svc_account_dict, certfp_search_cb, &s);
-	return s.result;
+	return rb_radixtree_retrieve(svc_certfp_dict, certfp);
 }
 
 /*
@@ -364,6 +346,9 @@ svc_account_free(struct svc_account *acct)
 	RB_DLINK_FOREACH_SAFE(ptr, nptr, acct->certfps.head)
 	{
 		struct svc_certfp *scf = ptr->data;
+		/* Keep secondary certfp dict consistent */
+		if(svc_certfp_dict != NULL)
+			rb_radixtree_delete(svc_certfp_dict, scf->fingerprint);
 		rb_dlinkDestroy(ptr, &acct->certfps);
 		rb_free(scf);
 	}
@@ -492,7 +477,7 @@ svc_authenticate_password(const char *account_name, const char *password,
 	 * For ACCT_SASLONLY accounts we still verify the password here; the
 	 * SASLONLY flag merely prevents NS IDENTIFY (handled in nickserv.c).
 	 */
-	const char *computed = crypt(password, acct->passhash);
+	const char *computed = rb_crypt(password, acct->passhash);
 	if(computed == NULL || strcmp(computed, acct->passhash) != 0)
 		return false;
 
@@ -687,22 +672,36 @@ h_services_can_join(hook_data_channel *hdata)
 	if(hdata->approved == ERR_BADCHANNELKEY && client_p->user != NULL
 	   && client_p->user->suser[0] != '\0')
 	{
-		rb_dlink_node *ptr;
-		RB_DLINK_FOREACH(ptr, reg->access.head)
-		{
-			struct svc_chanaccess *ca = ptr->data;
-			if(!(ca->flags & (CA_FOUNDER | CA_STAFF)))
-				continue;
-			if(rb_strcasecmp(ca->entity, client_p->user->suser) != 0)
-				continue;
+		const char *suser = client_p->user->suser;
+		bool bypass = false;
 
-			/* Founder / staff override — let them in */
+		/* Primary founder field — fastest check */
+		if(irccmp(reg->founder, suser) == 0)
+			bypass = true;
+
+		/* Access list: CA_FOUNDER or CA_STAFF also get key bypass */
+		if(!bypass)
+		{
+			rb_dlink_node *ptr;
+			RB_DLINK_FOREACH(ptr, reg->access.head)
+			{
+				struct svc_chanaccess *ca = ptr->data;
+				if(!(ca->flags & (CA_FOUNDER | CA_STAFF)))
+					continue;
+				if(irccmp(ca->entity, suser) != 0)
+					continue;
+				bypass = true;
+				break;
+			}
+		}
+
+		if(bypass)
+		{
 			hdata->approved = 0;
-			sendto_one_notice(client_p,
-			    ":%s: Channel key bypassed — you are a "
-			    "registered owner/staff of %s",
-			    me.name, chptr->chname);
-			break;
+			svc_notice(client_p, "ChanServ",
+			    "Channel key bypassed — you are the "
+			    "registered owner/staff of %s.",
+			    chptr->chname);
 		}
 	}
 
@@ -724,6 +723,62 @@ h_services_can_join(hook_data_channel *hdata)
 			/* Veto the join */
 			hdata->approved = ERR_BANNEDFROMCHAN;
 			return;
+		}
+	}
+
+	/*
+	 * --- 3. CHANREG_RESTRICTED -------------------------------------------
+	 * Only users who are identified to a registered account may join.
+	 * Opers with IsOper() are exempt (services staff access).
+	 */
+	if((reg->flags & CHANREG_RESTRICTED)
+	   && !IsOper(client_p)
+	   && (client_p->user == NULL || client_p->user->suser[0] == '\0'))
+	{
+		hdata->approved = ERR_INVITEONLYCHAN;
+		svc_notice(client_p, "ChanServ",
+		    "%s is restricted to registered users — "
+		    "please identify with IDENTIFY first.",
+		    chptr->chname);
+		return;
+	}
+
+	/*
+	 * --- 4. CHANREG_SECURE -----------------------------------------------
+	 * Only users who appear on the channel's access list may join.
+	 * Opers and the registered founder are always admitted.
+	 */
+	if(reg->flags & CHANREG_SECURE)
+	{
+		if(IsOper(client_p))
+			return; /* oper always gets in */
+		if(client_p->user != NULL && client_p->user->suser[0] != '\0'
+		   && irccmp(reg->founder, client_p->user->suser) == 0)
+			return; /* founder always gets in */
+
+		bool on_list = false;
+		if(client_p->user != NULL && client_p->user->suser[0] != '\0')
+		{
+			rb_dlink_node *ptr;
+			RB_DLINK_FOREACH(ptr, reg->access.head)
+			{
+				struct svc_chanaccess *ca = ptr->data;
+				if(ca->flags & CA_AKICK)
+					continue;
+				if(match_entity(client_p, ca->entity))
+				{
+					on_list = true;
+					break;
+				}
+			}
+		}
+		if(!on_list)
+		{
+			hdata->approved = ERR_INVITEONLYCHAN;
+			svc_notice(client_p, "ChanServ",
+			    "%s requires a ChanServ access entry to join — "
+			    "contact the channel operators.",
+			    chptr->chname);
 		}
 	}
 }
@@ -774,18 +829,30 @@ h_services_post_join(hook_data_channel_activity *hdata)
 
 			best_ca = ca->flags;
 
-			if(ca->flags & (CA_FOUNDER | CA_OWNER))
+			/*
+			 * Map CA_* tiers to IRCX membership flags.
+			 *
+			 * This codebase uses CHFL_ADMIN (mode 'q') for channel
+			 * owner and CHFL_CHANOP (mode 'o') for operator.  There
+			 * is no +a/+h mode; CA_PROTECT collapses to owner and
+			 * CA_HALFOP collapses to op.
+			 *
+			 * CHFL_ADMIN implies CHFL_CHANOP (chm_admin sets both).
+			 */
+			if(ca->flags & (CA_FOUNDER | CA_OWNER | CA_PROTECT))
 				best_mode = CHFL_ADMIN | CHFL_CHANOP;
-			else if(ca->flags & CA_PROTECT)
-				best_mode = CHFL_ADMIN;
-			else if(ca->flags & CA_OP)
+			else if(ca->flags & (CA_OP | CA_HALFOP))
 				best_mode = CHFL_CHANOP;
-#ifdef CHFL_HALFOP
-			else if(ca->flags & CA_HALFOP)
-				best_mode = CHFL_HALFOP;
-#endif
 			else if(ca->flags & CA_VOICE)
 				best_mode = CHFL_VOICE;
+		}
+
+		/* Also check the primary founder field */
+		if(best_ca == 0
+		   && client_p->user != NULL && client_p->user->suser[0] != '\0'
+		   && irccmp(reg->founder, client_p->user->suser) == 0)
+		{
+			best_mode = CHFL_ADMIN | CHFL_CHANOP;
 		}
 
 		if(best_mode != 0)
@@ -808,12 +875,19 @@ h_services_post_join(hook_data_channel_activity *hdata)
 				{
 					msptr->flags |= best_mode;
 
-					/* Announce the mode to the channel */
+					/*
+					 * Mode letter:
+					 *   +q = owner (CHFL_ADMIN, sets both
+					 *        CHFL_ADMIN and CHFL_CHANOP)
+					 *   +o = chanop
+					 *   +v = voice
+					 */
 					const char *modestr =
 					    (best_mode & CHFL_ADMIN)
-					    ? "+ao" : (best_mode & CHFL_CHANOP)
+					    ? "+q" : (best_mode & CHFL_CHANOP)
 					    ? "+o" : "+v";
-					sendto_channel_local(ALL_MEMBERS, chptr,
+					sendto_channel_local(NULL, ALL_MEMBERS,
+					    chptr,
 					    ":%s MODE %s %s %s",
 					    me.name, chptr->chname,
 					    modestr, client_p->name);

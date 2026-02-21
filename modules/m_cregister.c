@@ -62,7 +62,8 @@ m_cregister(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "ChanServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "CREGISTER");
 		return;
 	}
 
@@ -153,7 +154,8 @@ m_cdrop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "ChanServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "CDROP");
 		return;
 	}
 

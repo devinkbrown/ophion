@@ -481,7 +481,8 @@ m_memo(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "MemoServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "MEMO");
 		return;
 	}
 

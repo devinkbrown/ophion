@@ -298,7 +298,8 @@ m_vhost(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "HostServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "VHOST");
 		return;
 	}
 
@@ -360,7 +361,8 @@ mo_vhoffer(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "HostServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "VHOFFER");
 		return;
 	}
 
@@ -403,7 +405,8 @@ m_vhofferlist(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *s
 
 	if (!services.enabled)
 	{
-		svc_notice(source_p, "HostServ", "Services are not enabled on this server.");
+		sendto_one(source_p, form_str(ERR_UNKNOWNCOMMAND),
+			me.name, source_p->name, "VHOFFERLIST");
 		return;
 	}
 
