@@ -1,129 +1,253 @@
-SASL authentication
--------------------
+SASL authentication for IRC operators
+======================================
 
-Note: The primary location for this document is now the IRCv3 sasl-3.1
-specification, at address:
+Ophion uses SASL to authenticate IRC operators.  Authentication runs during
+connection registration — before the client receives the 001 Welcome — and
+oper status is granted automatically at registration completion.
 
-    http://ircv3.atheme.org/extensions/sasl-3.1
+The traditional OPER command is a stub; it prints a redirect notice and
+performs no authentication.  All oper auth goes through SASL PLAIN (password)
+or SASL EXTERNAL (TLS certificate fingerprint).
 
-This document describes the client protocol for SASL authentication, as
-implemented in Charybdis and Atheme. The SASL protocol in general is documented
-in RFC 4422 [1], along with the 'EXTERNAL' mechanism. The most commonly used
-'PLAIN' mechanism is documented in RFC 4616 [2].
+The IRCX AUTH command (m_ircx_auth) provides a single-command shorthand for
+the same SASL mechanisms without requiring the CAP REQ :sasl negotiation.
 
-SASL authentication relies on the CAP client capability framework [3].
-Support for SASL authentication is indicated with the "sasl" capability.
-The client MUST enable the sasl capability before using the AUTHENTICATE
-command defined by this specification.
 
-The AUTHENTICATE command
+Overview
+--------
 
-The AUTHENTICATE command MUST be used before registration is complete and
-with the sasl capability enabled. To enforce the former, it is RECOMMENDED
-to only send CAP END when the SASL exchange is completed or needs to be
-aborted. Clients SHOULD be prepared for timeouts at all times during the SASL
-authentication.
+SASL (Simple Authentication and Security Layer, RFC 4422) is a framework
+that separates the authentication mechanism from the protocol.  In IRC, SASL
+runs via the AUTHENTICATE command with the sasl client capability.
 
-There are two forms of the AUTHENTICATE command: initial client message and
-later messages.
+Connection registration flow:
 
-The initial client message specifies the SASL mechanism to be used. (When this
-is received, the IRCD will attempt to establish an association with a SASL
-agent.) If this fails, a 904 numeric will be sent and the session state remains
-unchanged; the client MAY try another mechanism. Otherwise, the server sends
-a set of regular AUTHENTICATE messages with the initial server response.
+    Client → Server:  CAP REQ :sasl
+    Server → Client:  CAP * ACK :sasl
+    Client → Server:  NICK <nick>
+    Client → Server:  USER <user> 0 * :<gecos>
+    Client → Server:  AUTHENTICATE <mechanism>
+    Server → Client:  AUTHENTICATE +             (no server challenge for PLAIN/EXTERNAL)
+    Client → Server:  AUTHENTICATE <base64-payload>
+    Server → Client:  900 RPL_LOGGEDIN           (on success)
+    Server → Client:  903 RPL_SASLSUCCESS        (on success)
+                   or 904 ERR_SASLFAIL           (on failure)
+    Client → Server:  CAP END
+    Server → Client:  001 Welcome                <- oper_up() fires here automatically
 
-initial-authenticate = "AUTHENTICATE" SP mechanism CRLF
 
-A set of regular AUTHENTICATE messages transmits a response from client to
-server or vice versa. The server MAY intersperse other IRC protocol messages
-between the AUTHENTICATE messages of a set. The "+" form is used for an empty
-response. The server MAY place a limit on the total length of a response.
+Mechanism: PLAIN (password-based)
+----------------------------------
 
-regular-authenticate-set = *("AUTHENTICATE" SP 400BASE64 CRLF)
-	"AUTHENTICATE" SP (1*399BASE64 / "+") CRLF
+SASL PLAIN (RFC 4616) carries credentials in a single binary blob:
 
-The client can abort an authentication by sending an asterisk as the data.
-The server will send a 904 numeric.
+    [authzid] NUL authcid NUL password
 
-authenticate-abort = "AUTHENTICATE" SP "*" CRLF
+Fields:
 
-If authentication fails, a 904 or 905 numeric will be sent and the
-client MAY retry from the AUTHENTICATE <mechanism> command.
-If authentication is successful, a 900 and 903 numeric will be sent.
+    authzid   Optional authorization identity.  If non-empty it must equal
+              authcid.  Most clients leave this empty.
 
-If the client attempts to issue the AUTHENTICATE command after already
-authenticating successfully, the server MUST reject it with a 907 numeric.
+    authcid   Authentication identity: the operator block name.
 
-If the client completes registration (with CAP END, NICK, USER and any other
-necessary messages) while the SASL authentication is still in progress, the
-server SHOULD abort it and send a 906 numeric, then register the client
-without authentication.
+    password  The operator block password (protected by TLS, not by base64).
 
-This document does not specify use of the AUTHENTICATE command in
-registered (person) state.
+The blob is base64-encoded before being sent:
 
-Example protocol exchange
+    printf '\0<blockname>\0<password>' | base64
 
-C: indicates lines sent by the client, S: indicates lines sent by the server.
+Full exchange:
 
-The client is using the PLAIN SASL mechanism with authentication identity
-jilles, authorization identity jilles and password sesame.
+    C: CAP REQ :sasl
+    C: NICK alice
+    C: USER alice 0 * :Alice
+    S: :server CAP alice ACK :sasl
+    C: AUTHENTICATE PLAIN
+    S: AUTHENTICATE +
+    C: AUTHENTICATE AGdvZG9wZXIAczNjcmV0
+      (= base64 of \0godoper\0s3cret)
+    S: :server 900 alice alice!alice@host godoper :You are now logged in as godoper
+    S: :server 903 alice :SASL authentication successful
+    C: CAP END
+    S: :server 001 alice :Welcome ...
+      (oper_up() fires automatically)
 
-C: CAP REQ :sasl
-C: NICK jilles
-C: USER jilles cheetah.stack.nl 1 :Jilles Tjoelker
-S: NOTICE AUTH :*** Processing connection to jaguar.test
-S: NOTICE AUTH :*** Looking up your hostname...
-S: NOTICE AUTH :*** Checking Ident
-S: NOTICE AUTH :*** No Ident response
-S: NOTICE AUTH :*** Found your hostname
-S: :jaguar.test CAP jilles ACK :sasl 
-C: AUTHENTICATE PLAIN
-S: AUTHENTICATE +
-C: AUTHENTICATE amlsbGVzAGppbGxlcwBzZXNhbWU=
-S: :jaguar.test 900 jilles jilles!jilles@localhost.stack.nl jilles :You are now logged in as jilles.
-S: :jaguar.test 903 jilles :SASL authentication successful
-C: CAP END
-S: :jaguar.test 001 jilles :Welcome to the jillestest Internet Relay Chat Network jilles
-<usual welcome messages>
+IRCX AUTH shorthand (no CAP REQ needed):
 
-Note that the CAP command sent by a server includes the user's nick or *,
-differently from what [1] specifies.
+    AUTH PLAIN I :AGdvZG9wZXIAczNjcmV0
 
-Alternatively the client could request the list of capabilities and enable
-an additional capability.
+    Syntax: AUTH <mechanism> <sequence> :<base64-payload>
+    "I" = Initial.
 
-C: CAP LS
-C: NICK jilles
-C: USER jilles cheetah.stack.nl 1 :Jilles Tjoelker
-S: NOTICE AUTH :*** Processing connection to jaguar.test
-S: NOTICE AUTH :*** Looking up your hostname...
-S: NOTICE AUTH :*** Checking Ident
-S: NOTICE AUTH :*** No Ident response
-S: NOTICE AUTH :*** Found your hostname
-S: :jaguar.test CAP * LS :multi-prefix sasl
-C: CAP REQ :multi-prefix sasl
-S: :jaguar.test CAP jilles ACK :multi-prefix sasl 
-C: AUTHENTICATE PLAIN
-S: AUTHENTICATE +
-C: AUTHENTICATE amlsbGVzAGppbGxlcwBzZXNhbWU=
-S: :jaguar.test 900 jilles jilles!jilles@localhost.stack.nl jilles :You are now logged in as jilles.
-S: :jaguar.test 903 jilles :SASL authentication successful
-C: CAP END
-S: :jaguar.test 001 jilles :Welcome to the jillestest Internet Relay Chat Network jilles
-<usual welcome messages>
+Client configuration:
 
-[1] A. Melnikov (Isode Limited), K. Zeilenga (OpenLDAP Foundation), Simple
-Authentication and Security Layer (SASL). June 2006.
-<https://tools.ietf.org/html/rfc4422>
+    WeeChat:
+      /set irc.server.mynet.sasl_mechanism plain
+      /set irc.server.mynet.sasl_username godoper
+      /set irc.server.mynet.sasl_password s3cret
 
-[2] K. Zeilenga (OpenLDAP Foundation), The PLAIN Simple Authentication and
-Security Layer (SASL) Mechanism. August 2006.
-<https://tools.ietf.org/html/rfc4616>
+    irssi:
+      /set sasl_mechanism PLAIN
+      /set sasl_username godoper
+      /set sasl_password s3cret
 
-[3] K. Mitchell, P. Lorier (Undernet IRC Network), L. Hardy (ircd-ratbox), P.
-Kucharski (IRCnet), IRC Client Capabilities Extension. March 2005.
-This internet-draft has expired; it can still be found on
-http://www.leeh.co.uk/draft-mitchell-irc-capabilities-02.html
 
+Mechanism: EXTERNAL (certificate fingerprint)
+----------------------------------------------
+
+SASL EXTERNAL authenticates using the TLS client certificate presented at the
+TLS handshake.  Only operator blocks with the certfp_only flag are eligible.
+No password is involved or checked.
+
+The payload the client sends is the authzid (operator block name) or empty:
+
+    Empty / "=":  Server scans all certfp_only blocks for the one whose
+                  fingerprint matches the client's certificate (auto-discover).
+
+    "blockname":  Server checks that specific block's fingerprint against
+                  the client's certificate.
+
+Full exchange (auto-discover):
+
+    C: CAP REQ :sasl
+    C: NICK alice
+    C: USER alice 0 * :Alice
+    C: AUTHENTICATE EXTERNAL
+    S: AUTHENTICATE +
+    C: AUTHENTICATE =
+    S: :server 903 alice :SASL authentication successful
+    C: CAP END
+    S: :server 001 alice :Welcome ...
+      (oper_up() fires automatically)
+
+Named block (base64 of the block name):
+
+    C: AUTHENTICATE EXTERNAL
+    S: AUTHENTICATE +
+    C: AUTHENTICATE Y2VydG9wZXI=    (= base64("certoper"))
+    S: :server 903 alice :SASL authentication successful
+
+IRCX AUTH shorthand:
+
+    AUTH EXTERNAL I
+
+    No data payload.  Authzid is implicitly empty; auto-discovery applies.
+
+Client configuration:
+
+    WeeChat:
+      /set irc.server.mynet.sasl_mechanism external
+      /set irc.server.mynet.ssl_cert /path/to/client.pem
+
+
+ircd.conf operator{} blocks
+-----------------------------
+
+The operator block name is the authcid / authzid used in the SASL payload.
+
+Password-based:
+
+    operator "godoper" {
+        user = "*@127.0.0.1";
+        password = "$6$rounds=65536$...mkpasswd sha512 output...";
+        flags = encrypted;
+        snomask = "+Zbfkrsuy";
+        privset = "admin";
+    };
+
+Certificate-only (no password; any host accepted automatically):
+
+    operator "certoper" {
+        fingerprint = "cert_sha256:deadbeefdeadbeef...64hexchars...";
+        flags = certfp_only;
+        snomask = "+Zbfkrsuy";
+        privset = "admin";
+    };
+
+Certificate + password (both must match):
+
+    operator "strictoper" {
+        user = "alice@trusted.example.com";
+        password = "etcnjl8juSU1E";
+        fingerprint = "cert_sha256:deadbeefdeadbeef...64hexchars...";
+        flags = encrypted, need_ssl;
+        snomask = "+Zbfkrsuy";
+        privset = "global_op";
+    };
+
+Operator block flags:
+
+    encrypted     Password is crypt(3)-hashed [DEFAULT]
+    ~encrypted    Password is stored plaintext
+    need_ssl      Require TLS connection to authenticate
+    certfp_only   Fingerprint alone is sufficient; no password needed.
+                  Requires fingerprint = to be set.
+                  Without user = lines, any host is accepted (*@*).
+
+
+Getting your certificate fingerprint
+--------------------------------------
+
+    openssl x509 -in client.crt -noout -sha256 -fingerprint \
+      | tr -d ':' | tr 'A-Z' 'a-z' \
+      | sed 's/.*=//; s/^/cert_sha256:/'
+
+The tools/setup.py configuration wizard can compute fingerprints interactively.
+
+Fingerprint method prefixes (set certfp_method in general{}):
+
+    cert_sha1:<hex>     SHA-1 of DER certificate
+    cert_sha256:<hex>   SHA-256 of DER certificate [default]
+    cert_sha512:<hex>   SHA-512 of DER certificate
+    spki_sha256:<hex>   SHA-256 of SubjectPublicKeyInfo (survives certificate renewal)
+    spki_sha512:<hex>   SHA-512 of SubjectPublicKeyInfo
+
+
+Failure responses
+-----------------
+
+    904 ERR_SASLFAIL       Authentication failed (wrong password, certfp
+                           mismatch, unknown block, or no client certificate)
+    909 ERR_SASLTOOLONG    Payload exceeded 400 characters
+
+Failures are logged at L_FOPER level.  When failed_oper_notice = yes in
+general{}, a SNO_GENERAL notice is also broadcast to all online operators.
+
+
+Internal implementation
+------------------------
+
+    modules/sasl_plain.c      SASL PLAIN mechanism module
+    modules/sasl_external.c   SASL EXTERNAL mechanism module
+    modules/m_sasl_core.c     AUTHENTICATE command and session management
+    modules/m_ircx_auth.c     IRCX AUTH command (SASL shorthand)
+    ircd/auth_oper.c          Shared credential and audit helpers
+
+Shared helpers in auth_oper.c:
+
+    oper_find_by_name(name)         Find block by name (no host check)
+    oper_find_certfp_only(name)     Find certfp_only block by name
+    oper_find_certfp_match(client)  Auto-discover certfp_only block by cert
+    oper_check_password(pass, blk)  Verify password (plaintext or crypt)
+    oper_check_certfp(client, blk)  Compare fingerprints (case-insensitive)
+    oper_log_success(client, blk, method)  Emit L_OPERED audit entry
+    oper_log_failure(client, name, reason, method)  Emit L_FOPER + snomask
+
+On success the mechanism sets client->localClient->pending_oper.
+register_local_user() (ircd/s_user.c) calls oper_up() at 001 Welcome.
+
+
+References
+----------
+
+[1] RFC 4422 — Simple Authentication and Security Layer (SASL)
+    https://tools.ietf.org/html/rfc4422
+
+[2] RFC 4616 — The PLAIN SASL Mechanism
+    https://tools.ietf.org/html/rfc4616
+
+[3] IRCv3 SASL specification
+    https://ircv3.net/specs/extensions/sasl-3.1
+
+[4] IRCX draft — AUTH command
+    draft-pfenning-irc-extensions-04

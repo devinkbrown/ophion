@@ -396,66 +396,101 @@ privs
 operator {} block
 -----------------
 
-::
+Operator authentication has moved to SASL.  Clients authenticate *before*
+registration completes and receive oper status automatically at the 001
+Welcome.  The ``OPER`` command is a stub that prints a redirect notice.
+
+Authentication methods:
+
+* **SASL PLAIN** (password) — standard IRC client SASL support::
+
+      CAP REQ :sasl
+      AUTHENTICATE PLAIN
+      AUTHENTICATE <base64(\0<blockname>\0<password>)>
+
+* **IRCX AUTH shorthand** (single command, no CAP needed)::
+
+      AUTH PLAIN I :<base64(\0<blockname>\0<password>)>
+
+* **SASL EXTERNAL** (certificate fingerprint; certfp\_only blocks only)::
+
+      AUTHENTICATE EXTERNAL
+      AUTHENTICATE =          (= or empty triggers auto-discover)
+
+  IRCX shorthand::
+
+      AUTH EXTERNAL I
+
+Block syntax::
 
    operator "name" {
-    	user = "hostmask";
-    	password = "text";
-    	rsa_public_key_file = "text";
-    	umodes = list;
-    	snomask = "text";
-    	flags = list;
+        user = "hostmask";
+        password = "text";
+        fingerprint = "method:hexdigest";
+        umodes = list;
+        snomask = "text";
+        flags = list;
+        privset = "name";
    };
-
-Operator blocks define who may use the ``OPER`` command to gain extended
-privileges.
 
 **operator {} variables**
 
 user
-    A hostmask that users trying to use this operator {} block must
-    match. This is checked against the original host and IP address;
-    CIDR is also supported. So auth {} spoofs work in operator {}
-    blocks; the real host behind them is not checked. Other kind of
-    spoofs do not work in operator {} blocks; the real host behind them
-    is checked.
+    A user@host mask the client must match.  CIDR is supported.
+    auth{} spoofs work; other kinds of spoofs do not.  Multiple
+    ``user =`` lines are accepted; the client must match at least one.
 
-    Note that this is different from charybdis 1.x where all kinds of
-    spoofs worked in operator {} blocks.
+    When ``certfp_only`` is in flags and no ``user =`` lines are set,
+    a synthetic ``*@*`` entry is added automatically — any host matches.
 
 password
-    A password used with the ``OPER`` command to use this operator {} block.
-    Passwords are encrypted by default, but may be unencrypted if
-    ~encrypted is present in the flags list.
+    Password verified by SASL PLAIN.  Encrypted (crypt(3)) by default;
+    use ``~encrypted`` to store plaintext.  Generate a hash with::
 
-rsa\_public\_key\_file
-    An optional path to a RSA public key file associated with the
-    operator {} block. This information is used by the ``CHALLENGE``
-    command, which is an alternative authentication scheme to the
-    traditional ``OPER`` command.
+        mkpasswd -m sha512 yourpassword
+
+    May be omitted when ``certfp_only`` is set.
+
+fingerprint
+    TLS client certificate fingerprint.  Format: ``method:hexdigest``
+    where method is one of ``cert_sha256``, ``cert_sha512``,
+    ``spki_sha256``, ``spki_sha512``.
+
+    Without ``certfp_only``: SASL PLAIN checks certfp AND password.
+    With ``certfp_only``: certfp alone grants oper status.
+
+    Compute the fingerprint::
+
+        openssl x509 -in client.crt -noout -sha256 -fingerprint \
+          | tr -d ':' | tr 'A-Z' 'a-z' \
+          | sed 's/.*=//; s/^/cert_sha256:/'
 
 umodes
-    A list of usermodes to apply to successfully opered clients.
+    A list of usermodes to apply on successful oper-up.
 
 snomask
-    An snomask to apply to successfully opered clients.
+    A server notice mask to apply on successful oper-up.
 
 privset
-    The privilege set granted to successfully opered clients. This must
-    be defined before this operator{} block.
+    The privilege set granted on oper-up.  Must be defined before this
+    operator{} block.
 
 flags
-    A list of flags to apply to this operator{} block. They are listed
-    below.
+    Options for this operator block.  Listed below.
 
 **operator {} flags**
 
 encrypted
-    The password used has been encrypted. This is enabled by default,
-    use ~encrypted to disable it.
+    Password is crypt(3)-hashed.  Enabled by default; use
+    ``~encrypted`` to store passwords in plaintext.
 
 need\_ssl
-    Restricts use of this operator{} block to SSL/TLS connections only.
+    Require a TLS connection to authenticate.
+
+certfp\_only
+    Certificate fingerprint alone is sufficient; no password is needed
+    or checked.  Requires ``fingerprint =`` to be set.  Without any
+    ``user =`` lines, any host is accepted.
 
 connect {} block
 ----------------

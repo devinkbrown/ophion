@@ -125,6 +125,74 @@ The following ISUPPORT tokens are added by IRCv3 modules:
 | `CHATHISTORY` | `100` | Maximum messages per history request |
 | `MSGREFTYPES` | `timestamp` | Supported message reference types |
 
+## Oper Authentication
+
+IRC operator authentication uses SASL, not the traditional OPER command.
+Operators authenticate **during connection registration** (before the 001
+Welcome) and receive oper status automatically.  The OPER command is a stub
+that prints a notice directing users to SASL.
+
+### Methods
+
+| Method | Command | When to use |
+|--------|---------|-------------|
+| SASL PLAIN | `AUTHENTICATE PLAIN` | Password-based (any modern client) |
+| SASL EXTERNAL | `AUTHENTICATE EXTERNAL` | TLS certificate fingerprint only |
+| IRCX AUTH (shorthand) | `AUTH PLAIN I :…` / `AUTH EXTERNAL I` | Single-command alternative; no `CAP REQ :sasl` needed |
+
+### SASL PLAIN (password)
+
+```
+CAP REQ :sasl
+AUTHENTICATE PLAIN
+AUTHENTICATE <base64(\0<blockname>\0<password>)>
+```
+
+Most clients (WeeChat, HexChat, irssi, ZNC) configure this natively via
+their SASL settings.  Use the oper block name as the username.
+
+### SASL EXTERNAL (certificate)
+
+Requires a TLS connection with a client certificate.  The oper block must
+have `certfp_only = yes` and a matching `fingerprint =` line.
+
+```
+AUTHENTICATE EXTERNAL
+AUTHENTICATE =          # "=" triggers auto-discovery
+```
+
+### ircd.conf quick-start
+
+```
+# Password-based oper
+operator "godoper" {
+    user = "*@127.0.0.1";
+    password = "$6$...mkpasswd -m sha512 output...";
+    flags = encrypted;
+    snomask = "+Zbfkrsuy";
+    privset = "admin";
+};
+
+# Certificate-only oper (no password; any host)
+operator "certoper" {
+    fingerprint = "cert_sha256:deadbeef...64hexchars...";
+    flags = certfp_only;
+    snomask = "+Zbfkrsuy";
+    privset = "admin";
+};
+```
+
+Get your certificate fingerprint:
+
+```sh
+openssl x509 -in client.crt -noout -sha256 -fingerprint \
+  | tr -d ':' | tr 'A-Z' 'a-z' \
+  | sed 's/.*=//; s/^/cert_sha256:/'
+```
+
+See `doc/features/sasl.txt` for the full protocol reference and
+`doc/reference.conf` for all operator block options.
+
 ## IRCX Protocol Support
 
 Ophion implements channel modes, user modes, and commands from the IRCX

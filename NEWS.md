@@ -7,6 +7,33 @@ See LICENSE for licensing details (GPL v2).
 
 ### Ophion-specific additions (since charybdis fork)
 
+#### oper authentication
+- **SASL PLAIN oper authentication** (`modules/sasl_plain.c`): operators now
+  authenticate via `AUTHENTICATE PLAIN` during connection registration.  The
+  SASL payload carries `[authzid\0]authcid\0password`; authcid is the oper
+  block name.  oper_up() fires automatically at 001 Welcome.
+- **SASL EXTERNAL oper authentication** (`modules/sasl_external.c`):
+  certificate-only oper blocks (`certfp_only = yes`) authenticate via
+  `AUTHENTICATE EXTERNAL`.  Empty authzid (`=`) auto-discovers the matching
+  block; a named authzid targets a specific block.
+- **IRCX AUTH shorthand**: both mechanisms work via the existing IRCX `AUTH`
+  command (`AUTH PLAIN I :<base64>` / `AUTH EXTERNAL I`) without requiring
+  `CAP REQ :sasl`.
+- **`certfp_only` operator flag**: new operator block flag that accepts a TLS
+  certificate fingerprint as the sole credential.  No password required or
+  checked.  Without `user =` lines any host is accepted (*@* added automatically).
+- **`/OPER` stub**: the OPER command no longer authenticates.  Clients that
+  send `/OPER` receive a notice directing them to SASL.  Server-to-server
+  OPER propagation (`mc_oper`) is retained unchanged.
+- **Shared auth module** (`ircd/auth_oper.c`, `include/auth_oper.h`):
+  centralises all oper credential logic — `oper_check_password()`,
+  `oper_check_certfp()`, `oper_find_by_name()`, `oper_find_certfp_only()`,
+  `oper_find_certfp_match()`, `oper_log_success()`, `oper_log_failure()`.
+  Failed attempts emit `L_FOPER` log entries and optional `SNO_GENERAL`
+  notices (controlled by `failed_oper_notice` in `general{}`).
+- **`pending_oper`** field on `LocalUser`: SASL mechanisms set this on success;
+  `register_local_user()` calls `oper_up()` automatically at 001 Welcome.
+
 #### user
 - `oper_kick_protection`: IRC operators cannot be kicked or deopped by non-opers.
 - `oper_auto_op`: IRC operators are automatically given chanop (+q) or higher on join.
