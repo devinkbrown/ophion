@@ -42,6 +42,7 @@
 #include "s_stats.h"
 #include "tgchange.h"
 #include "inline/stringops.h"
+#include "propertyset.h"
 
 static const char message_desc[] =
 	"Provides the PRIVMSG and NOTICE commands to send messages to users and channels";
@@ -195,6 +196,61 @@ m_message(enum message_type msgtype, struct MsgBuf *msgbuf_p,
 	 */
 	if(MyClient(source_p) && !IsFloodDone(source_p) && irccmp(source_p->name, parv[1]))
 		flood_endgrace(source_p);
+
+	/*
+	 * IRCX channel-context nick-list: PRIVMSG #chan nick1 [nick2 ...] :text
+	 * When parv[1] is a channel and parc >= 4, parv[2..parc-2] are nick
+	 * targets within that channel context, parv[parc-1] is the message text.
+	 * draft-pfenning-irc-extensions-04 §6.1
+	 */
+	if(MyClient(source_p) && parc >= 4 && IsChanPrefix(*parv[1]))
+	{
+		struct Channel *chptr = find_channel(parv[1]);
+		if(chptr == NULL)
+		{
+			if(msgtype != MESSAGE_TYPE_NOTICE)
+				sendto_one_numeric(source_p, ERR_NOSUCHNICK,
+					form_str(ERR_NOSUCHNICK), parv[1]);
+			return;
+		}
+		if(!can_send(chptr, source_p, NULL))
+		{
+			if(msgtype != MESSAGE_TYPE_NOTICE)
+				sendto_one_numeric(source_p, ERR_CANNOTSENDTOCHAN,
+					form_str(ERR_CANNOTSENDTOCHAN), chptr->chname);
+			return;
+		}
+		const char *nicktext = parv[parc - 1];
+		if(EmptyString(nicktext))
+		{
+			if(msgtype != MESSAGE_TYPE_NOTICE)
+				sendto_one(source_p, form_str(ERR_NOTEXTTOSEND),
+					me.name, source_p->name);
+			return;
+		}
+		int ni;
+		for(ni = 2; ni < parc - 1; ni++)
+		{
+			struct Client *target_p = find_named_person(parv[ni]);
+			if(target_p == NULL)
+			{
+				if(msgtype != MESSAGE_TYPE_NOTICE)
+					sendto_one_numeric(source_p, ERR_NOSUCHNICK,
+						form_str(ERR_NOSUCHNICK), parv[ni]);
+				continue;
+			}
+			if(!IsMember(target_p, chptr))
+			{
+				if(msgtype != MESSAGE_TYPE_NOTICE)
+					sendto_one_numeric(source_p, ERR_USERNOTINCHANNEL,
+						form_str(ERR_USERNOTINCHANNEL),
+						target_p->name, chptr->chname);
+				continue;
+			}
+			msg_client(msgtype, source_p, target_p, nicktext);
+		}
+		return;
+	}
 
 	if(build_target_list(msgtype, client_p, source_p, parv[1], parv[2]) < 0)
 	{
@@ -525,6 +581,21 @@ msg_channel(enum message_type msgtype,
 		{
 			sendto_channel_flags(client_p, ALL_MEMBERS, source_p, chptr,
 					     "%s %s :%s", cmdname[msgtype], chptr->chname, text);
+
+			/* IRCX LAG: per-channel fake lag adds penalty to the sender's
+			 * flood token bucket (sent_parsed), delaying future messages
+			 * by lag_val seconds.  draft-pfenning-irc-extensions-04 §8.3 */
+			if(MyClient(source_p) && IsFloodDone(source_p))
+			{
+				struct Property *lag_p = propertyset_find(&chptr->prop_list, "LAG");
+				if(lag_p && lag_p->value)
+				{
+					int lag_val = atoi(lag_p->value);
+					if(lag_val > 0 && lag_val <= 2)
+						source_p->localClient->sent_parsed +=
+							lag_val * ConfigFileEntry.client_flood_message_num;
+				}
+			}
 		}
 	}
 	else if(chptr->mode.mode & MODE_OPMODERATE &&

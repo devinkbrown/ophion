@@ -44,6 +44,7 @@ static const char mode_desc[] =
 	"Provides the MODE and MLOCK client and server commands, and TS6 server-to-server TMODE and BMASK commands";
 
 static void m_mode(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
+static void mu_mode_isircx(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void ms_mode(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void ms_tmode(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void ms_mlock(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
@@ -51,7 +52,7 @@ static void ms_bmask(struct MsgBuf *, struct Client *, struct Client *, int, con
 
 struct Message mode_msgtab = {
 	"MODE", 0, 0, 0, 0,
-	{mg_unreg, {m_mode, 2}, {m_mode, 3}, {ms_mode, 3}, mg_ignore, {m_mode, 2}}
+	{{mu_mode_isircx, 0}, {m_mode, 2}, {m_mode, 3}, {ms_mode, 3}, mg_ignore, {m_mode, 2}}
 };
 struct Message tmode_msgtab = {
 	"TMODE", 0, 0, 0, 0,
@@ -69,6 +70,25 @@ struct Message bmask_msgtab = {
 mapi_clist_av1 mode_clist[] = { &mode_msgtab, &tmode_msgtab, &mlock_msgtab, &bmask_msgtab, NULL };
 
 DECLARE_MODULE_AV2(mode, NULL, NULL, mode_clist, NULL, NULL, NULL, NULL, mode_desc);
+
+/*
+ * mu_mode_isircx - handle MODE before registration
+ *
+ * Per IRCX draft-pfenning-irc-extensions-04, pre-registration clients may
+ * probe IRCX support via "MODE nick ISIRCX".  Respond with RPL_IRCX to
+ * confirm support; reject all other pre-registration MODE usage.
+ */
+static void
+mu_mode_isircx(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p,
+               int parc, const char *parv[])
+{
+	if(parc >= 2 && !irccmp(parv[1], "ISIRCX"))
+	{
+		sendto_one_numeric(client_p, RPL_IRCX, form_str(RPL_IRCX));
+		return;
+	}
+	sendto_one(client_p, form_str(ERR_NOTREGISTERED), me.name);
+}
 
 /*
  * m_mode - MODE command handler
