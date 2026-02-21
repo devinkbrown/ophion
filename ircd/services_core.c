@@ -529,19 +529,11 @@ svc_authenticate_certfp(const char *certfp, const char *account_hint,
 			goto try_oper;
 		}
 
-		/* Verify certfp is listed on this account */
-		bool found = false;
-		rb_dlink_node *ptr;
-		RB_DLINK_FOREACH(ptr, acct->certfps.head)
-		{
-			struct svc_certfp *scf = ptr->data;
-			if(rb_strcasecmp(scf->fingerprint, certfp) == 0)
-			{
-				found = true;
-				break;
-			}
-		}
-		if(!found)
+		/* Verify the certfp belongs to this account.  Use the secondary
+		 * svc_certfp_dict index for an O(1) pointer comparison instead
+		 * of an O(n) linear scan through acct->certfps.                */
+		struct svc_account *fp_acct = svc_account_find_certfp(certfp);
+		if(fp_acct == NULL || fp_acct != acct)
 			acct = NULL;
 	}
 	else

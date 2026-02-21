@@ -528,6 +528,36 @@ static void rb_accept_tryaccept(rb_fde_t *F, void *data __attribute__((unused)))
 			rb_close(new_F);
 		}
 
+		/* For plain TCP connections: disable Nagle (low latency for small
+		 * IRC messages), enable keepalives (detect dead clients before the
+		 * application-level PING timeout fires), and request IPTOS_LOWDELAY
+		 * so the OS schedules these packets with minimum queuing delay.
+		 * All three are best-effort; failures are silently ignored.       */
+		if(!(new_F->type & RB_FD_SCTP))
+		{
+#ifdef TCP_NODELAY
+			{
+				int optval = 1;
+				setsockopt(new_F->fd, IPPROTO_TCP, TCP_NODELAY,
+				           &optval, sizeof(optval));
+			}
+#endif
+#ifdef SO_KEEPALIVE
+			{
+				int optval = 1;
+				setsockopt(new_F->fd, SOL_SOCKET, SO_KEEPALIVE,
+				           &optval, sizeof(optval));
+			}
+#endif
+#if defined(IP_TOS) && defined(IPTOS_LOWDELAY)
+			{
+				int tos = IPTOS_LOWDELAY;
+				setsockopt(new_F->fd, IPPROTO_IP, IP_TOS,
+				           &tos, sizeof(tos));
+			}
+#endif
+		}
+
 		mangle_mapped_sockaddr((struct sockaddr *)&st);
 
 		if(F->accept->precb != NULL)
@@ -926,7 +956,14 @@ rb_socket(int family, int sock_type, int proto, const char *note)
 	 * limit if/when we get an error, but we can deal with that later.
 	 * XXX !!! -- adrian
 	 */
+	/* SOCK_CLOEXEC (Linux ≥ 2.6.27 / BSDs) sets the close-on-exec flag
+	 * atomically, preventing fd leaks into child processes (ssld, wsockd,
+	 * authd, bandb).  Fall back to plain socket() on older kernels.      */
+#ifdef SOCK_CLOEXEC
+	fd = socket(family, sock_type | SOCK_CLOEXEC, proto);
+#else
 	fd = socket(family, sock_type, proto);
+#endif
 	if(rb_unlikely(fd < 0))
 		return NULL;	/* errno will be passed through, yay.. */
 

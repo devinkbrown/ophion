@@ -182,21 +182,10 @@ m_ungroup(struct MsgBuf *msgbuf_p, struct Client *client_p,
 		return;
 	}
 
-	/* Verify the nick belongs to this account. */
-	bool found = false;
-	rb_dlink_node *ptr;
-
-	RB_DLINK_FOREACH(ptr, acct->nicks.head)
-	{
-		struct svc_nick *sn = ptr->data;
-		if(irccmp(sn->nick, nick) == 0)
-		{
-			found = true;
-			break;
-		}
-	}
-
-	if(!found)
+	/* Verify the nick belongs to this account — O(1) radixtree lookup
+	 * instead of an O(n) linear scan through acct->nicks.             */
+	struct svc_nick *sn_chk = rb_radixtree_retrieve(svc_nick_dict, nick);
+	if(sn_chk == NULL || irccmp(sn_chk->account, acct->name) != 0)
 	{
 		svc_notice(source_p, "Services",
 			"Nick \2%s\2 is not grouped to your account.", nick);
