@@ -622,12 +622,16 @@ bool
 rehash(bool sig)
 {
 	rb_dlink_node *n;
+	char old_name[HOSTLEN + 1];
 
 	hook_data_rehash hdata = { sig };
 
 	if(sig)
 		sendto_realops_snomask(SNO_GENERAL, L_ALL,
 				     "Got signal SIGHUP, reloading ircd conf. file");
+
+	/* Save old server name so we can detect a rename after conf reload */
+	rb_strlcpy(old_name, me.name, sizeof(old_name));
 
 	rehash_authd();
 
@@ -636,10 +640,34 @@ rehash(bool sig)
 
 	rehash_discord_bridge();
 
+	/* Update server description immediately; it is always rehashable */
 	if(ServerInfo.description != NULL)
 		rb_strlcpy(me.info, ServerInfo.description, sizeof(me.info));
 	else
 		rb_strlcpy(me.info, "unknown", sizeof(me.info));
+
+	/* Handle live server rename: if serverinfo::name changed, update me.name
+	 * and notify opers and linked servers.  Clients will see the new name
+	 * in the ISUPPORT re-burst sent at the end of rehash. */
+	if(ServerInfo.name != NULL && irccmp(old_name, ServerInfo.name) != 0)
+	{
+		sendto_realops_snomask(SNO_GENERAL, L_ALL,
+			"Server name changed from '%s' to '%s' on rehash",
+			old_name, ServerInfo.name);
+
+		rb_strlcpy(me.name, ServerInfo.name, sizeof(me.name));
+
+		/* Notify all directly-linked servers about the rename */
+		RB_DLINK_FOREACH(n, global_serv_list.head)
+		{
+			struct Client *srv = n->data;
+			if(!MyConnect(srv) || !IsServer(srv))
+				continue;
+			sendto_one(srv,
+				":%s NOTICE %s :*** Server %s has been renamed to %s (live rehash)",
+				old_name, srv->name, old_name, me.name);
+		}
+	}
 
 	open_logfiles();
 
@@ -654,6 +682,17 @@ rehash(bool sig)
 	}
 
 	call_hook(h_rehash, &hdata);
+
+	/* Re-burst updated ISUPPORT 005 tokens to all registered local clients
+	 * so that any config changes (e.g. max_mode_params, network_name) are
+	 * immediately visible without requiring clients to reconnect. */
+	RB_DLINK_FOREACH(n, lclient_list.head)
+	{
+		struct Client *client_p = n->data;
+		if(IsClient(client_p))
+			show_isupport(client_p);
+	}
+
 	return false;
 }
 
@@ -677,8 +716,7 @@ rehash_bans(void)
 static void
 set_default_conf(void)
 {
-	/* ServerInfo.name is not rehashable */
-	/* ServerInfo.name = ServerInfo.name; */
+	/* ServerInfo.name is kept across rehash; conf_set_serverinfo_name updates it */
 	ServerInfo.description = NULL;
 	ServerInfo.network_name = NULL;
 	ServerInfo.ssl_client_cert = false;

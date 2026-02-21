@@ -168,40 +168,39 @@ remove_top_conf(char *name)
 static void
 conf_set_serverinfo_name(void *data)
 {
-	if(ServerInfo.name == NULL)
+	const char *s;
+	int dots = 0;
+
+	for(s = data; *s != '\0'; s++)
 	{
-		const char *s;
-		int dots = 0;
-
-		for(s = data; *s != '\0'; s++)
+		if(!IsServChar(*s))
 		{
-			if(!IsServChar(*s))
-			{
-				conf_report_error("Ignoring serverinfo::name "
-						  "-- bogus servername.");
-				return;
-			}
-			else if(*s == '.')
-				++dots;
-		}
-
-		if(!dots)
-		{
-			conf_report_error("Ignoring serverinfo::name -- must contain '.'");
+			conf_report_error("Ignoring serverinfo::name "
+					  "-- bogus servername.");
 			return;
 		}
+		else if(*s == '.')
+			++dots;
+	}
 
-		s = data;
+	if(!dots)
+	{
+		conf_report_error("Ignoring serverinfo::name -- must contain '.'");
+		return;
+	}
 
-		if(IsDigit(*s))
-		{
-			conf_report_error("Ignoring serverinfo::name -- cannot begin with digit.");
-			return;
-		}
+	s = data;
 
-		/* the ircd will exit() in main() if we dont set one */
-		if(strlen(s) <= HOSTLEN)
-			ServerInfo.name = rb_strdup((char *) data);
+	if(IsDigit(*s))
+	{
+		conf_report_error("Ignoring serverinfo::name -- cannot begin with digit.");
+		return;
+	}
+
+	if(strlen(s) <= HOSTLEN)
+	{
+		rb_free(ServerInfo.name);
+		ServerInfo.name = rb_strdup((char *) data);
 	}
 }
 

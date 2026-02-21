@@ -2294,6 +2294,92 @@ def test_mode_excess_params_capped():
 
 
 # ===========================================================================
+# REHASH — ISUPPORT re-burst + server rename
+# ===========================================================================
+
+IRCD_CONF_PATH = "/usr/local/etc/ircd.conf"
+
+
+def test_rehash_isupport_reburst():
+    """After REHASH, existing clients receive updated ISUPPORT 005 lines."""
+    client_s, client_n = connect()
+    op_s, op_n = connect()
+    try:
+        oper_up(op_s)
+        _drain(client_s, 0.3)
+
+        _send(op_s, "REHASH")
+        time.sleep(1.5)
+
+        lines = _read_lines(client_s, 2.0)
+        isupport_lines = [l for l in lines if " 005 " in l]
+        _report("REHASH re-bursts ISUPPORT 005 to existing clients",
+                len(isupport_lines) >= 2,
+                f"005 lines received={len(isupport_lines)}")
+        # Verify MODES= is still in 005 after rehash
+        modes_present = any("MODES=" in l for l in isupport_lines)
+        _report("REHASH 005 includes MODES= token",
+                modes_present, str([l for l in isupport_lines if "MODES" in l][:1]))
+    finally:
+        close(client_s)
+        close(op_s)
+
+
+def test_rehash_server_rename():
+    """Live server rename via rehash: updating serverinfo::name takes effect
+    immediately and the new name appears in 005 sent to existing clients."""
+    import re as _re
+
+    # Read current conf to get original name and restore later
+    try:
+        with open(IRCD_CONF_PATH) as f:
+            orig_conf = f.read()
+    except OSError:
+        _skip("REHASH server rename", f"cannot read {IRCD_CONF_PATH}")
+        return
+
+    m = _re.search(r'name\s*=\s*"([^"]+)"', orig_conf)
+    if not m:
+        _skip("REHASH server rename", "could not find name= in ircd.conf")
+        return
+    orig_name = m.group(1)
+    new_name = "rehash-renamed." + orig_name
+
+    client_s, client_n = connect()
+    op_s, op_n = connect()
+    renamed_ok = False
+    try:
+        oper_up(op_s)
+        _drain(client_s, 0.3)
+
+        # Temporarily rename the server in ircd.conf
+        new_conf = orig_conf.replace(f'name = "{orig_name}"', f'name = "{new_name}"', 1)
+        with open(IRCD_CONF_PATH, "w") as f:
+            f.write(new_conf)
+
+        _send(op_s, "REHASH")
+        time.sleep(1.5)
+
+        lines = _read_lines(client_s, 2.0)
+        isupport_lines = [l for l in lines if " 005 " in l]
+        renamed_ok = any(new_name in l for l in isupport_lines)
+        _report("REHASH live server rename → new name in 005 to existing clients",
+                renamed_ok,
+                f"new_name={new_name!r} found={renamed_ok}")
+    finally:
+        # Always restore original conf and rehash back
+        try:
+            with open(IRCD_CONF_PATH, "w") as f:
+                f.write(orig_conf)
+        except OSError:
+            pass
+        _send(op_s, "REHASH")
+        time.sleep(1.0)
+        close(client_s)
+        close(op_s)
+
+
+# ===========================================================================
 # Runner
 # ===========================================================================
 
@@ -2408,6 +2494,9 @@ ALL_TESTS = [
     ("MODE broadcast_params=1 → separate lines",     test_mode_broadcast_one_per_line_default),
     ("MODE +oooooo (6) accepted by max_mode_params", test_mode_max_params_six_accepted),
     ("MODE +oooooooo (8) capped at 6",               test_mode_excess_params_capped),
+    # — REHASH: ISUPPORT re-burst + server rename —
+    ("REHASH re-bursts ISUPPORT 005 to existing clients", test_rehash_isupport_reburst),
+    ("REHASH live server rename → new name in 005",       test_rehash_server_rename),
 ]
 
 
