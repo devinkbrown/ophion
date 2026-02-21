@@ -79,6 +79,20 @@ static unsigned int CLICAP_MULTILINE = 0;
 #define OPHION_STRINGIFY2(x) #x
 #define OPHION_STRINGIFY(x) OPHION_STRINGIFY2(x)
 
+static const char *
+multiline_cap_data(struct Client *client_p)
+{
+	(void)client_p;
+	return "max-bytes=" OPHION_STRINGIFY(MULTILINE_MAX_BYTES)
+	       ",max-lines=" OPHION_STRINGIFY(MULTILINE_MAX_LINES);
+}
+
+static struct ClientCapability capdata_multiline = {
+	.visible = NULL,
+	.data    = multiline_cap_data,
+	.flags   = 0,
+};
+
 /* ------------------------------------------------------------------ */
 /* Per-client batch state                                              */
 /* ------------------------------------------------------------------ */
@@ -122,10 +136,7 @@ static void hook_client_exit(void *data);
 /* ------------------------------------------------------------------ */
 
 mapi_cap_list_av2 multiline_cap_list[] = {
-	{ MAPI_CAP_CLIENT, "draft/multiline",
-	  "max-bytes=" OPHION_STRINGIFY(MULTILINE_MAX_BYTES)
-	  ",max-lines=" OPHION_STRINGIFY(MULTILINE_MAX_LINES),
-	  &CLICAP_MULTILINE },
+	{ MAPI_CAP_CLIENT, "draft/multiline", &capdata_multiline, &CLICAP_MULTILINE },
 	{ 0, NULL, NULL, NULL }
 };
 

@@ -341,7 +341,7 @@ svc_account_free(struct svc_account *acct)
 	RB_DLINK_FOREACH_SAFE(ptr, nptr, acct->nicks.head)
 	{
 		struct svc_nick *sn = ptr->data;
-		rb_dlinkDestroy(ptr, &acct->nicks);
+		rb_dlinkDelete(ptr, &acct->nicks);
 		rb_free(sn);
 	}
 
@@ -351,21 +351,21 @@ svc_account_free(struct svc_account *acct)
 		/* Keep secondary certfp dict consistent */
 		if(svc_certfp_dict != NULL)
 			rb_radixtree_delete(svc_certfp_dict, scf->fingerprint);
-		rb_dlinkDestroy(ptr, &acct->certfps);
+		rb_dlinkDelete(ptr, &acct->certfps);
 		rb_free(scf);
 	}
 
 	RB_DLINK_FOREACH_SAFE(ptr, nptr, acct->access_masks.head)
 	{
 		struct svc_accessmask *sam = ptr->data;
-		rb_dlinkDestroy(ptr, &acct->access_masks);
+		rb_dlinkDelete(ptr, &acct->access_masks);
 		rb_free(sam);
 	}
 
 	RB_DLINK_FOREACH_SAFE(ptr, nptr, acct->metadata.head)
 	{
 		struct svc_metadata *sm = ptr->data;
-		rb_dlinkDestroy(ptr, &acct->metadata);
+		rb_dlinkDelete(ptr, &acct->metadata);
 		rb_free(sm);
 	}
 
@@ -423,7 +423,7 @@ svc_chanreg_free(struct svc_chanreg *reg)
 	RB_DLINK_FOREACH_SAFE(ptr, nptr, reg->access.head)
 	{
 		struct svc_chanaccess *ca = ptr->data;
-		rb_dlinkDestroy(ptr, &reg->access);
+		rb_dlinkDelete(ptr, &reg->access);
 		rb_free(ca);
 	}
 
@@ -1153,7 +1153,7 @@ svc_memo_deliver_notice(struct Client *client_p, struct svc_account *acct)
 	RB_DLINK_FOREACH_SAFE(ptr, nptr, memos.head)
 	{
 		struct svc_memo *m = ptr->data;
-		rb_dlinkDestroy(ptr, &memos);
+		rb_dlinkDelete(ptr, &memos);
 		rb_free(m);
 	}
 

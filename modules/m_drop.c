@@ -30,6 +30,7 @@
 #include "s_serv.h"
 #include "send.h"
 #include "privilege.h"
+#include "logger.h"
 #include "services.h"
 #include "services_db.h"
 #include "services_sync.h"
@@ -121,10 +122,12 @@ do_account_drop(struct svc_account *acct)
 	/* Propagate the drop before freeing */
 	svc_sync_account_drop(name);
 
-	/* Remove from DB and in-memory index */
+	/*
+	 * Remove from DB and in-memory index.  svc_db_account_delete()
+	 * handles radixtree removal and svc_account_free() internally;
+	 * do not call either separately after this point.
+	 */
 	svc_db_account_delete(name);
-	rb_radixtree_delete(svc_account_dict, name);
-	svc_account_free(acct);
 
 	/* Log out any currently-online clients */
 	logout_all_clients(name);

@@ -755,7 +755,7 @@ svc_db_nick_delete(const char *nick)
 		struct svc_account *acct =
 		    rb_radixtree_retrieve(svc_account_dict, sn->account);
 		if(acct != NULL)
-			rb_dlinkFindDestroy(sn, &acct->nicks);
+			rb_dlinkDelete(&sn->node, &acct->nicks);
 		rb_free(sn);
 	}
 	return true;
@@ -840,7 +840,7 @@ svc_db_certfp_delete(const char *account_name, const char *certfp)
 			if(svc_certfp_dict != NULL)
 				rb_radixtree_delete(svc_certfp_dict,
 				                    scf->fingerprint);
-			rb_dlinkDestroy(ptr, &acct->certfps);
+			rb_dlinkDelete(ptr, &acct->certfps);
 			rb_free(scf);
 			break;
 		}
