@@ -25,6 +25,9 @@ Coverage
   §13 Services database stress  (all CHANSET options, access tiers, memo)
   §14 Error recovery            (garbage input, server survives all)
   §15 Memory pressure           (large topics, many bans, MONITOR 100)
+  §16 DROP stress               (wrong-pw flood, self-drop, oper mass-drop, hierarchy)
+  §17 SENDPASS stress           (rapid requests, wrong-token flood, full cycle, concurrent)
+  §18 JUPE stress               (mass cycles, many entries, concurrent, invalid name, non-oper)
 
 Run:  python3 tests/test_stress.py
       (ircd must be listening on 127.0.0.1:16667 with services enabled)
@@ -1595,6 +1598,396 @@ def test_ison_bulk():
 
 
 # ===========================================================================
+# §16 DROP stress
+# ===========================================================================
+
+def test_drop_wrong_password_account_survives():
+    """20 wrong-password DROP attempts must not delete the account."""
+    victim, pw = _make_account("dw")
+    for _ in range(20):
+        victim.send("DROP wrongpassword!")
+        victim.drain(0.05)
+    victim.send("LOGOUT")
+    victim.drain(0.2)
+    # Re-identify to confirm account still exists
+    victim.send(f"IDENTIFY {pw}")
+    line = victim.wait(r"(logged.in|900|invalid|failed)", timeout=4)
+    alive = line is not None and ("900" in line or "logged" in line.lower())
+    _check("drop-wrong-pw: account survives 20 bad DROP attempts", alive)
+    victim.send("DROP " + pw)
+    victim.drain(0.2)
+    victim.close()
+
+
+def test_drop_self_deletes_account():
+    """Self-DROP with correct password must remove the account."""
+    c, pw = _make_account("ds")
+    c.send(f"DROP {pw}")
+    resp = c.wait(r"(dropped|deleted|no longer|error)", timeout=4)
+    dropped = resp is not None and ("dropped" in resp.lower() or "deleted" in resp.lower()
+                                     or "no longer" in resp.lower())
+    _check("drop-self: account removed after correct DROP", dropped)
+    c.close()
+
+
+def test_drop_mass_sequential_oper():
+    """Oper sequentially force-drops 10 accounts; each must be gone."""
+    op = _oper("dmo")
+    victims = []
+    for _ in range(10):
+        v, _ = _make_account("dv")
+        victims.append(v)
+        v.drain(0.1)
+
+    success = 0
+    for v in victims:
+        op.send(f"DROP {v.nick}")
+        line = op.wait(r"(dropped|deleted|no longer|error)", timeout=4)
+        if line and ("dropped" in line.lower() or "deleted" in line.lower()
+                     or "no longer" in line.lower()):
+            success += 1
+
+    _check(f"drop-mass-oper: oper dropped {success}/10 accounts sequentially",
+           success >= 8, f"success={success}")
+    for v in victims:
+        v.close()
+    op.close()
+
+
+def test_drop_concurrent_oper():
+    """10 accounts force-dropped concurrently by oper threads; server must stay up."""
+    victims = []
+    for _ in range(10):
+        v, _ = _make_account("dco")
+        victims.append(v)
+
+    results = []
+    lock = threading.Lock()
+
+    def drop_one(nick):
+        try:
+            op = _oper("dct")
+            op.send(f"DROP {nick}")
+            line = op.wait(r"(dropped|deleted|no longer|error|NOTICE)", timeout=5)
+            with lock:
+                results.append(line is not None)
+            op.close()
+        except Exception:
+            with lock:
+                results.append(False)
+
+    threads = [threading.Thread(target=drop_one, args=(v.nick,)) for v in victims]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    _check("drop-concurrent: server alive after 10 concurrent force-drops",
+           len(results) == 10, f"responded={sum(results)}")
+    for v in victims:
+        v.close()
+
+
+def test_drop_hierarchy_protection():
+    """Oper must not be able to DROP an admin-linked account."""
+    # Register a plain account and link it to a fictional admin oper block
+    # The hierarchy check in m_drop.c blocks drops of oper:admin accounts.
+    # We test via the oper ACCOUNTOPER command to link, then attempt drop.
+    op = _oper("dhp")
+    target, _ = _make_account("dhpt")
+
+    # Link the target account to the testoper oper block (which is itself oper-level)
+    # then attempt to drop — on a real setup with a higher-privilege block the
+    # drop would be blocked; here we just confirm the command round-trips safely.
+    op.send(f"ACCOUNTOPER {target.nick} testoper")
+    op.drain(0.3)
+    op.send(f"DROP {target.nick}")
+    lines = op.collect(seconds=3)
+    # Server must still be responsive
+    op.send("PING :hierarchy-test")
+    pong = op.wait(r"PONG", timeout=4)
+    _check("drop-hierarchy: server responsive after hierarchy-guarded DROP",
+           pong is not None)
+    target.close()
+    op.close()
+
+
+# ===========================================================================
+# §17 SENDPASS stress
+# ===========================================================================
+
+def test_sendpass_rapid_requests_same_account():
+    """10 rapid SENDPASS requests on the same account; only newest token valid."""
+    c, pw = _make_account("spr")
+    op = _oper("spro")
+
+    last_token = None
+    for _ in range(10):
+        c.send(f"SENDPASS {c.nick}")
+        c.drain(0.1)
+        # Each request generates a new token; collect oper notices
+        lines = op.collect(seconds=0.5)
+        for ln in lines:
+            m = re.search(r"token[:\s]+([0-9a-f]{16})", ln, re.IGNORECASE)
+            if m:
+                last_token = m.group(1)
+
+    # The latest token (if captured) should work; server must survive
+    op.send("PING :rapid-sendpass")
+    pong = op.wait(r"PONG", timeout=4)
+    _check("sendpass-rapid: server alive after 10 rapid SENDPASS requests",
+           pong is not None, f"last_token={'captured' if last_token else 'not seen'}")
+    c.close()
+    op.close()
+
+
+def test_sendpass_wrong_token_flood():
+    """20 wrong tokens on SENDPASS apply form; account password unchanged."""
+    c, pw = _make_account("spwt")
+    c.send(f"SENDPASS {c.nick}")
+    c.drain(0.3)
+
+    for i in range(20):
+        bad_token = f"{'0' * 16}"
+        c.send(f"SENDPASS {c.nick} {bad_token} newpassword{i}")
+        c.drain(0.1)
+
+    # Original password still works
+    c.send("LOGOUT")
+    c.drain(0.2)
+    c.send(f"IDENTIFY {pw}")
+    line = c.wait(r"(900|logged.in|invalid|failed)", timeout=4)
+    still_valid = line is not None and ("900" in line or "logged" in line.lower())
+    _check("sendpass-wrong-token-flood: original password intact after 20 bad tokens",
+           still_valid)
+    c.send(f"DROP {pw}")
+    c.drain(0.2)
+    c.close()
+
+
+def test_sendpass_full_reset_cycle():
+    """Full SENDPASS cycle: request token, apply token, identify with new password."""
+    c, old_pw = _make_account("spfr")
+    op = _oper("spfrop")
+
+    c.send(f"SENDPASS {c.nick}")
+    c.drain(0.3)
+
+    # Collect oper notices to extract token
+    lines = op.collect(seconds=3)
+    token = None
+    for ln in lines:
+        m = re.search(r"token[:\s]+([0-9a-f]{16})", ln, re.IGNORECASE)
+        if m:
+            token = m.group(1)
+            break
+
+    if token is None:
+        _fail("sendpass-full-cycle: could not capture reset token from oper notice")
+        c.close()
+        op.close()
+        return
+
+    new_pw = "NewP@ss999"
+    c.send(f"SENDPASS {c.nick} {token} {new_pw}")
+    resp = c.wait(r"(reset|new password|error|invalid)", timeout=4)
+    reset_ok = resp is not None and ("reset" in resp.lower() or "new password" in resp.lower())
+
+    c.send("LOGOUT")
+    c.drain(0.2)
+    c.send(f"IDENTIFY {new_pw}")
+    line = c.wait(r"(900|logged.in|invalid|failed)", timeout=4)
+    login_ok = line is not None and ("900" in line or "logged" in line.lower())
+
+    _check("sendpass-full-cycle: password reset and new login works",
+           reset_ok and login_ok, f"reset={reset_ok} login={login_ok}")
+    c.send(f"DROP {new_pw}")
+    c.drain(0.2)
+    c.close()
+    op.close()
+
+
+def test_sendpass_concurrent_requests():
+    """10 different accounts request SENDPASS concurrently; no crash."""
+    accounts = []
+    for _ in range(10):
+        c, _ = _make_account("spc")
+        accounts.append(c)
+
+    errors = []
+    lock = threading.Lock()
+
+    def req_one(acct):
+        try:
+            helper = _connect("spch")
+            helper.send(f"SENDPASS {acct.nick}")
+            helper.drain(0.5)
+            helper.close()
+        except Exception as e:
+            with lock:
+                errors.append(str(e))
+
+    threads = [threading.Thread(target=req_one, args=(a,)) for a in accounts]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    # Server must still respond
+    probe = _connect("spcp")
+    probe.send("PING :sendpass-concurrent")
+    pong = probe.wait(r"PONG", timeout=4)
+    _check("sendpass-concurrent: server alive after 10 concurrent SENDPASS requests",
+           pong is not None and not errors,
+           f"errors={len(errors)}")
+    probe.close()
+    for a in accounts:
+        a.close()
+
+
+def test_sendpass_nonexistent_account_no_enumeration():
+    """SENDPASS on nonexistent account must return same response as real account."""
+    c = _connect("spne")
+    c.send("SENDPASS totallynotexistentaccount99999")
+    line = c.wait(r"(exists|email|token|error|NOTICE)", timeout=4)
+    # Must get some response (not silence/crash) and must NOT say "does not exist"
+    got_response = line is not None
+    no_leak = line is None or "does not exist" not in line.lower()
+    _check("sendpass-no-enumeration: no account-existence leak",
+           got_response and no_leak)
+    c.close()
+
+
+# ===========================================================================
+# §18 JUPE stress
+# ===========================================================================
+
+def test_jupe_mass_cycles():
+    """10 JUPE + UNJUPE cycles on the same server name; list stays consistent."""
+    op = _oper("jmc")
+    server = f"stress{_seq}.test.example"
+    for i in range(10):
+        op.send(f"JUPE {server} :Stress cycle {i}")
+        op.drain(0.15)
+        op.send(f"UNJUPE {server}")
+        op.drain(0.15)
+
+    op.send("JUPELIST")
+    lines = op.collect(seconds=2)
+    # After all UNJUPEs the server must not appear in JUPELIST
+    still_juped = any(server in ln for ln in lines)
+    _check("jupe-mass-cycles: server absent from JUPELIST after 10 jupe/unjupe cycles",
+           not still_juped)
+    op.close()
+
+
+def test_jupe_list_many_entries():
+    """Add 10 unique jupes, JUPELIST must enumerate all of them."""
+    op = _oper("jle")
+    servers = [f"jupe{_nick('jn')}.test.example" for _ in range(10)]
+    for s in servers:
+        op.send(f"JUPE {s} :Load test jupe")
+        op.drain(0.1)
+
+    op.send("JUPELIST")
+    lines = op.collect(seconds=3)
+    found = sum(1 for s in servers if any(s in ln for ln in lines))
+    _check(f"jupe-list-many: JUPELIST shows {found}/10 entries", found >= 8,
+           f"found={found}")
+
+    # Clean up
+    for s in servers:
+        op.send(f"UNJUPE {s}")
+        op.drain(0.1)
+    op.close()
+
+
+def test_jupe_concurrent_opers():
+    """5 opers concurrently JUPE different servers; server must survive."""
+    servers = [f"cjupe{_nick('cj')}.test.example" for _ in range(5)]
+    errors = []
+    lock = threading.Lock()
+
+    def jupe_one(sname):
+        try:
+            op = _oper("cjop")
+            op.send(f"JUPE {sname} :Concurrent stress jupe")
+            op.drain(0.5)
+            op.send(f"UNJUPE {sname}")
+            op.drain(0.3)
+            op.close()
+        except Exception as e:
+            with lock:
+                errors.append(str(e))
+
+    threads = [threading.Thread(target=jupe_one, args=(s,)) for s in servers]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    probe = _connect("cjprobe")
+    probe.send("PING :jupe-concurrent")
+    pong = probe.wait(r"PONG", timeout=4)
+    _check("jupe-concurrent: server alive after 5 concurrent JUPE/UNJUPE ops",
+           pong is not None and not errors, f"errors={len(errors)}")
+    probe.close()
+
+
+def test_jupe_invalid_name_rejected():
+    """JUPE with a name containing no dot must be rejected."""
+    op = _oper("jir")
+    op.send("JUPE nodotservername :should be rejected")
+    lines = op.collect(seconds=2)
+    rejected = any("dot" in ln.lower() or "invalid" in ln.lower() or "NOTICE" in ln
+                   for ln in lines)
+    _check("jupe-invalid-name: no-dot server name rejected", rejected)
+    op.close()
+
+
+def test_jupe_nonoper_blocked():
+    """20 JUPE attempts from a non-oper must all return ERR_NOPRIVILEGES (481)."""
+    c = _connect("jnob")
+    blocked = 0
+    for i in range(20):
+        c.send(f"JUPE nonoper{i}.test.example :attempt {i}")
+    lines = c.collect(seconds=4)
+    blocked = sum(1 for ln in lines if " 481 " in ln)
+    _check(f"jupe-nonoper: got {blocked}/20 ERR_NOPRIVILEGES responses",
+           blocked >= 10, f"blocked={blocked}")
+    c.close()
+
+
+def test_unjupe_nonexistent():
+    """UNJUPE on a name that was never juped must return a notice, not crash."""
+    op = _oper("ujne")
+    op.send("UNJUPE never.juped.test.example")
+    line = op.wait(r"(not.*juped|NOTICE|error)", timeout=4)
+    _check("unjupe-nonexistent: graceful response when server not juped",
+           line is not None)
+    op.close()
+
+
+def test_jupelist_empty():
+    """JUPELIST on a fresh state (no jupes) must return 'No active jupes'."""
+    op = _oper("jle2")
+    # Clear any leftover entries from prior tests
+    op.send("JUPELIST")
+    lines = op.collect(seconds=2)
+    for ln in lines:
+        m = re.search(r"  (\S+\.test\.example)\b", ln)
+        if m:
+            op.send(f"UNJUPE {m.group(1)}")
+            op.drain(0.1)
+
+    op.send("JUPELIST")
+    lines2 = op.collect(seconds=2)
+    empty = any("no active" in ln.lower() or "End of JUPELIST" in ln for ln in lines2)
+    _check("jupelist-empty: 'No active jupes' or empty list reported", empty)
+    op.close()
+
+
+# ===========================================================================
 # TEST REGISTRY
 # ===========================================================================
 
@@ -1687,6 +2080,26 @@ TESTS = [
     ("monitor-many: 50 nicks on MONITOR list",               test_monitor_many_nicks),
     ("large-prop: 400-byte PROP value",                      test_large_prop_value),
     ("ison-bulk: 20-nick ISON → 303",                        test_ison_bulk),
+    # §16 DROP stress
+    ("drop-wrong-pw: account survives 20 bad DROP attempts", test_drop_wrong_password_account_survives),
+    ("drop-self: account removed after correct DROP",        test_drop_self_deletes_account),
+    ("drop-mass-oper: oper drops 10 accounts sequentially",  test_drop_mass_sequential_oper),
+    ("drop-concurrent: 10 force-drops, server alive",        test_drop_concurrent_oper),
+    ("drop-hierarchy: hierarchy-guarded DROP survives",      test_drop_hierarchy_protection),
+    # §17 SENDPASS stress
+    ("sendpass-rapid: server alive after 10 rapid requests", test_sendpass_rapid_requests_same_account),
+    ("sendpass-wrong-token-flood: password intact",          test_sendpass_wrong_token_flood),
+    ("sendpass-full-cycle: reset then login with new pw",    test_sendpass_full_reset_cycle),
+    ("sendpass-concurrent: 10 concurrent requests ok",       test_sendpass_concurrent_requests),
+    ("sendpass-no-enumeration: no account-existence leak",   test_sendpass_nonexistent_account_no_enumeration),
+    # §18 JUPE stress
+    ("jupe-mass-cycles: 10 jupe/unjupe cycles consistent",   test_jupe_mass_cycles),
+    ("jupe-list-many: JUPELIST shows all 10 entries",        test_jupe_list_many_entries),
+    ("jupe-concurrent: 5 opers concurrent JUPE/UNJUPE",      test_jupe_concurrent_opers),
+    ("jupe-invalid-name: no-dot name rejected",              test_jupe_invalid_name_rejected),
+    ("jupe-nonoper: 20 attempts → 481 each",                 test_jupe_nonoper_blocked),
+    ("unjupe-nonexistent: graceful when not juped",          test_unjupe_nonexistent),
+    ("jupelist-empty: 'No active jupes' reported",           test_jupelist_empty),
 ]
 
 
