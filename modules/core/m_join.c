@@ -227,24 +227,55 @@ static void
 m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
 	char jbuf[BUFSIZE];
+	char kbuf[BUFSIZE];   /* inline keys extracted from #chan=key tokens */
 	struct Channel *chptr = NULL, *chptr2 = NULL;
 	struct ConfItem *aconf;
 	char *name;
 	char *key = NULL;
 	const char *modes;
 	int i, flags = 0;
-	char *p = NULL, *p2 = NULL;
+	char *p = NULL, *p2 = NULL, *p3 = NULL;
 	char *chanlist;
 	char *mykey;
 
 	jbuf[0] = '\0';
+	kbuf[0] = '\0';
 
 	/* rebuild the list of channels theyre supposed to be joining.
-	 * this code has a side effect of losing keys, but..
+	 *
+	 * JOIN 0,#chan1,#chan2 semantics:
+	 *   - The bare token "0" parts all currently-joined channels.
+	 *   - Only the first "0" in the list is honoured; duplicates are ignored.
+	 *   - Channels listed before "0" are built into jbuf normally, but jbuf is
+	 *     cleared when "0" is encountered — effectively silently discarding them.
+	 *   - Channels listed after "0" are joined as usual.
 	 */
+	bool join_zero_seen = false;
 	chanlist = LOCAL_COPY(parv[1]);
 	for(name = rb_strtok_r(chanlist, ",", &p); name; name = rb_strtok_r(NULL, ",", &p))
 	{
+		/* "0" — part-all token.  First occurrence clears any pre-zero channels
+		 * that were already added to jbuf/kbuf; subsequent ones are ignored. */
+		if(*name == '0' && name[1] == '\0')
+		{
+			if(!join_zero_seen)
+			{
+				join_zero_seen = true;
+				jbuf[0] = '\0';
+				kbuf[0] = '\0';
+				rb_strlcpy(jbuf, "0", sizeof(jbuf));
+				rb_strlcpy(kbuf, "*", sizeof(kbuf));
+			}
+			continue;
+		}
+
+		/* Inline key: #channel=key syntax.  Strip the =key suffix from
+		 * the name and record it separately in kbuf.  The inline key takes
+		 * precedence over any positional key supplied in parv[2]. */
+		char *inline_key = strchr(name, '=');
+		if(inline_key != NULL)
+			*inline_key++ = '\0';   /* terminate name, advance to key */
+
 		/* check the length and name of channel is ok */
 		if(!check_channel_name_loc(source_p, name) || (strlen(name) > LOC_CHANNELLEN))
 		{
@@ -253,15 +284,8 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 			continue;
 		}
 
-		/* join 0 parts all channels */
-		if(*name == '0' && (name[1] == ',' || name[1] == '\0') && name == chanlist)
-		{
-			rb_strlcpy(jbuf, "0", sizeof(jbuf));
-			continue;
-		}
-
 		/* check it begins with a valid channel prefix per policy. */
-		else if (!IsChannelName(name))
+		if (!IsChannelName(name))
 		{
 			sendto_one_numeric(source_p, ERR_NOSUCHCHANNEL,
 					   form_str(ERR_NOSUCHCHANNEL), name);
@@ -300,6 +324,11 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		if(*jbuf)
 			(void) rb_strlcat(jbuf, ",", sizeof(jbuf));
 		(void) rb_strlcat(jbuf, name, sizeof(jbuf));
+
+		/* Record inline key (or "*" placeholder meaning "use positional key") */
+		if(*kbuf)
+			(void) rb_strlcat(kbuf, ",", sizeof(kbuf));
+		(void) rb_strlcat(kbuf, inline_key ? inline_key : "*", sizeof(kbuf));
 	}
 
 	if(parc > 2)
@@ -308,10 +337,20 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		key = rb_strtok_r(mykey, ",", &p2);
 	}
 
+	/* Seed ikey from kbuf (inline keys extracted above in the first pass).
+	 * "*" means "use next positional key from parv[2]". */
+	char *ikey = rb_strtok_r(kbuf, ",", &p3);
+
 	for(name = rb_strtok_r(jbuf, ",", &p); name;
-	    key = (key) ? rb_strtok_r(NULL, ",", &p2) : NULL, name = rb_strtok_r(NULL, ",", &p))
+	    key  = (key)  ? rb_strtok_r(NULL, ",", &p2) : NULL,
+	    ikey = rb_strtok_r(NULL, ",", &p3),
+	    name = rb_strtok_r(NULL, ",", &p))
 	{
 		hook_data_channel_activity hook_info;
+
+		/* Effective key: inline key from #chan=key wins over positional key;
+		 * "*" placeholder means use positional key from parv[2]. */
+		const char *effective_key = (ikey && *ikey != '\0' && *ikey != '*') ? ikey : key;
 
 		/* JOIN 0 simply parts all channels the user is in */
 		if(*name == '0' && !atoi(name))
@@ -384,7 +423,7 @@ m_join(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		}
 
 		/* If check_forward returns NULL, they couldn't join and there wasn't a usable forward channel. */
-		if((chptr2 = check_forward(source_p, chptr, key, &i)) == NULL)
+		if((chptr2 = check_forward(source_p, chptr, (char *)effective_key, &i)) == NULL)
 		{
 			/* might be wrong, but is there any other better location for such?
 			 * see extensions/chm_operonly.c for other comments on this

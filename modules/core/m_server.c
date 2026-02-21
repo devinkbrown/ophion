@@ -449,25 +449,42 @@ ms_server(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 	}
 
 	/*
-	 * User nicks never have '.' in them and server names
-	 * must always have '.' in them.
+	 * Server names no longer need to contain a dot; dotless names like
+	 * "ircxserver01" are valid.  However, for dotless names we must:
+	 *   (a) resolve any nick collision (force-rename local users to make way
+	 *       for the server; reject if the conflicting nick is remote), and
+	 *   (b) reject if the name is permanently or config-reserved (RESV).
+	 * Dotted names are exempt from these checks.
 	 */
 	if(strchr(name, '.') == NULL)
 	{
-		/*
-		 * Server trying to use the same name as a person. Would
-		 * cause a fair bit of confusion. Enough to make it hellish
-		 * for a while and servers to send stuff to the wrong place.
-		 */
-		sendto_one(client_p, "ERROR :Nickname %s already exists!", name);
-		sendto_realops_snomask(SNO_GENERAL, L_ALL,
-				     "Link %s cancelled: Server/nick collision on %s",
-				     client_p->name, name);
-		ilog(L_SERVER, "Link %s cancelled: Server/nick collision on %s",
-			client_p->name, name);
+		/* (a) nick collision — try to force-rename the conflicting user */
+		if(!server_link_nick_fnc(name))
+		{
+			/* server_link_nick_fnc returns false only when the colliding
+			 * nick belongs to a remote user we cannot rename here. */
+			sendto_one(client_p, "ERROR :Nickname %s already exists!", name);
+			sendto_realops_snomask(SNO_GENERAL, L_ALL,
+					     "Link %s cancelled: Server/nick collision on %s (remote user)",
+					     client_p->name, name);
+			ilog(L_SERVER, "Link %s cancelled: Server/nick collision on %s (remote user)",
+				client_p->name, name);
+			exit_client(client_p, client_p, client_p, "Nick as Server");
+			return;
+		}
 
-		exit_client(client_p, client_p, client_p, "Nick as Server");
-		return;
+		/* (b) reserved name check */
+		if(is_builtin_resv(name) || find_nick_resv(name))
+		{
+			sendto_one(client_p, "ERROR :Server name %s is reserved", name);
+			sendto_realops_snomask(SNO_GENERAL, L_ALL,
+					     "Link %s cancelled: Server name %s is reserved",
+					     client_p->name, name);
+			ilog(L_SERVER, "Link %s cancelled: Server name %s is reserved",
+				client_p->name, name);
+			exit_client(client_p, client_p, client_p, "Reserved server name");
+			return;
+		}
 	}
 
 	/*

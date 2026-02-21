@@ -655,7 +655,10 @@ rehash(bool sig)
 			"Server name changed from '%s' to '%s' on rehash",
 			old_name, ServerInfo.name);
 
+		/* Update the client hash so me is findable under the new name */
+		del_from_client_hash(old_name, &me);
 		rb_strlcpy(me.name, ServerInfo.name, sizeof(me.name));
+		add_to_client_hash(me.name, &me);
 
 		/* Notify all directly-linked servers about the rename */
 		RB_DLINK_FOREACH(n, global_serv_list.head)
@@ -866,6 +869,14 @@ set_default_conf(void)
 	STSInfo.port = 6697;
 	STSInfo.duration = 3600;
 	STSInfo.preload = 0;
+
+	/* Flood controls default to disabled (0 = no limit) */
+	ConfigFileEntry.kick_flood_count = 0;
+	ConfigFileEntry.kick_flood_time  = 10;
+	ConfigFileEntry.mode_flood_count = 0;
+	ConfigFileEntry.mode_flood_time  = 10;
+	ConfigFileEntry.prop_flood_count = 0;
+	ConfigFileEntry.prop_flood_time  = 10;
 }
 
 /*

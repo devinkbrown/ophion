@@ -30,6 +30,7 @@
 #include "channel.h"
 #include "hash.h"
 #include "hook.h"
+#include "ircd.h"
 #include "match.h"
 #include "msg.h"
 #include "modules.h"
@@ -177,7 +178,9 @@ dispatch_event_subj(unsigned int event_flag, const char *subject,
  */
 #define DISPATCH_USER(flag_, client_, fmt_, ...) \
 	do { \
-		char _subj[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1]; \
+		/* Use IRCD_RES_HOSTLEN (255) for host to give GCC enough headroom. \
+		 * client->host is bounded by HOSTLEN (63) so no actual truncation. */ \
+		char _subj[NICKLEN + 1 + USERLEN + 1 + IRCD_RES_HOSTLEN + 1]; \
 		snprintf(_subj, sizeof(_subj), "%s!%s@%s", \
 			(client_)->name, (client_)->username, (client_)->host); \
 		dispatch_event_subj((flag_), _subj, (fmt_), ## __VA_ARGS__); \
@@ -688,8 +691,8 @@ m_event(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		/* OPERSPY events require the oper:spy privilege */
 		if ((flag & EVENT_OPERSPY) && !HasPrivilege(source_p, "oper:spy"))
 		{
-			sendto_one_numeric(source_p, ERR_NOPRIVS,
-				form_str(ERR_NOPRIVS), "oper:spy");
+			sendto_one(source_p, form_str(ERR_NOPRIVS),
+				me.name, source_p->name, "oper:spy");
 			return;
 		}
 

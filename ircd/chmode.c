@@ -41,6 +41,7 @@
 #include "chmode.h"
 #include "s_assert.h"
 #include "parse.h"
+#include "flood.h"
 
 /* bitmasks for error returns, so we send once per call */
 #define SM_ERR_NOTS             0x00000001	/* No TS on channel */
@@ -1694,6 +1695,10 @@ set_channel_mode(struct Client *client_p, struct Client *source_p,
 	struct Client *fakesource_p;
 	int reauthorized = 0;	/* if we change from MODE_QUERY to MODE_ADD/MODE_DEL, then reauth once, ugly but it works */
 	int flags_list[3] = { ALL_MEMBERS, ONLY_CHANOPS, ONLY_OPERS };
+
+	/* MODE flood check: throttle local clients who issue too many MODE commands */
+	if(MyClient(source_p) && check_mode_flood(source_p, chptr))
+		return;
 
 	mask_pos = 0;
 	removed_mask_pos = 0;

@@ -20,31 +20,49 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
  *  USA
+ *
+ * -----------------------------------------------------------------------
+ * NOTE: The OPER command no longer performs oper authentication.
+ *
+ * Oper authentication has moved to SASL, which runs during connection
+ * registration before the client is visible on the network.  Use one of:
+ *
+ *   Standard SASL (RFC 4616 / draft-mitchel-irc-sasl):
+ *     CAP REQ :sasl
+ *     AUTHENTICATE PLAIN
+ *     AUTHENTICATE <base64(\0<opername>\0<password>)>
+ *
+ *   IRCX AUTH shorthand (single command):
+ *     AUTH PLAIN I :<base64(\0<opername>\0<password>)>
+ *
+ *   Certificate-based (no password):
+ *     AUTHENTICATE EXTERNAL  then  AUTHENTICATE =
+ *     — or —
+ *     AUTH EXTERNAL I
+ *
+ * Server-to-server OPER propagation (mc_oper) is retained unchanged.
+ * -----------------------------------------------------------------------
  */
 
 #include "stdinc.h"
 #include "client.h"
-#include "match.h"
 #include "ircd.h"
 #include "numeric.h"
 #include "s_conf.h"
-#include "s_newconf.h"
-#include "logger.h"
-#include "s_user.h"
 #include "s_serv.h"
 #include "send.h"
 #include "msg.h"
 #include "parse.h"
 #include "modules.h"
-#include "packet.h"
-#include "cache.h"
+#include "privilege.h"
+#include "logger.h"
+#include "snomask.h"
 
-static const char oper_desc[] = "Provides the OPER command to become an IRC operator";
+static const char oper_desc[] =
+	"Provides the OPER command stub — oper authentication has moved to SASL (/AUTH)";
 
 static void m_oper(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
 static void mc_oper(struct MsgBuf *, struct Client *, struct Client *, int, const char **);
-
-static bool match_oper_password(const char *password, struct oper_conf *oper_p);
 
 struct Message oper_msgtab = {
 	"OPER", 0, 0, 0, 0,
@@ -56,117 +74,37 @@ mapi_clist_av1 oper_clist[] = { &oper_msgtab, NULL };
 DECLARE_MODULE_AV2(oper, NULL, NULL, oper_clist, NULL, NULL, NULL, NULL, oper_desc);
 
 /*
- * m_oper
- *      parv[1] = oper name
- *      parv[2] = oper password
+ * m_oper — stub
+ *
+ * The OPER command no longer authenticates.  Clients that try to use it
+ * receive a clear notice explaining how to use SASL instead, along with
+ * the IRCX AUTH shorthand that many clients already support.
  */
 static void
 m_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
 {
-	struct oper_conf *oper_p;
-	const char *name;
-	const char *password;
-
-	name = parv[1];
-	password = parv[2];
-
 	if(IsOper(source_p))
 	{
 		sendto_one(source_p, form_str(RPL_YOUREOPER), me.name, source_p->name);
-		send_oper_motd(source_p);
 		return;
 	}
 
-	/* end the grace period */
-	if(!IsFloodDone(source_p))
-		flood_endgrace(source_p);
-
-	oper_p = find_oper_conf(source_p->username, source_p->orighost,
-				source_p->sockhost, name);
-
-	if(oper_p == NULL)
-	{
-		sendto_one_numeric(source_p, ERR_NOOPERHOST, form_str(ERR_NOOPERHOST));
-		ilog(L_FOPER, "FAILED OPER (%s) by (%s!%s@%s) (%s)",
-		     name, source_p->name,
-		     source_p->username, source_p->host, source_p->sockhost);
-
-		if(ConfigFileEntry.failed_oper_notice)
-		{
-			sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
-					     "Failed OPER attempt - user@host mismatch or no operator block for %s by %s (%s@%s)",
-					     name, source_p->name, source_p->username, source_p->host);
-		}
-
-		return;
-	}
-
-	if(IsOperConfNeedSSL(oper_p) && !IsSSLClient(source_p))
-	{
-		sendto_one_numeric(source_p, ERR_NOOPERHOST, form_str(ERR_NOOPERHOST));
-		ilog(L_FOPER, "FAILED OPER (%s) by (%s!%s@%s) (%s) -- requires SSL/TLS",
-		     name, source_p->name,
-		     source_p->username, source_p->host, source_p->sockhost);
-
-		if(ConfigFileEntry.failed_oper_notice)
-		{
-			sendto_realops_snomask(SNO_GENERAL, L_ALL,
-					     "Failed OPER attempt - missing SSL/TLS by %s (%s@%s)",
-					     source_p->name, source_p->username, source_p->host);
-		}
-		return;
-	}
-
-	if (oper_p->certfp != NULL)
-	{
-		if (source_p->certfp == NULL || rb_strcasecmp(source_p->certfp, oper_p->certfp))
-		{
-			sendto_one_numeric(source_p, ERR_NOOPERHOST, form_str(ERR_NOOPERHOST));
-			ilog(L_FOPER, "FAILED OPER (%s) by (%s!%s@%s) (%s) -- client certificate fingerprint mismatch",
-			     name, source_p->name,
-			     source_p->username, source_p->host, source_p->sockhost);
-
-			if(ConfigFileEntry.failed_oper_notice)
-			{
-				sendto_realops_snomask(SNO_GENERAL, L_ALL,
-						     "Failed OPER attempt - client certificate fingerprint mismatch by %s (%s@%s)",
-						     source_p->name, source_p->username, source_p->host);
-			}
-			return;
-		}
-	}
-
-	if(match_oper_password(password, oper_p))
-	{
-		oper_up(source_p, oper_p);
-
-		ilog(L_OPERED, "OPER %s by %s!%s@%s (%s)",
-		     name, source_p->name, source_p->username, source_p->host,
-		     source_p->sockhost);
-		return;
-	}
-	else
-	{
-		sendto_one(source_p, form_str(ERR_PASSWDMISMATCH),
-			   me.name, source_p->name);
-
-		ilog(L_FOPER, "FAILED OPER (%s) by (%s!%s@%s) (%s)",
-		     name, source_p->name, source_p->username, source_p->host,
-		     source_p->sockhost);
-
-		if(ConfigFileEntry.failed_oper_notice)
-		{
-			sendto_realops_snomask(SNO_GENERAL, L_NETWIDE,
-					     "Failed OPER attempt by %s (%s@%s)",
-					     source_p->name, source_p->username, source_p->host);
-		}
-	}
+	sendto_one_notice(source_p,
+		":The OPER command has been replaced by SASL authentication. "
+		"Authenticate as an IRC operator during connection registration "
+		"using AUTHENTICATE PLAIN / AUTHENTICATE EXTERNAL (standard SASL) "
+		"or AUTH PLAIN I / AUTH EXTERNAL I (IRCX shorthand). "
+		"See your IRC client documentation for SASL configuration.");
 }
 
 /*
- * mc_oper - server-to-server OPER propagation
- *     parv[1] = opername
- *     parv[2] = privset
+ * mc_oper — server-to-server OPER propagation
+ *
+ * Retained unchanged: when a client opers up via SASL on one server the
+ * oper_up() call emits this message so remote servers learn of the new oper.
+ *
+ *   parv[1] = opername
+ *   parv[2] = privset name
  */
 static void
 mc_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p, int parc, const char *parv[])
@@ -177,8 +115,8 @@ mc_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 	privset = privilegeset_get(parv[2]);
 	if(privset == NULL)
 	{
-		/* if we don't have a matching privset, we'll create an empty one and
-		 * mark it illegal, so it gets picked up on a rehash later */
+		/* if we don't have a matching privset, create an empty placeholder
+		 * marked illegal so it gets picked up on the next rehash */
 		sendto_realops_snomask(SNO_GENERAL, L_NETWIDE, "Received OPER for %s with unknown privset %s", source_p->name, parv[2]);
 		privset = privilegeset_set_new(parv[2], "", 0);
 		privset->status |= CONF_ILLEGAL;
@@ -190,43 +128,4 @@ mc_oper(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 
 	source_p->user->privset = privset;
 	source_p->user->opername = rb_strdup(parv[1]);
-}
-
-/*
- * match_oper_password
- *
- * inputs       - pointer to given password
- *              - pointer to Conf
- * output       - true if match, false otherwise
- * side effects - none
- */
-static bool
-match_oper_password(const char *password, struct oper_conf *oper_p)
-{
-	const char *encr;
-
-	/* passwd may be NULL pointer. Head it off at the pass... */
-	if(EmptyString(oper_p->passwd))
-		return false;
-
-	if(IsOperConfEncrypted(oper_p))
-	{
-		/* use first two chars of the password they send in as salt */
-		/* If the password in the conf is MD5, and ircd is linked
-		 * to scrypt on FreeBSD, or the standard crypt library on
-		 * glibc Linux, then this code will work fine on generating
-		 * the proper encrypted hash for comparison.
-		 */
-		if(!EmptyString(password))
-			encr = rb_crypt(password, oper_p->passwd);
-		else
-			encr = "";
-	}
-	else
-		encr = password;
-
-	if(encr != NULL && strcmp(encr, oper_p->passwd) == 0)
-		return true;
-	else
-		return false;
 }

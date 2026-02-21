@@ -169,7 +169,6 @@ static void
 conf_set_serverinfo_name(void *data)
 {
 	const char *s;
-	int dots = 0;
 
 	for(s = data; *s != '\0'; s++)
 	{
@@ -179,14 +178,6 @@ conf_set_serverinfo_name(void *data)
 					  "-- bogus servername.");
 			return;
 		}
-		else if(*s == '.')
-			++dots;
-	}
-
-	if(!dots)
-	{
-		conf_report_error("Ignoring serverinfo::name -- must contain '.'");
-		return;
 	}
 
 	s = data;
@@ -323,6 +314,7 @@ static struct mode_table umode_table[] = {
 static struct mode_table oper_table[] = {
 	{"encrypted",		OPER_ENCRYPTED		},
 	{"need_ssl",		OPER_NEEDSSL		},
+	{"certfp_only",		OPER_CERTFP_ONLY	},
 	{NULL, 0}
 };
 
@@ -555,19 +547,48 @@ conf_end_oper(struct TopConf *tc)
 	}
 
 #ifdef HAVE_LIBCRYPTO
-	if(EmptyString(yy_oper->passwd) && EmptyString(yy_oper->rsa_pubkey_file))
+	if(EmptyString(yy_oper->passwd) && EmptyString(yy_oper->rsa_pubkey_file)
+	   && EmptyString(yy_oper->certfp))
 #else
 	if(EmptyString(yy_oper->passwd))
 #endif
 	{
-		conf_report_error("Ignoring operator block for %s -- missing password",
+		conf_report_error("Ignoring operator block for %s -- missing password or fingerprint",
 					yy_oper->name);
 		return 0;
 	}
 
+	/* certfp_only requires a fingerprint to be set */
+	if((yy_oper->flags & OPER_CERTFP_ONLY) && EmptyString(yy_oper->certfp))
+	{
+		conf_report_error("Ignoring operator block for %s -- certfp_only requires a fingerprint",
+					yy_oper->name);
+		return 0;
+	}
 
 	if (!yy_oper->privset)
 		yy_oper->privset = privilegeset_get("default");
+
+	/* certfp blocks may omit user{} lines; synthesise a wildcard entry so
+	 * find_oper_conf() can locate the block regardless of the client's host.
+	 * If no user lines and no certfp, report an error and bail out.
+	 */
+	if(rb_dlink_list_length(&yy_oper_list) == 0)
+	{
+		if(!EmptyString(yy_oper->certfp))
+		{
+			struct oper_conf *yy_wildoper = make_oper_conf();
+			yy_wildoper->username = rb_strdup("*");
+			yy_wildoper->host = rb_strdup("*");
+			rb_dlinkAddAlloc(yy_wildoper, &yy_oper_list);
+		}
+		else
+		{
+			conf_report_error("Ignoring operator block for %s -- no user entries",
+					yy_oper->name);
+			return 0;
+		}
+	}
 
 	/* now, yy_oper_list contains a stack of oper_conf's with just user
 	 * and host in, yy_oper contains the rest of the information which
@@ -1754,7 +1775,6 @@ conf_set_service_name(void *data)
 {
 	const char *s;
 	char *tmp;
-	int dots = 0;
 
 	for(s = data; *s != '\0'; s++)
 	{
@@ -1764,14 +1784,6 @@ conf_set_service_name(void *data)
 					 "-- bogus servername.");
 			return;
 		}
-		else if(*s == '.')
-			 dots++;
-	}
-
-	if(!dots)
-	{
-		conf_report_error("Ignoring service::name -- must contain '.'");
-		return;
 	}
 
 	tmp = rb_strdup(data);
@@ -2788,6 +2800,12 @@ static struct ConfEntry conf_general_table[] =
 	{ "tls_ciphers_oper_only",	CF_YESNO, NULL, 0, &ConfigFileEntry.tls_ciphers_oper_only	},
 	{ "oper_kick_protection",	CF_YESNO, NULL, 0, &ConfigFileEntry.oper_kick_protection	},
 	{ "oper_auto_op",		CF_YESNO, NULL, 0, &ConfigFileEntry.oper_auto_op		},
+	{ "kick_flood_count",		CF_INT,   NULL, 0, &ConfigFileEntry.kick_flood_count		},
+	{ "kick_flood_time",		CF_TIME,  NULL, 0, &ConfigFileEntry.kick_flood_time		},
+	{ "mode_flood_count",		CF_INT,   NULL, 0, &ConfigFileEntry.mode_flood_count		},
+	{ "mode_flood_time",		CF_TIME,  NULL, 0, &ConfigFileEntry.mode_flood_time		},
+	{ "prop_flood_count",		CF_INT,   NULL, 0, &ConfigFileEntry.prop_flood_count		},
+	{ "prop_flood_time",		CF_TIME,  NULL, 0, &ConfigFileEntry.prop_flood_time		},
 	{ "\0", 		0, 	  NULL, 0, NULL }
 };
 

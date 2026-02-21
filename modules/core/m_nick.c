@@ -146,8 +146,8 @@ mr_nick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_
 		return;
 	}
 
-	/* check if the nick is resv'd */
-	if(find_nick_resv(nick))
+	/* check if the nick is resv'd (built-in permanent or config RESV) */
+	if(is_builtin_resv(nick) || find_nick_resv(nick))
 	{
 		sendto_one(source_p, form_str(ERR_ERRONEUSNICKNAME),
 			   me.name, EmptyString(source_p->name) ? "*" : source_p->name, nick);
@@ -198,7 +198,9 @@ m_nick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 		return;
 	}
 
-	if(!IsExemptResv(source_p) && find_nick_resv(nick))
+	/* built-in reservations cannot be bypassed; config RESVs respect ExemptResv */
+	if(is_builtin_resv(nick) ||
+	   (!IsExemptResv(source_p) && find_nick_resv(nick)))
 	{
 		sendto_one(source_p, form_str(ERR_ERRONEUSNICKNAME), me.name, source_p->name, nick);
 		return;

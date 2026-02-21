@@ -47,6 +47,7 @@
 #include "s_user.h"
 #include "cache.h"
 #include "s_newconf.h"
+#include "auth_oper.h"
 
 #define CHALLENGE_WIDTH BUFSIZE - (NICKLEN + HOSTLEN + 12)
 #define CHALLENGE_EXPIRES	180	/* 180 seconds should be more than long enough */
@@ -238,9 +239,9 @@ m_challenge(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 		return;
 	}
 
-	if (oper_p->certfp != NULL)
+	if(oper_p->certfp != NULL)
 	{
-		if (source_p->certfp == NULL || rb_strcasecmp(source_p->certfp, oper_p->certfp))
+		if(!oper_check_certfp(source_p, oper_p))
 		{
 			sendto_one_numeric(source_p, ERR_NOOPERHOST, form_str(ERR_NOOPERHOST));
 			ilog(L_FOPER, "FAILED CHALLENGE (%s) by (%s!%s@%s) (%s) -- client certificate fingerprint mismatch",
@@ -253,6 +254,16 @@ m_challenge(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sou
 						     "Failed CHALLENGE attempt - client certificate fingerprint mismatch by %s (%s@%s)",
 						     source_p->name, source_p->username, source_p->host);
 			}
+			return;
+		}
+
+		/* certfp_only: fingerprint alone is sufficient — skip challenge/password */
+		if(IsOperConfCertFPOnly(oper_p))
+		{
+			oper_up(source_p, oper_p);
+			ilog(L_OPERED, "OPER %s by %s!%s@%s (%s) [certfp]",
+			     parv[1], source_p->name, source_p->username, source_p->host,
+			     source_p->sockhost);
 			return;
 		}
 	}

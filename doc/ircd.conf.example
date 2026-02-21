@@ -289,59 +289,91 @@ privset "admin" {
 	privs = oper:admin, oper:die, oper:rehash, oper:spy, oper:grant;
 };
 
-operator "god" {
-	/* name: the name of the oper must go above */
+/* operator {}: IRC operator blocks.
+ *
+ * Authentication has moved to SASL.  Operators no longer use the OPER
+ * command.  Instead, authenticate during connection registration:
+ *
+ *   Standard SASL (any modern IRC client):
+ *     CAP REQ :sasl
+ *     AUTHENTICATE PLAIN
+ *     AUTHENTICATE <base64(\0<blockname>\0<password>)>
+ *
+ *   IRCX AUTH shorthand (single command):
+ *     AUTH PLAIN I :<base64(\0<blockname>\0<password>)>
+ *
+ *   Certificate-only (no password; requires certfp_only flag):
+ *     AUTHENTICATE EXTERNAL  then  AUTHENTICATE =
+ *     — or —
+ *     AUTH EXTERNAL I
+ *
+ * On success, oper_up() fires automatically at 001 Welcome.
+ * The OPER command is stubbed and will print a redirect notice.
+ */
 
-	/* user: the user@host required for this operator.  CIDR *is*
-	 * supported now. auth{} spoofs work here, other spoofs do not.
- 	 * multiple user="" lines are supported.
+/* Example 1: password-based oper */
+operator "god" {
+	/* user: user@host the client must match.  CIDR supported.
+	 * auth{} spoofs work; other spoofs do not.
+	 * Multiple user="" lines are accepted.
 	 */
 	user = "*god@127.0.0.1";
 
-	/* password: the password required to oper.  Unless ~encrypted is
-	 * contained in flags = ...; this will need to be encrypted using
-	 * mkpasswd, MD5 is supported
+	/* password: used with SASL PLAIN.
+	 * Generate a hash:  mkpasswd -m sha512 yourpassword
+	 * Use ~encrypted in flags to store plaintext.
 	 */
 	password = "etcnjl8juSU1E";
 
-	/* rsa key: the public key for this oper when using Challenge.
-	 * A password should not be defined when this is used, see
-	 * doc/challenge.txt for more information.
+	/* fingerprint: TLS client certificate fingerprint.
+	 * When set, SASL PLAIN checks certfp AND password.
+	 * With certfp_only in flags, certfp alone is sufficient.
+	 *
+	 * Get your fingerprint:
+	 *   openssl x509 -in client.crt -noout -sha256 -fingerprint \
+	 *     | tr -d ':' | tr 'A-Z' 'a-z' \
+	 *     | sed 's/.*=//; s/^/cert_sha256:/'
 	 */
-	#rsa_public_key_file = "/usr/local/ircd/etc/oper.pub";
+	#fingerprint = "cert_sha256:deadbeefdeadbeef...64hexchars...";
 
-	/* umodes: the specific umodes this oper gets when they oper.
-	 * If this is specified an oper will not be given oper_umodes
-	 * These are described above oper_only_umodes in general {};
-	 */
+	/* umodes: applied on oper-up. */
 	#umodes = locops, servnotice, operwall, wallop;
 
-	/* fingerprint: if specified, the oper's client certificate
-	 * fingerprint will be checked against the specified fingerprint
-	 * below.
-	 */
-	#fingerprint = "c77106576abf7f9f90cca0f63874a60f2e40a64b";
-
-	/* snomask: specific server notice mask on oper up.
-	 * If this is specified an oper will not be given oper_snomask.
-	 */
+	/* snomask: server notice mask applied on oper-up. */
 	snomask = "+Zbfkrsuy";
 
-	/* flags: misc options for the operator.  You may prefix an option
-	 * with ~ to disable it, e.g. ~encrypted.
+	/* flags: options for this block.  Prefix ~ to negate.
 	 *
-	 * Default flags are encrypted.
-	 *
-	 * Available options:
-	 *
-	 * encrypted:    the password above is encrypted [DEFAULT]
-	 * need_ssl:     must be using SSL/TLS to oper up
+	 * encrypted:   password is crypt(3)-hashed [DEFAULT]
+	 * ~encrypted:  password is stored plaintext
+	 * need_ssl:    require TLS connection
+	 * certfp_only: fingerprint alone is sufficient; no password.
+	 *              Requires fingerprint = to be set.
+	 *              Without user = lines, any host is accepted.
 	 */
 	flags = encrypted;
 
-	/* privset: privileges set to grant */
+	/* privset: privilege set to grant */
 	privset = "admin";
 };
+
+/* Example 2: certificate-only oper (no password, any host) */
+#operator "certoper" {
+#	fingerprint = "cert_sha256:deadbeefdeadbeef...64hexchars...";
+#	flags = certfp_only;
+#	snomask = "+Zbfkrsuy";
+#	privset = "admin";
+#};
+
+/* Example 3: certificate + password (both required) */
+#operator "strictoper" {
+#	user = "alice@trusted.example.com";
+#	password = "etcnjl8juSU1E";
+#	fingerprint = "cert_sha256:deadbeefdeadbeef...64hexchars...";
+#	flags = encrypted, need_ssl;
+#	snomask = "+Zbfkrsuy";
+#	privset = "global_op";
+#};
 
 connect "irc.uplink.com" {
 	host = "203.0.113.3";
@@ -657,6 +689,28 @@ general {
 	 * when they join a channel.  See reference.conf for full details.
 	 */
 	oper_auto_op = no;
+
+	/* max_mode_params: maximum parameters per MODE command (MODES= in 005).
+	 * Default: 4.  Set to 6 for modern clients.
+	 */
+	#max_mode_params = 6;
+
+	/* mode_broadcast_params: params per broadcast MODE line (0=group all).
+	 * Set to 1 to broadcast one change per message.  Default: 0.
+	 */
+	#mode_broadcast_params = 0;
+
+	/* KICK / MODE / PROP flood limits.
+	 * Set count to 0 to disable.  Opers with oper:god or no_oper_flood
+	 * are always exempt.  Per-channel limits can be set by chanops via
+	 * PROP #channel KICKFLOOD/MODEFLOOD/PROPFLOOD :<count>/<seconds>.
+	 */
+	#kick_flood_count = 3;
+	#kick_flood_time  = 10;
+	#mode_flood_count = 3;
+	#mode_flood_time  = 10;
+	#prop_flood_count = 3;
+	#prop_flood_time  = 10;
 };
 
 modules {

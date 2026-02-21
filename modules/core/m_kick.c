@@ -37,6 +37,7 @@
 #include "s_serv.h"
 #include "hook.h"
 #include "s_conf.h"
+#include "flood.h"
 
 static const char kick_desc[] = "Provides the KICK command to remove a user from a channel";
 
@@ -142,6 +143,10 @@ m_kick(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 			if(kick_count >= max_kicks)
 				break;
 			kick_count++;
+
+			/* Flood-check before processing each KICK target */
+			if(MyClient(source_p) && check_kick_flood(source_p, chptr))
+				break;
 
 			user = target_tok;
 

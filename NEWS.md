@@ -7,6 +7,33 @@ See LICENSE for licensing details (GPL v2).
 
 ### Ophion-specific additions (since charybdis fork)
 
+#### oper authentication
+- **SASL PLAIN oper authentication** (`modules/sasl_plain.c`): operators now
+  authenticate via `AUTHENTICATE PLAIN` during connection registration.  The
+  SASL payload carries `[authzid\0]authcid\0password`; authcid is the oper
+  block name.  oper_up() fires automatically at 001 Welcome.
+- **SASL EXTERNAL oper authentication** (`modules/sasl_external.c`):
+  certificate-only oper blocks (`certfp_only = yes`) authenticate via
+  `AUTHENTICATE EXTERNAL`.  Empty authzid (`=`) auto-discovers the matching
+  block; a named authzid targets a specific block.
+- **IRCX AUTH shorthand**: both mechanisms work via the existing IRCX `AUTH`
+  command (`AUTH PLAIN I :<base64>` / `AUTH EXTERNAL I`) without requiring
+  `CAP REQ :sasl`.
+- **`certfp_only` operator flag**: new operator block flag that accepts a TLS
+  certificate fingerprint as the sole credential.  No password required or
+  checked.  Without `user =` lines any host is accepted (*@* added automatically).
+- **`/OPER` stub**: the OPER command no longer authenticates.  Clients that
+  send `/OPER` receive a notice directing them to SASL.  Server-to-server
+  OPER propagation (`mc_oper`) is retained unchanged.
+- **Shared auth module** (`ircd/auth_oper.c`, `include/auth_oper.h`):
+  centralises all oper credential logic — `oper_check_password()`,
+  `oper_check_certfp()`, `oper_find_by_name()`, `oper_find_certfp_only()`,
+  `oper_find_certfp_match()`, `oper_log_success()`, `oper_log_failure()`.
+  Failed attempts emit `L_FOPER` log entries and optional `SNO_GENERAL`
+  notices (controlled by `failed_oper_notice` in `general{}`).
+- **`pending_oper`** field on `LocalUser`: SASL mechanisms set this on success;
+  `register_local_user()` calls `oper_up()` automatically at 001 Welcome.
+
 #### user
 - `oper_kick_protection`: IRC operators cannot be kicked or deopped by non-opers.
 - `oper_auto_op`: IRC operators are automatically given chanop (+q) or higher on join.
@@ -18,6 +45,23 @@ See LICENSE for licensing details (GPL v2).
   derived deterministically from the server name via FNV-1a hash, logged at startup.
 - Zero-config server linking via SVSSID collision negotiation.
 - WebSocket transport support via `listen { wsock = yes; }`.
+- **Dotless server names**: server names no longer require a dot/domain suffix;
+  simple names like `ircxserver01` or `leaf02` are fully supported.
+- **Built-in reserved names**: `system`, `server`, `services`, `global`,
+  `localhost`, and `ircd` are permanently reserved and cannot be used as a
+  server name or user nickname (bypasses ExemptResv).
+- **Server-link nick force-rename**: when a dotless server name collides with an
+  existing local user nickname, the user is automatically renamed (tries `nick_`,
+  `nick__`, `nick___`, then `Guest<uid-tail>`) and sent an informative notice.
+  Remote-user collisions still cause the link to be rejected.
+- **Per-operation flood controls**: rate limiting for KICK, MODE, and PROP SET
+  operations in addition to the existing packet-level flood controls.  The
+  effective limit is the stricter of the server-global setting and an optional
+  per-channel override set via PROP keys (`KICKFLOOD`, `MODEFLOOD`, `PROPFLOOD`
+  in `N/T` format).  Clients with `oper:god` privilege or general opers with
+  `no_oper_flood = yes` are exempt, consistent with `packet.c`.
+- **Interactive configuration tool** (`tools/setup.py`): full setup and
+  management wizard for `ircd.conf`; see README for details.
 
 #### IRCX channel modes (m_ircx_modes module)
 - `+a` AUTHONLY — only services-authenticated users may join.
@@ -33,12 +77,25 @@ See LICENSE for licensing details (GPL v2).
 - `dnsbl {}` block name (replaces old `blacklist {}` block name).
 - `certfp_method = spki_sha256` (or spki_sha512): SPKI-based certificate fingerprints
   that survive certificate renewal.
+- `kick_flood_count`, `kick_flood_time`: per-user KICK flood limit (0 = disabled).
+- `mode_flood_count`, `mode_flood_time`: per-user MODE flood limit (0 = disabled).
+- `prop_flood_count`, `prop_flood_time`: per-user PROP SET flood limit (0 = disabled).
+- `max_mode_params`: maximum number of MODE parameters accepted per command (default 4).
+- `mode_broadcast_params`: maximum MODE params included when broadcasting to servers.
 
 #### code
 - `make_conf(void)`, `temp_conf_bucket()` helper in `ircd/s_conf.c`.
 - Removed all static-local buffers in `modules/core/m_join.c`.
 - `set_final_mode` uses `SETDIR` macro; `remove_our_modes` uses `mode_strip_table`.
 - `parse_sjoin_modes` bounds check ordering fixed.
+- `is_builtin_resv()` in `ircd/s_newconf.c`: permanent name reservation that
+  cannot be bypassed by ExemptResv.
+- `server_link_nick_fnc()` in `ircd/client.c`: force-renames a local user whose
+  nickname conflicts with a linking dotless server name.
+- `ircd/flood.c`: new `flood_exempt()` helper ensures all operation flood checks
+  honour the same oper-bypass rules as `packet.c`.
+- Server hash-table updated on REHASH rename: `del_from_client_hash` +
+  `add_to_client_hash` ensure the server is findable under its new name.
 
 ---
 

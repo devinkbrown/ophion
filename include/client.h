@@ -64,6 +64,7 @@ struct PreClient;
 struct ListClient;
 struct scache_entry;
 struct ws_ctl;
+struct oper_conf;
 
 typedef int SSL_OPEN_CB(struct Client *, int status);
 
@@ -186,6 +187,16 @@ struct LocalUser
 	time_t last_whisper_time;
 	int whisper_count;
 
+	/* Global per-user flood tracking for KICK, MODE, and PROP operations.
+	 * Channel-level overrides (via PROP KICKFLOOD/MODEFLOOD/PROPFLOOD)
+	 * use the per-membership counters in struct membership instead. */
+	time_t flood_kick_time;
+	int    flood_kick_count;
+	time_t flood_mode_time;
+	int    flood_mode_count;
+	time_t flood_prop_time;
+	int    flood_prop_count;
+
 	time_t lasttime;	/* last time we parsed something */
 	time_t firsttime;	/* time client was created */
 
@@ -282,6 +293,14 @@ struct LocalUser
 	struct ev_entry *event;			/* used for associated events */
 
 	struct sasl_session *sess;
+
+	/*
+	 * pending_oper: set by a SASL mechanism (sasl_plain, sasl_external)
+	 * when it successfully pre-authenticates a client as an oper during
+	 * connection registration.  register_local_user() (s_user.c) detects
+	 * this field and calls oper_up() once the client is fully registered.
+	 */
+	struct oper_conf *pending_oper;
 };
 
 #define AUTHC_F_DEFERRED 0x01
@@ -586,6 +605,7 @@ extern void check_one_kline(struct ConfItem *kline);
 extern void check_dlines(void);
 extern void check_xlines(void);
 extern void resv_nick_fnc(const char *mask, const char *reason, int temp_time);
+extern bool server_link_nick_fnc(const char *server_name);
 
 extern const char *get_client_name(struct Client *client, int show_ip);
 extern const char *log_client_name(struct Client *, int);

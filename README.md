@@ -9,7 +9,14 @@ charybdis and extended with:
  * automatic SID generation and SVSSID collision negotiation for
    zero-config server linking,
  * reverse-DNS toggle (`rdns_lookups = yes|no`) for fast deployments,
- * and websocket transport support.
+ * websocket transport support,
+ * per-operation flood controls (KICK, MODE, PROP) with per-channel
+   overrides via channel PROP keys, and oper/god-mode bypass,
+ * dotless server names (`ircxserver01`, `leaf01`, etc.),
+ * built-in permanently-reserved names (system, server, services, …),
+ * automatic nick force-rename when a server link name collides with
+   an existing user nickname, and
+ * an interactive setup and configuration manager (`tools/setup.py`).
 
 Come chat with us at irc.ophion.dev #ophion.
 
@@ -118,6 +125,74 @@ The following ISUPPORT tokens are added by IRCv3 modules:
 | `CHATHISTORY` | `100` | Maximum messages per history request |
 | `MSGREFTYPES` | `timestamp` | Supported message reference types |
 
+## Oper Authentication
+
+IRC operator authentication uses SASL, not the traditional OPER command.
+Operators authenticate **during connection registration** (before the 001
+Welcome) and receive oper status automatically.  The OPER command is a stub
+that prints a notice directing users to SASL.
+
+### Methods
+
+| Method | Command | When to use |
+|--------|---------|-------------|
+| SASL PLAIN | `AUTHENTICATE PLAIN` | Password-based (any modern client) |
+| SASL EXTERNAL | `AUTHENTICATE EXTERNAL` | TLS certificate fingerprint only |
+| IRCX AUTH (shorthand) | `AUTH PLAIN I :…` / `AUTH EXTERNAL I` | Single-command alternative; no `CAP REQ :sasl` needed |
+
+### SASL PLAIN (password)
+
+```
+CAP REQ :sasl
+AUTHENTICATE PLAIN
+AUTHENTICATE <base64(\0<blockname>\0<password>)>
+```
+
+Most clients (WeeChat, HexChat, irssi, ZNC) configure this natively via
+their SASL settings.  Use the oper block name as the username.
+
+### SASL EXTERNAL (certificate)
+
+Requires a TLS connection with a client certificate.  The oper block must
+have `certfp_only = yes` and a matching `fingerprint =` line.
+
+```
+AUTHENTICATE EXTERNAL
+AUTHENTICATE =          # "=" triggers auto-discovery
+```
+
+### ircd.conf quick-start
+
+```
+# Password-based oper
+operator "godoper" {
+    user = "*@127.0.0.1";
+    password = "$6$...mkpasswd -m sha512 output...";
+    flags = encrypted;
+    snomask = "+Zbfkrsuy";
+    privset = "admin";
+};
+
+# Certificate-only oper (no password; any host)
+operator "certoper" {
+    fingerprint = "cert_sha256:deadbeef...64hexchars...";
+    flags = certfp_only;
+    snomask = "+Zbfkrsuy";
+    privset = "admin";
+};
+```
+
+Get your certificate fingerprint:
+
+```sh
+openssl x509 -in client.crt -noout -sha256 -fingerprint \
+  | tr -d ':' | tr 'A-Z' 'a-z' \
+  | sed 's/.*=//; s/^/cert_sha256:/'
+```
+
+See `doc/features/sasl.txt` for the full protocol reference and
+`doc/reference.conf` for all operator block options.
+
 ## IRCX Protocol Support
 
 Ophion implements channel modes, user modes, and commands from the IRCX
@@ -223,6 +298,44 @@ All IRCX functionality is provided by loadable modules in `modules/`:
 | m_ircx_prop_user_profile | User profile properties |
 | m_ircx_whisper | WHISPER command and +w mode |
 
+## Flood Controls
+
+Ophion provides per-operation rate limiting for KICK, MODE, and PROP SET
+operations, in addition to the existing packet-level flood controls.
+
+### Server-global limits (ircd.conf `general{}`)
+
+```
+kick_flood_count = 5;   /* max KICKs per window          */
+kick_flood_time  = 15;  /* window size in seconds         */
+mode_flood_count = 10;
+mode_flood_time  = 30;
+prop_flood_count = 10;
+prop_flood_time  = 30;
+```
+
+Setting a count to `0` disables the corresponding limit.
+
+### Per-channel overrides (PROP keys)
+
+Channel operators can apply a _stricter_ (lower-rate) limit for their channel
+by setting the `KICKFLOOD`, `MODEFLOOD`, or `PROPFLOOD` PROP key in `N/T`
+format (N operations per T seconds):
+
+```
+PROP #chan SET KICKFLOOD 3/10
+PROP #chan SET MODEFLOOD 5/60
+```
+
+The effective limit for any operation is the stricter of the server-global
+and per-channel limits.
+
+### Oper bypass
+
+ * Clients with the `oper:god` privilege are always exempt.
+ * General IRC operators are exempt when `no_oper_flood = yes` is set in
+   `general{}`.
+
 ## Server Linking
 
 Ophion supports TS6 server linking with automatic SID generation:
@@ -235,6 +348,22 @@ Ophion supports TS6 server linking with automatic SID generation:
    an available SID before disconnecting.  The leaf adopts the new SID
    and reconnects automatically.
  * Explicit `sid = "XYZ";` in `serverinfo{}` always takes precedence.
+
+### Dotless server names
+
+Server names do not require a domain suffix.  Simple hostnames like
+`ircxserver01` or `leaf02` are fully supported.  When a dotless name collides
+with an existing user nickname, the user is automatically force-renamed and
+notified; the link is not rejected.
+
+Dotless names are checked against the RESV system (channel operator RESVs)
+**and** a set of permanently built-in reserved names that can never be used
+as a server name or user nickname:
+
+| Reserved | Reserved | Reserved |
+|----------|----------|----------|
+| system   | server   | services |
+| global   | localhost | ircd    |
 
 ### Minimal link configuration
 
@@ -263,6 +392,55 @@ connect "hub.example.com" {
 
  * `rdns_lookups = yes|no` in `general{}` — disable reverse DNS
    lookups for faster connections (defaults to `yes`).
+ * Server names may be simple hostnames without dots (`leaf01`, `ircxserver01`).
+
+## Configuration Tool
+
+`tools/setup.py` is an interactive setup and configuration manager.
+It edits `ircd.conf` without destroying comments or custom formatting,
+and covers every day-to-day admin task without requiring manual config
+file editing.
+
+### Quick start
+
+```sh
+# First-time setup wizard
+python3 tools/setup.py --config /usr/local/etc/ircd.conf
+
+# Manage an existing configuration
+python3 tools/setup.py --config /usr/local/etc/ircd.conf --manage
+```
+
+### Wizard modes
+
+| Mode | Description |
+|------|-------------|
+| `simple` | Essential settings only (server name, admin, one port, one oper) |
+| `intermediate` | Adds flood limits, TLS, server links |
+| `advanced` | Full access to all settings, privsets, certfp, Let's Encrypt |
+
+### Features
+
+ * **Server info** — name, description, network name, admin contacts.
+ * **Listen ports** — add/remove plain, TLS, and WebSocket listeners.
+ * **Flood limits** — KICK/MODE/PROP flood counts and window sizes.
+ * **Operators** — add, remove, list operators; choose from suggested
+   privsets (`oper`, `admin`, `god`) or define custom ones.  Supports
+   both encrypted (SHA-512 crypt) and plaintext passwords, plus CertFP
+   fingerprint authentication.
+ * **Server links** — add, remove, list connect blocks.  Supports
+   encrypted password, plaintext password, CertFP-only, and
+   CertFP + password authentication.
+ * **TLS / SSL** — generate self-signed certificates or obtain a free
+   certificate from Let's Encrypt (certbot is auto-installed if absent
+   on apt/yum/dnf systems).  DH parameters are generated automatically.
+ * **Keep-alive crontab** — installs a one-liner cron job that restarts
+   Ophion every minute if it is not running.
+ * **Password hashing** — SHA-512 crypt is computed in-process using
+   the Python standard library, `mkpasswd`, or `openssl passwd -6` as
+   available.  No external tools are required.
+ * **CertFP fingerprint** — computes the SHA-512 fingerprint of a PEM
+   certificate file for use in `operator{}` or `connect{}` blocks.
 
 ## Building
 
