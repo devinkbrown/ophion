@@ -731,25 +731,52 @@ modules {
  *   - A standalone single-server network can set hub = yes and ignore hub_name.
  *
  * Commands made available when services are enabled:
- *   /REGISTER <password> [email]     — register current nick
+ *
+ *   Account management (all users):
+ *   /REGISTER <email> <password>     — register current nick
  *   /IDENTIFY  [account] <password>  — identify to services account
  *   /LOGOUT                          — drop services identification
+ *   /DROP <password>                 — permanently delete your account
  *   /GHOST <nick> <password>         — kill a ghost using your password
  *   /REGAIN <nick> [password]        — reclaim your nick from a ghost
- *   /GROUP <nick>                    — add a nick to your account
- *   /CREGISTER <#channel>            — register a channel you have ops in
- *   /CHANSET <#chan> <flag> [value]   — manage channel registration settings
- *   /MEMO SEND|READ|DEL|LIST ...     — inter-account memos
- *   /VHOST REQUEST|TAKE|OFFER|LIST   — virtual host management
+ *   /GROUP                           — add current nick to your account
+ *   /UNGROUP <nick>                  — remove a grouped nick
+ *   /SENDPASS <account>              — request a password reset token
+ *   /SENDPASS <acct> <token> <pass>  — apply a password reset token
  *   /CERTADD [certfp]                — add TLS cert fingerprint to account
  *   /CERTDEL <certfp>                — remove TLS cert fingerprint
- *   /ACCOUNTSET <option> <value>     — account settings (email, password, etc.)
- *   /ACCOUNTINFO [account]           — display account information
- *   /ACCOUNTOPER LINK|UNLINK|LIST    — link/unlink an oper block to your account
+ *   /SETPASS <old> <new>             — change your password
+ *   /SETEMAIL <email>                — change your registered email
+ *   /SET <option> <on|off>           — toggle account flags
+ *   /ACCOUNTINFO [account|#chan]     — display account or channel info
+ *
+ *   Channel services:
+ *   /CREGISTER <#channel>            — register a channel you have ops in
+ *   /CDROP <#channel>                — drop a channel registration (founder)
+ *   /CHANSET <#chan> <flag> [value]  — manage channel registration settings
+ *
+ *   Memos and vhosts:
+ *   /MEMO SEND|READ|DEL|LIST ...     — inter-account memos
+ *   /VHOST REQUEST|TAKE|OFFER|LIST   — virtual host management
+ *
+ *   Oper-only account admin:
+ *   /DROP <account>                  — force-drop another account (oper)
+ *   /ACCOUNTOPER <acct> <block|->    — link/unlink an oper block to account
+ *   /SUSPEND <account>               — suspend an account
+ *   /UNSUSPEND <account>             — unsuspend an account
+ *   /FORBID <nick|#channel>          — prevent registration of nick/channel
+ *   /UNFORBID <nick|#channel>        — remove a forbid
+ *   /NOEXPIRE <account> on|off       — toggle no-expiry on an account
+ *
+ *   Server jupes (oper-only, always available regardless of services state):
+ *   /JUPE <server> [:<reason>]       — block a server from linking
+ *   /UNJUPE <server>                 — remove a server jupe
+ *   /JUPELIST                        — list all active jupes
  *
  * When services are disabled (enabled = no), the IDENTIFY command reverts to
  * its IRCX channel-key behaviour (/IDENTIFY #channel <key>); all other
- * services commands return ERR_UNKNOWNCOMMAND.
+ * services commands return ERR_UNKNOWNCOMMAND.  JUPE/UNJUPE/JUPELIST are
+ * always available to opers regardless of this setting.
  */
 services {
 	/* Master switch.  Set to yes to enable the services layer. */

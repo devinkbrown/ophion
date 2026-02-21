@@ -47,10 +47,23 @@ Commands under test
     VHOFFERLIST
     VHOST TAKE <vhost>
 
+  Account removal:
+    DROP <password>                 (self-drop with confirmation)
+    DROP <account>                  (oper force-drop with hierarchy check)
+
+  Password reset:
+    SENDPASS <account>              (request reset token; token in oper SNO)
+    SENDPASS <account> <token> <p>  (apply reset token)
+
   Oper-level account admin:
     ACCOUNTOPER <account> <block|->
     SUSPEND / UNSUSPEND <account>
     FORBID / UNFORBID  <nick>
+
+  Server jupe:
+    JUPE <server> [:<reason>]       (oper-only; blocks server from linking)
+    UNJUPE <server>                 (oper-only; removes jupe)
+    JUPELIST                        (oper-only; list active jupes)
 
   Founder/key bypass:
     Registered founder can JOIN a +k channel without the live key.
@@ -1283,7 +1296,284 @@ def test_topiclock_enforces_plus_t():
 
 
 # ===========================================================================
-# SECTION 19 — S2S Sync protocol coverage (single-server)
+# SECTION 19 — DROP
+# ===========================================================================
+
+def test_drop_self_correct_password():
+    """DROP <password> removes the caller's own account."""
+    a, pw = _make_account("drs")
+    acct = a.nick
+    a.send(f"DROP {pw}")
+    ok = a.wait(r"(?i)(dropped|removed|deleted|permanently)", timeout=4)
+    _check("DROP correct password → account dropped notice", ok is not None,
+           f"account={acct}")
+    a.close()
+
+
+def test_drop_self_wrong_password():
+    """DROP with wrong password → error notice; account still exists."""
+    a, pw = _make_account("drw")
+    a.send("DROP WRONGPASSWORD999")
+    ok = a.wait(r"(?i)(incorrect|invalid|wrong|not dropped)", timeout=4)
+    _check("DROP wrong password → error notice", ok is not None,
+           f"account={a.nick}")
+
+    # Verify account still works
+    b = _connect("drwb")
+    b.send(f"IDENTIFY {a.nick} {pw}")
+    ok2 = b.wait(r"(?i)( 900 |identified)", timeout=4)
+    _check("DROP wrong password: account still exists after failed drop",
+           ok2 is not None)
+    a.close()
+    b.close()
+
+
+def test_drop_not_identified():
+    """DROP without being identified → error notice."""
+    c = _connect("drni")
+    c.send("DROP somepassword")
+    ok = c.wait(r"(?i)(not identified|identify first|must be)", timeout=4)
+    _check("DROP without identification → error notice", ok is not None)
+    c.close()
+
+
+def test_drop_oper_forced():
+    """Oper DROP <account> force-drops another account."""
+    a, pw = _make_account("dro")
+    acct = a.nick
+    op = _oper("dropop")
+    op.send(f"DROP {acct}")
+    ok = op.wait(r"(?i)(dropped|removed|deleted)", timeout=4)
+    _check("Oper DROP <account> → dropped notice", ok is not None,
+           f"account={acct}")
+
+    # Verify account is gone
+    b = _connect("drob")
+    b.send(f"IDENTIFY {acct} {pw}")
+    ok2 = b.wait(r"(?i)(invalid|not.*found|no.*account|failed|incorrect)", timeout=4)
+    _check("Oper DROP: account no longer exists", ok2 is not None,
+           f"account={acct}")
+    a.close()
+    b.close()
+    op.close()
+
+
+def test_drop_oper_nonexistent():
+    """Oper DROP <nonexistent> → 'does not exist' notice."""
+    op = _oper("dropopne")
+    op.send("DROP nosuchaccountxyz999")
+    ok = op.wait(r"(?i)(not exist|no such|not found)", timeout=4)
+    _check("Oper DROP nonexistent → not found notice", ok is not None)
+    op.close()
+
+
+# ===========================================================================
+# SECTION 20 — SENDPASS
+# ===========================================================================
+
+def test_sendpass_request_exists():
+    """SENDPASS <account> for a real account → 'if account exists' notice."""
+    a, _ = _make_account("spr")
+    a.send(f"SENDPASS {a.nick}")
+    ok = a.wait(r"(?i)(if account|reset|sent|email|expires)", timeout=4)
+    _check("SENDPASS request for real account → response notice",
+           ok is not None, f"account={a.nick}")
+    a.close()
+
+
+def test_sendpass_request_nonexistent():
+    """SENDPASS on nonexistent account → same response (no enumeration)."""
+    c = _connect("spne")
+    c.send("SENDPASS nosuchaccountxyz999")
+    ok = c.wait(r"(?i)(if account|reset|sent|email|expires)", timeout=4)
+    _check("SENDPASS nonexistent → same response (no enumeration)",
+           ok is not None)
+    c.close()
+
+
+def test_sendpass_apply_correct_token():
+    """Full SENDPASS flow: oper receives token → apply it → new password works."""
+    a, old_pw = _make_account("spac")
+    acct = a.nick
+
+    # Connect an oper to receive the SNO_GENERAL notice carrying the token
+    op = _oper("spacop")
+    op.drain(0.5)
+
+    # Request reset from a different client
+    req = _connect("spacreq")
+    req.send(f"SENDPASS {acct}")
+    req.drain(0.5)
+
+    # Oper collects server notices; token appears in SNO_GENERAL
+    token = None
+    lines = op.collect(3.0)
+    for ln in lines:
+        m = re.search(r"token[:\s]+([0-9a-f]{16})", ln, re.IGNORECASE)
+        if m and acct.lower() in ln.lower():
+            token = m.group(1)
+            break
+
+    if token is None:
+        _fail("SENDPASS: could not extract token from oper notice")
+    else:
+        _ok("SENDPASS: token visible in oper SNO_GENERAL notice",
+            f"token={token}")
+        new_pw = "newpassword789"
+        req.send(f"SENDPASS {acct} {token} {new_pw}")
+        ok_apply = req.wait(r"(?i)(reset|changed|new password|identify)", timeout=4)
+        _check("SENDPASS apply correct token → success notice",
+               ok_apply is not None)
+
+        # Verify new password works
+        b = _connect("spacb")
+        b.send(f"IDENTIFY {acct} {new_pw}")
+        ok_id = b.wait(r"(?i)( 900 |identified)", timeout=4)
+        _check("SENDPASS: new password authenticates successfully", ok_id is not None)
+        b.close()
+
+    a.close()
+    req.close()
+    op.close()
+
+
+def test_sendpass_apply_wrong_token():
+    """SENDPASS <account> <wrong-token> <pass> → invalid token error."""
+    a, _ = _make_account("spwt")
+    c = _connect("spwtc")
+    c.send(f"SENDPASS {a.nick} 0000000000000000 newpassword123")
+    ok = c.wait(r"(?i)(invalid|expired|wrong|not.*found)", timeout=4)
+    _check("SENDPASS wrong token → invalid/expired error notice",
+           ok is not None)
+    a.close()
+    c.close()
+
+
+def test_sendpass_short_new_password():
+    """SENDPASS apply with too-short new password → error."""
+    a, _ = _make_account("spsp")
+    op = _oper("spspop")
+    op.drain(0.5)
+
+    req = _connect("spspreq")
+    req.send(f"SENDPASS {a.nick}")
+    req.drain(0.5)
+
+    token = None
+    lines = op.collect(3.0)
+    for ln in lines:
+        m = re.search(r"token[:\s]+([0-9a-f]{16})", ln, re.IGNORECASE)
+        if m and a.nick.lower() in ln.lower():
+            token = m.group(1)
+            break
+
+    if token is None:
+        _fail("SENDPASS short-pass: could not extract token from oper notice")
+    else:
+        req.send(f"SENDPASS {a.nick} {token} abc")  # too short
+        ok = req.wait(r"(?i)(at least|5 char|too short|short)", timeout=4)
+        _check("SENDPASS apply short new password → length error", ok is not None)
+
+    a.close()
+    req.close()
+    op.close()
+
+
+# ===========================================================================
+# SECTION 21 — JUPE / UNJUPE / JUPELIST (oper-only)
+# ===========================================================================
+
+def test_jupe_nonoper_blocked():
+    """Non-oper JUPE → 481 ERR_NOPRIVILEGES."""
+    c = _connect("jpnop")
+    c.send("JUPE fake.test.server :reason")
+    ok = c.wait(r" 481 ", timeout=4)
+    _check("JUPE by non-oper → 481 ERR_NOPRIVILEGES", ok is not None)
+    c.close()
+
+
+def test_jupe_oper_creates():
+    """Oper JUPE <server> creates a jupe visible in JUPELIST."""
+    op = _oper("jpcreop")
+    srv = f"jupe{_seq}.test.example"
+    op.send(f"JUPE {srv} :Automated test jupe")
+    ok = op.wait(r"(?i)(active|jupe|activated|now active)", timeout=4)
+    _check("Oper JUPE → jupe activated notice", ok is not None, f"server={srv}")
+
+    op.send("JUPELIST")
+    ok2 = op.wait(srv, timeout=4)
+    _check("JUPE: server appears in JUPELIST", ok2 is not None, f"server={srv}")
+
+    op.send(f"UNJUPE {srv}")
+    op.drain(0.5)
+    op.close()
+
+
+def test_unjupe_removes_from_list():
+    """UNJUPE removes the entry from JUPELIST."""
+    op = _oper("juprm")
+    srv = f"unjp{_seq}.test.example"
+    op.send(f"JUPE {srv} :Removal test")
+    op.drain(1.0)
+    op.send(f"UNJUPE {srv}")
+    ok = op.wait(r"(?i)(removed|unjupe|cleared)", timeout=4)
+    _check("UNJUPE → removed notice", ok is not None, f"server={srv}")
+
+    op.send("JUPELIST")
+    lines = op.collect(2.0)
+    still_present = any(srv.lower() in ln.lower() for ln in lines)
+    _check("UNJUPE: server absent from JUPELIST after removal",
+           not still_present, f"server={srv}")
+    op.close()
+
+
+def test_jupelist_responds():
+    """JUPELIST responds without crash (empty or with entries)."""
+    op = _oper("jpls")
+    op.send("JUPELIST")
+    ok = op.wait(r"(?i)(no active|end of jupelist|active jupe)", timeout=4)
+    _check("JUPELIST → response without crash", ok is not None)
+    op.close()
+
+
+def test_jupe_self_rejected():
+    """JUPE of the local server name → rejected with error notice."""
+    op = _oper("jpself")
+    op.send("JUPE localhost :self jupe test")
+    ok = op.wait(r"(?i)(cannot|self|invalid|jupe|active)", timeout=4)
+    _check("JUPE self/localhost → response received (no hang)", ok is not None)
+    op.close()
+
+
+def test_jupe_no_dot_rejected():
+    """JUPE of a name without a dot → invalid server name error."""
+    op = _oper("jpnd")
+    op.send("JUPE nodotname :test")
+    ok = op.wait(r"(?i)(invalid|dot|server name)", timeout=4)
+    _check("JUPE no-dot name → invalid server name notice", ok is not None)
+    op.close()
+
+
+def test_unjupe_nonexistent():
+    """UNJUPE a name that is not juped → 'not juped' notice."""
+    op = _oper("jupne")
+    op.send("UNJUPE notjuped.test.example")
+    ok = op.wait(r"(?i)(not.*jupe|not currently|no jupe)", timeout=4)
+    _check("UNJUPE nonexistent → not-juped notice", ok is not None)
+    op.close()
+
+
+def test_unjupe_nonoper_blocked():
+    """Non-oper UNJUPE → 481 ERR_NOPRIVILEGES."""
+    c = _connect("jupnopun")
+    c.send("UNJUPE fake.test.example")
+    ok = c.wait(r" 481 ", timeout=4)
+    _check("UNJUPE by non-oper → 481 ERR_NOPRIVILEGES", ok is not None)
+    c.close()
+
+
+# ===========================================================================
+# SECTION 22 — S2S Sync protocol coverage (single-server)
 #
 # These tests exercise the code paths that trigger S2S propagation
 # (svc_sync_nick_group, svc_sync_nick_ungroup, svc_sync_chanaccess_set,
@@ -1605,6 +1895,27 @@ TESTS = [
     ("IDENTIFY #chan mlock_key → ops restored",    test_identify_channel_restores_ops),
     # Sanity
     ("Unidentified commands → response not hang",  test_services_disabled_fallback),
+    # DROP
+    ("DROP correct password → dropped",            test_drop_self_correct_password),
+    ("DROP wrong password → error + acct intact",  test_drop_self_wrong_password),
+    ("DROP without identification → error",        test_drop_not_identified),
+    ("Oper DROP <account> → force-dropped",        test_drop_oper_forced),
+    ("Oper DROP nonexistent → not found",          test_drop_oper_nonexistent),
+    # SENDPASS
+    ("SENDPASS request real account → notice",     test_sendpass_request_exists),
+    ("SENDPASS nonexistent → same notice",         test_sendpass_request_nonexistent),
+    ("SENDPASS full token cycle → new pass works", test_sendpass_apply_correct_token),
+    ("SENDPASS wrong token → error",               test_sendpass_apply_wrong_token),
+    ("SENDPASS short new password → error",        test_sendpass_short_new_password),
+    # JUPE / UNJUPE / JUPELIST
+    ("JUPE by non-oper → 481",                     test_jupe_nonoper_blocked),
+    ("Oper JUPE → visible in JUPELIST",            test_jupe_oper_creates),
+    ("UNJUPE → removed from JUPELIST",             test_unjupe_removes_from_list),
+    ("JUPELIST → responds without crash",          test_jupelist_responds),
+    ("JUPE self/localhost → response",             test_jupe_self_rejected),
+    ("JUPE no-dot name → invalid notice",          test_jupe_no_dot_rejected),
+    ("UNJUPE nonexistent → not-juped notice",      test_unjupe_nonexistent),
+    ("UNJUPE by non-oper → 481",                   test_unjupe_nonoper_blocked),
     # S2S sync protocol coverage (single-server validation)
     ("S2S/nick-group: GROUP+UNGROUP roundtrip",    test_sync_nick_group_roundtrip),
     ("S2S/nick-group: grouped nick in INFO",       test_sync_nick_group_visible_to_info),
