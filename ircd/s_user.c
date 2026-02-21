@@ -671,6 +671,7 @@ register_local_user(struct Client *client_p, struct Client *source_p)
 		struct oper_conf *oper_p = source_p->localClient->pending_oper;
 		source_p->localClient->pending_oper = NULL;
 		oper_up(source_p, oper_p);
+		oper_log_success(source_p, oper_p, "SASL");
 	}
 
 	free_pre_client(source_p);

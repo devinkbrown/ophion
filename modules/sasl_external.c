@@ -18,6 +18,10 @@
  *   Server: 900 (RPL_LOGGEDIN) + 903 (RPL_SASLSUCCESS)  on success
  *           908 (ERR_SASLFAIL)                           on failure
  *
+ *   IRCX equivalent:
+ *   Client: AUTH EXTERNAL I
+ *   Server: 903 (RPL_SASLSUCCESS)  on success  /  908 on failure
+ *
  * authzid semantics
  * -----------------
  *   Non-empty: the client names a specific certfp_only oper block.  The server
@@ -67,7 +71,10 @@ sasl_external_step(struct sasl_session *sess,
 
 	/* Client must have a TLS certificate for EXTERNAL to make sense. */
 	if(sess->client->certfp == NULL)
+	{
+		oper_log_failure(sess->client, "*", "no client certificate", "SASL EXTERNAL");
 		return SASL_MRESULT_FAILURE;
+	}
 
 	/*
 	 * The EXTERNAL payload is the authzid: the name of the certfp_only oper
@@ -99,34 +106,34 @@ sasl_external_step(struct sasl_session *sess,
 		 */
 		oper_p = oper_find_certfp_only(authzid);
 		if(oper_p == NULL)
+		{
+			oper_log_failure(sess->client, authzid, "no certfp_only oper block",
+					 "SASL EXTERNAL");
 			return SASL_MRESULT_FAILURE;
+		}
 
 		if(!oper_check_certfp(sess->client, oper_p))
+		{
+			oper_log_failure(sess->client, authzid, "certfp mismatch",
+					 "SASL EXTERNAL");
 			return SASL_MRESULT_FAILURE;
+		}
 	}
 	else
 	{
 		/*
 		 * No authzid supplied — scan every certfp_only block and pick the
 		 * first one whose fingerprint matches the client's certificate.
+		 * oper_find_certfp_match() encapsulates this scan in auth_oper.c.
 		 */
-		rb_dlink_node *ptr;
-		oper_p = NULL;
-
-		RB_DLINK_FOREACH(ptr, oper_conf_list.head)
-		{
-			struct oper_conf *candidate = ptr->data;
-			if(!IsOperConfCertFPOnly(candidate))
-				continue;
-			if(oper_check_certfp(sess->client, candidate))
-			{
-				oper_p = candidate;
-				break;
-			}
-		}
-
+		oper_p = oper_find_certfp_match(sess->client);
 		if(oper_p == NULL)
+		{
+			oper_log_failure(sess->client, "*",
+					 "no certfp_only block matches certificate",
+					 "SASL EXTERNAL");
 			return SASL_MRESULT_FAILURE;
+		}
 	}
 
 	/* success: record authzid and stash the oper block for post-registration */

@@ -14,6 +14,10 @@
  *   Server: 900 (RPL_LOGGEDIN) + 903 (RPL_SASLSUCCESS)  on success
  *           908 (ERR_SASLFAIL)                           on failure
  *
+ *   IRCX equivalent:
+ *   Client: AUTH PLAIN I :<base64([authzid \0] authcid \0 password)>
+ *   Server: 903 (RPL_SASLSUCCESS)  on success  /  908 on failure
+ *
  * Field mapping
  * -------------
  *   authcid   — the oper block name (authentication identity)
@@ -112,15 +116,24 @@ sasl_plain_step(struct sasl_session *sess,
 	/* oper block lookup (by name only; host matching deferred to oper_up) */
 	struct oper_conf *oper_p = oper_find_by_name(authcid);
 	if(oper_p == NULL)
+	{
+		oper_log_failure(sess->client, authcid, "no oper block", "SASL PLAIN");
 		return SASL_MRESULT_FAILURE;
+	}
 
 	/* password verification */
 	if(!oper_check_password(passwd, oper_p))
+	{
+		oper_log_failure(sess->client, authcid, "password mismatch", "SASL PLAIN");
 		return SASL_MRESULT_FAILURE;
+	}
 
 	/* if the block also has a certfp requirement, verify it now */
 	if(oper_p->certfp != NULL && !oper_check_certfp(sess->client, oper_p))
+	{
+		oper_log_failure(sess->client, authcid, "certfp mismatch", "SASL PLAIN");
 		return SASL_MRESULT_FAILURE;
+	}
 
 	/* success: record authzid and stash the oper block for post-registration */
 	rb_strlcpy(sess->authzid, authcid, sizeof(sess->authzid));
