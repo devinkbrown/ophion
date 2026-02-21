@@ -33,9 +33,14 @@
 #include "s_serv.h"
 #include "send.h"
 #include "snomask.h"
+#include "logger.h"
 #include "services.h"
 #include "services_db.h"
 #include "services_sync.h"
+
+/* rb_random_uint32 is not exported from librb; use rb_get_random instead */
+extern int rb_get_random(void *buf, size_t len);
+static uint32_t rand_u32(void) { uint32_t v; rb_get_random(&v, sizeof(v)); return v; }
 
 static const char sendpass_desc[] =
 	"Services SENDPASS command — token-based account password reset";
@@ -125,7 +130,7 @@ token_create(const char *account)
 	t = rb_malloc(sizeof(*t));
 	rb_strlcpy(t->account, account, sizeof(t->account));
 	for (int i = 0; i < TOKEN_HEX_LEN; i++)
-		t->token[i] = hex[rb_random_uint32() % 16];
+		t->token[i] = hex[rand_u32() % 16];
 	t->token[TOKEN_HEX_LEN] = '\0';
 	t->expires = rb_current_time() + TOKEN_EXPIRE_SECS;
 	rb_dlinkAdd(t, &t->node, &token_list);
@@ -179,7 +184,7 @@ build_sha512_salt(char *out, size_t outlen)
 		return;
 	out[0] = '$'; out[1] = '6'; out[2] = '$';
 	for (int i = 0; i < 16; i++)
-		out[3 + i] = salt_chars[rb_random_uint32() % 64];
+		out[3 + i] = salt_chars[rand_u32() % 64];
 	out[19] = '$'; out[20] = '\0';
 }
 
