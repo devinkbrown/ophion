@@ -366,7 +366,7 @@ def test_nick_cycling():
     c = _connect("nc")
     failures = 0
     for i in range(30):
-        new = f"cy{_seq % 100000:05d}"
+        new = _nick("cy")
         c.send(f"NICK {new}")
         got = c.wait(rf"NICK.*{new}", timeout=3)
         if got is None:
@@ -425,7 +425,13 @@ def test_join_zero_parts_all():
     c.drain(0.3)
     c.send(f"NAMES {channels[0]}")
     lines = c.collect(seconds=1.5)
-    in_old = any(c.nick in l and channels[0] in l for l in lines)
+    # Only check the member-list field of 353 lines (the part after the last
+    # ':').  The 366 end-of-names line and the requester field of 353 both
+    # contain c.nick but neither indicates actual channel membership.
+    in_old = any(
+        " 353 " in l and channels[0] in l and c.nick in l.rsplit(":", 1)[-1]
+        for l in lines
+    )
     _check("join-0: parted from all channels", not in_old)
     c.close()
 
@@ -627,7 +633,7 @@ def test_mode_invalid_char():
     ch = _chan()
     c.send(f"JOIN {ch}")
     c.drain(0.3)
-    c.send(f"MODE {ch} +Z")
+    c.send(f"MODE {ch} +X")
     lines = c.collect(seconds=2)
     _check("mode-invalid: unknown flag → 472", any(" 472 " in l for l in lines))
     c.close()

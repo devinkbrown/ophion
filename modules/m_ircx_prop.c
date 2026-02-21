@@ -105,6 +105,27 @@ handle_prop_list(const struct PropMatch *prop_match, struct Client *source_p, co
 {
 	rb_dlink_node *iter;
 
+	/*
+	 * If a specific (non-wildcard) key is requested and it is not present
+	 * in the property list, reply with ERR_PROP_MISSING (919) and return
+	 * without sending RPL_PROPEND.  Wildcard patterns (containing * or ?)
+	 * are exempt — an empty result is valid for those.
+	 *
+	 * Note: write/delete paths (handle_prop_upsert_or_delete) are NOT
+	 * affected by this check so that nulling a property with
+	 * "PROP #chan key :" still works regardless of whether the key exists.
+	 */
+	if (keys != NULL && !strchr(keys, '*') && !strchr(keys, '?'))
+	{
+		if (propertyset_find(prop_match->prop_list, keys) == NULL)
+		{
+			sendto_one_numeric(source_p, ERR_PROP_MISSING,
+				form_str(ERR_PROP_MISSING),
+				prop_match->target_name, keys);
+			return;
+		}
+	}
+
 	RB_DLINK_FOREACH(iter, prop_match->prop_list->head)
 	{
 		struct Property *prop = iter->data;
@@ -280,12 +301,19 @@ m_prop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 	 * authorised writers. */
 	bool is_clear = parc == 3 && parv[2] != NULL && !rb_strcasecmp(parv[2], "CLEAR");
 
+	/* Support explicit "GET" and "SET" verbs:
+	 *   PROP target GET key          (parc==4, read)
+	 *   PROP target SET key :value   (parc==5, write)
+	 */
+	bool is_get_verb = parc == 4 && parv[2] != NULL && !rb_strcasecmp(parv[2], "GET");
+	bool is_set_verb = parc == 5 && parv[2] != NULL && !rb_strcasecmp(parv[2], "SET");
+
 	struct PropMatch prop_match = {
 		.target_name = parv[1],
-		.match_request = (parc > 3 || is_clear) ? PROP_WRITE : PROP_READ,
+		.match_request = ((parc > 3 && !is_get_verb) || is_clear || is_set_verb) ? PROP_WRITE : PROP_READ,
 		.source_p = source_p,
-		.key = parv[2],
-		.value = (parc >= 4) ? parv[3] : NULL,
+		.key = is_get_verb ? parv[3] : (is_set_verb ? parv[3] : parv[2]),
+		.value = is_set_verb ? parv[4] : ((parc >= 4 && !is_get_verb) ? parv[3] : NULL),
 		.alevel = CHFL_PEON,
 	};
 
@@ -293,6 +321,31 @@ m_prop(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *source_p
 
 	if (prop_match.prop_list == NULL)
 		return;
+
+	/* Handle explicit GET verb: PROP target GET key → list that key */
+	if (is_get_verb)
+	{
+		handle_prop_list(&prop_match, source_p, parv[3], prop_match.alevel);
+		return;
+	}
+
+	/* Handle explicit SET verb: PROP target SET key :value → upsert */
+	if (is_set_verb)
+	{
+		if (prop_match.match_grant != PROP_WRITE && MyClient(source_p))
+		{
+			sendto_one_numeric(source_p, ERR_PROPDENIED, form_str(ERR_PROPDENIED), parv[1]);
+			return;
+		}
+		{
+			struct Channel *flood_chptr = IsChanPrefix(*prop_match.target_name)
+				? (struct Channel *)prop_match.target : NULL;
+			if(check_prop_flood(source_p, flood_chptr))
+				return;
+		}
+		handle_prop_upsert_or_delete(&prop_match, source_p, parv[3], parv[4]);
+		return;
+	}
 
 	switch (parc)
 	{

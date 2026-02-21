@@ -1810,6 +1810,112 @@ def test_sync_chanreg_info_after_mlock():
 
 
 # ===========================================================================
+# SECTION 26 — IRCX ACCESS / services persistence integration
+# ===========================================================================
+
+def test_ircx_access_persists_add():
+    """IRCX ACCESS ADD on a registered channel persists the entry to services
+    so that CHANSET ACCESS LIST also shows it."""
+    a, _ = _make_account("ircxpa")
+    b, _ = _make_account("ircxpab")
+    chan = f"#ircxpa{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    # Use the IRCX ACCESS command (not CHANSET) to add a mask at OP level
+    mask = f"*!*@ircxpa{_seq}.test"
+    a.send(f"ACCESS {chan} ADD OP {mask}")
+    a.drain(0.6)
+
+    # Verify via services CHANSET ACCESS LIST — entity should appear
+    a.send(f"CHANSET {chan} ACCESS LIST")
+    lines = a.collect(2.5)
+    present = any(mask.lower() in ln.lower() for ln in lines)
+    _check("IRCX ACCESS ADD: entry persisted to services (in CHANSET ACCESS LIST)",
+           present, f"mask={mask} lines={lines[-3:]}")
+    a.close()
+    b.close()
+
+
+def test_ircx_access_persists_del():
+    """IRCX ACCESS DEL on a registered channel removes the entry from services."""
+    a, _ = _make_account("ircxpd")
+    chan = f"#ircxpd{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    mask = f"*!*@ircxpd{_seq}.test"
+    a.send(f"ACCESS {chan} ADD VOICE {mask}")
+    a.drain(0.6)
+    a.send(f"ACCESS {chan} DEL VOICE {mask}")
+    a.drain(0.6)
+
+    a.send(f"CHANSET {chan} ACCESS LIST")
+    lines = a.collect(2.5)
+    present = any(mask.lower() in ln.lower() for ln in lines)
+    _check("IRCX ACCESS DEL: entry removed from services (absent in CHANSET ACCESS LIST)",
+           not present, f"mask={mask}")
+    a.close()
+
+
+def test_ircx_access_persists_clear():
+    """IRCX ACCESS CLEAR on a registered channel removes all entries from services."""
+    a, _ = _make_account("ircxpc")
+    chan = f"#ircxpc{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    a.send(f"CREGISTER {chan}")
+    a.drain(0.8)
+
+    mask_op    = f"*!*@ircxpc_op{_seq}.test"
+    mask_voice = f"*!*@ircxpc_vo{_seq}.test"
+    a.send(f"ACCESS {chan} ADD OP {mask_op}")
+    a.drain(0.5)
+    a.send(f"ACCESS {chan} ADD VOICE {mask_voice}")
+    a.drain(0.5)
+    a.send(f"ACCESS {chan} CLEAR")
+    a.drain(0.8)
+
+    a.send(f"CHANSET {chan} ACCESS LIST")
+    lines = a.collect(2.5)
+    op_present    = any(mask_op.lower()    in ln.lower() for ln in lines)
+    voice_present = any(mask_voice.lower() in ln.lower() for ln in lines)
+    _check("IRCX ACCESS CLEAR: all entries removed from services",
+           not op_present and not voice_present,
+           f"op_present={op_present} voice_present={voice_present}")
+    a.close()
+
+
+def test_ircx_access_standalone_unregistered():
+    """IRCX ACCESS works normally on unregistered channels (no services DB involved)."""
+    a = _connect("ircxsu")
+    b = _connect("ircxsub")
+    chan = f"#ircxsu{_seq}"
+    a.send(f"JOIN {chan}")
+    a.drain(0.4)
+    # Do NOT register the channel — standalone mode only
+
+    mask = f"{b.nick}!*@*"
+    a.send(f"ACCESS {chan} ADD OP {mask}")
+    ok_add = a.wait(r" 801 ", timeout=4)
+    _check("IRCX ACCESS ADD on unregistered channel → 801 success",
+           ok_add is not None, f"mask={mask}")
+
+    a.send(f"ACCESS {chan} LIST")
+    lines = a.collect(2.0)
+    listed = any(mask.lower() in ln.lower() for ln in lines) or \
+             any(" 804 " in ln for ln in lines)
+    _check("IRCX ACCESS LIST on unregistered channel → lists entries", listed)
+
+    a.close()
+    b.close()
+
+
+# ===========================================================================
 # Main
 # ===========================================================================
 
@@ -1926,6 +2032,11 @@ TESTS = [
     ("S2S/mlock-key: MODELOCK +k stored",          test_sync_mlock_key_stored),
     ("S2S/mlock-fields: MODELOCK +nt roundtrip",   test_sync_mlock_fields_roundtrip),
     ("S2S/mlock-fields: INFO after mlock set",     test_sync_chanreg_info_after_mlock),
+    # IRCX ACCESS / services persistence integration
+    ("IRCX ACCESS ADD persisted to services",      test_ircx_access_persists_add),
+    ("IRCX ACCESS DEL removed from services",      test_ircx_access_persists_del),
+    ("IRCX ACCESS CLEAR removes all from services",test_ircx_access_persists_clear),
+    ("IRCX ACCESS standalone (unregistered chan)", test_ircx_access_standalone_unregistered),
 ]
 
 
