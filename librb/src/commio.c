@@ -934,8 +934,10 @@ rb_pipe(rb_fde_t **F1, rb_fde_t **F2, const char *desc)
 		return -1;
 	}
 #ifdef HAVE_PIPE2
-	/* pipe2() sets O_NONBLOCK + O_CLOEXEC atomically, saving 2 fcntl() calls. */
-	if(pipe2(fd, O_NONBLOCK | O_CLOEXEC) == -1)
+	/* O_NONBLOCK only — no O_CLOEXEC.  These pipe fds are passed via IFD/OFD
+	 * environment variables to helper processes (authd, bandb, ssld) that read
+	 * them after exec(); O_CLOEXEC would close them before the child starts. */
+	if(pipe2(fd, O_NONBLOCK) == -1)
 		return -1;
 #else
 	if(pipe(fd) == -1)
