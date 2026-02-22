@@ -328,7 +328,7 @@ del_id(struct Channel *chptr, const char *banid, rb_dlink_list * list, long mode
 			rb_dlinkDelete(&banptr->node, list);
 
 			/* invalidate the can_send() cache */
-			if(mode_type == CHFL_BAN || mode_type == CHFL_EXCEPTION)
+			if(mode_type == CHFL_BAN || mode_type == CHFL_EXCEPTION || mode_type == CHFL_QUIET)
 				chptr->bants++;
 
 			return banptr;
