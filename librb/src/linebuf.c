@@ -445,14 +445,15 @@ rb_linebuf_get(buf_head_t * bufhead, char *buf, int buflen, int partial, int raw
 			}
 		}
 
-		/* Deallocate the line */
-		rb_linebuf_done_line(bufhead, bufline, bufhead->list.head);
-
 		/* Empty lines (bare CRLF) produce cpylen == 0.  Silently
 		 * discard them and try the next line so that callers never
 		 * mistake an empty line for "no data available". */
 		if(cpylen == 0)
+		{
+			/* Deallocate the line before looping */
+			rb_linebuf_done_line(bufhead, bufline, bufhead->list.head);
 			continue;
+		}
 
 		memcpy(buf, start, cpylen);
 
@@ -461,6 +462,9 @@ rb_linebuf_get(buf_head_t * bufhead, char *buf, int buflen, int partial, int raw
 			buf[cpylen] = '\0';
 
 		lrb_assert(cpylen >= 0);
+
+		/* Deallocate the line */
+		rb_linebuf_done_line(bufhead, bufline, bufhead->list.head);
 
 		/* return how much we copied */
 		return cpylen;
