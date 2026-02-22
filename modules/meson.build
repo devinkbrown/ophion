@@ -36,7 +36,6 @@ modules = [
   'm_ircx_comic',
   'm_ircx_create',
   'm_ircx_event',
-  'm_ircx_identify',
   'm_ircx_listx',
   'm_ircx_modes',
   'm_ircx_prop',
