@@ -366,7 +366,9 @@ mo_vhoffer(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sour
 		return;
 	}
 
-	vhost = parv[1];
+	/* Support both "VHOFFER <vhost>" and "VHOFFER <nick> <vhost>" forms.
+	 * When a nick is supplied as the first argument the vhost is in parv[2]. */
+	vhost = (parc >= 3 && !EmptyString(parv[2])) ? parv[2] : parv[1];
 
 	if (!valid_vhost(vhost))
 	{
@@ -418,7 +420,7 @@ m_vhofferlist(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *s
 		return;
 	}
 
-	if (rb_dlink_length(&offers) == 0)
+	if (rb_dlink_list_length(&offers) == 0)
 	{
 		svc_notice(source_p, "HostServ", "There are no vhosts currently available.");
 		return;

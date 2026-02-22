@@ -124,6 +124,7 @@ m_authenticate(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *
 
 		source_p->localClient->sess = rb_malloc(sizeof(struct sasl_session));
 		source_p->localClient->sess->mech = hdata.mech;
+		source_p->localClient->sess->client = source_p;
 	}
 
 	struct sasl_session *sess = source_p->localClient->sess;

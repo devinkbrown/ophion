@@ -46,8 +46,84 @@
 #include "match.h"
 #include "channel_access.h"
 #include "s_user.h"
+#include "services.h"
+#include "services_db.h"
 
 static const char ircx_access_desc[] = "Provides IRCX ACCESS command";
+
+/*
+ * Map IRCX CHFL_* channel access flags to services CA_* flags for
+ * persistence in the services database.  Returns 0 for flags that are
+ * handled through mode lists (DENY/GRANT/QUIET) rather than svc_chanaccess.
+ */
+static uint32_t
+ircx_to_ca_flags(unsigned int chfl)
+{
+	if (chfl & CHFL_ADMIN)   return CA_SOP | CA_OWNER;
+	if (chfl & CHFL_CHANOP)  return CA_AOP;
+	if (chfl & CHFL_VOICE)   return CA_VOP;
+	return 0;
+}
+
+/*
+ * Upsert a services chanaccess entry for a registered channel.
+ * Creates or updates the in-memory entry in reg->access and persists it.
+ */
+static void
+svc_access_upsert(struct svc_chanreg *reg, const char *channel,
+                  const char *entity, uint32_t ca_flags,
+                  const char *setter)
+{
+	struct svc_chanaccess *sca = NULL;
+	rb_dlink_node *ptr;
+
+	RB_DLINK_FOREACH(ptr, reg->access.head)
+	{
+		struct svc_chanaccess *ca = ptr->data;
+		if (irccmp(ca->entity, entity) == 0)
+		{
+			sca = ca;
+			break;
+		}
+	}
+
+	if (sca == NULL)
+	{
+		sca = rb_malloc(sizeof(*sca));
+		memset(sca, 0, sizeof(*sca));
+		rb_dlinkAdd(sca, &sca->node, &reg->access);
+	}
+
+	rb_strlcpy(sca->entity, entity, sizeof(sca->entity));
+	sca->flags  = ca_flags;
+	rb_strlcpy(sca->setter, setter,  sizeof(sca->setter));
+	sca->set_ts = rb_current_time();
+
+	svc_db_chanaccess_add(channel, sca);
+}
+
+/*
+ * Remove a services chanaccess entry for a registered channel.
+ */
+static void
+svc_access_delete(struct svc_chanreg *reg, const char *channel,
+                  const char *entity)
+{
+	rb_dlink_node *ptr, *nptr;
+
+	RB_DLINK_FOREACH_SAFE(ptr, nptr, reg->access.head)
+	{
+		struct svc_chanaccess *ca = ptr->data;
+		if (irccmp(ca->entity, entity) == 0)
+		{
+			rb_dlinkDelete(ptr, &reg->access);
+			rb_free(ca);
+			break;
+		}
+	}
+
+	svc_db_chanaccess_delete(channel, entity);
+}
 
 /* check if client has god mode (+G) active */
 static inline bool
@@ -375,6 +451,9 @@ handle_access_clear(struct Channel *chptr, struct Client *source_p, const char *
 	/* clear access_list entries (membership levels) */
 	if (level_match != ACCESS_DENY_FLAG && level_match != ACCESS_GRANT_FLAG)
 	{
+		struct svc_chanreg *reg = (services.enabled && MyClient(source_p))
+		                         ? svc_chanreg_find(chptr->chname) : NULL;
+
 		RB_DLINK_FOREACH_SAFE(iter, next, chptr->access_list.head)
 		{
 			struct AccessEntry *ae = iter->data;
@@ -386,6 +465,9 @@ handle_access_clear(struct Channel *chptr, struct Client *source_p, const char *
 				":%s TACCESS %s %ld %ld %s :",
 				use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
 				ae->mask);
+
+			if (reg != NULL)
+				svc_access_delete(reg, chptr->chname, ae->mask);
 
 			channel_access_delete(chptr, ae->mask);
 		}
@@ -531,7 +613,18 @@ handle_access_delete(struct Channel *chptr, struct Client *source_p, const char 
 		use_id(&me), chptr->chname, (long)chptr->channelts, (long)ae->when,
 		ae->mask);
 
-	channel_access_delete(chptr, ae->mask);
+	char saved_mask[BANLEN + 1];
+	rb_strlcpy(saved_mask, ae->mask, sizeof(saved_mask));
+
+	channel_access_delete(chptr, saved_mask);
+
+	/* Services persistence */
+	if (services.enabled && MyClient(source_p))
+	{
+		struct svc_chanreg *reg = svc_chanreg_find(chptr->chname);
+		if (reg != NULL)
+			svc_access_delete(reg, chptr->chname, saved_mask);
+	}
 }
 
 static void
@@ -654,6 +747,18 @@ handle_access_upsert(struct Channel *chptr, struct Client *source_p, const char 
 	}
 
 	struct AccessEntry *ae = channel_access_upsert(chptr, source_p, mask, newflags);
+
+	/* Services persistence: sync to DB for registered channels */
+	if (services.enabled && MyClient(source_p))
+	{
+		uint32_t ca_flags = ircx_to_ca_flags(newflags);
+		if (ca_flags != 0)
+		{
+			struct svc_chanreg *reg = svc_chanreg_find(chptr->chname);
+			if (reg != NULL)
+				svc_access_upsert(reg, chptr->chname, ae->mask, ca_flags, source_p->name);
+		}
+	}
 
 	if (MyClient(source_p))
 	{

@@ -190,6 +190,16 @@ sasl_acct_external_start(struct sasl_session *sess,
 {
 	outbuf->buf = NULL;
 	outbuf->len = 0;
+
+	/* Fail immediately if the client has no TLS certificate — there is no
+	 * point in sending AUTHENTICATE + and waiting for a payload that cannot
+	 * possibly authenticate without a cert fingerprint. */
+	if(sess->client->certfp == NULL)
+	{
+		oper_log_failure(sess->client, "*", "no client certificate", "SASL EXTERNAL");
+		return SASL_MRESULT_FAILURE;
+	}
+
 	return SASL_MRESULT_CONTINUE;
 }
 

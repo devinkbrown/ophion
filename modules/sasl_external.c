@@ -55,9 +55,19 @@ static const char sasl_external_desc[] =
 static enum sasl_mechanism_result
 sasl_external_start(struct sasl_session *sess, struct sasl_output_buf *outbuf)
 {
-	/* EXTERNAL needs no server challenge; tell the core to send AUTHENTICATE + */
 	outbuf->buf = NULL;
 	outbuf->len = 0;
+
+	/* Fail immediately if the client has no TLS certificate — there is no
+	 * point in sending AUTHENTICATE + and waiting for a payload that cannot
+	 * possibly authenticate without a cert fingerprint. */
+	if(sess->client->certfp == NULL)
+	{
+		oper_log_failure(sess->client, "*", "no client certificate", "SASL EXTERNAL");
+		return SASL_MRESULT_FAILURE;
+	}
+
+	/* EXTERNAL needs no server challenge; tell the core to send AUTHENTICATE + */
 	return SASL_MRESULT_CONTINUE;
 }
 
