@@ -25,8 +25,14 @@
  * compile time but not reachable from the functions under test.
  * ---------------------------------------------------------------------- */
 
-/* Bring in the implementation under test (DISCORD_NO_MAIN passed via -D). */
+/* Bring in the implementation under test (DISCORD_NO_MAIN passed via -D).
+ * Suppress unused-function warnings: the test only exercises pure codec
+ * helpers; runtime-only statics (ws_read, read_ircd, etc.) are intentionally
+ * unreachable here. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "../discordd.c"
+#pragma GCC diagnostic pop
 
 /* -------------------------------------------------------------------------
  * Test framework

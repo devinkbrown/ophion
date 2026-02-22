@@ -454,7 +454,8 @@ gw_send_identify(void)
 static void
 gw_send_resume(void)
 {
-	char buf[512];
+	/* gw_token[512] + gw_sid[128] + fixed JSON overhead (~50) = ~690 max */
+	char buf[1024];
 	snprintf(buf, sizeof(buf),
 		"{\"op\":6,\"d\":{\"token\":\"%s\",\"session_id\":\"%s\",\"seq\":%d}}",
 		gw_token, gw_sid, gw_seq);
@@ -831,7 +832,8 @@ rest_send_typing(const char *channel_id)
 	int fd;
 	SSL_CTX *ctx;
 	SSL *ssl;
-	char req[512];
+	/* gw_token[512] + channel_id(~20) + HTTP headers(~100) = ~630 max */
+	char req[1024];
 
 	fd = tcp_connect(DISCORD_API_HOST, DISCORD_API_PORT);
 	if(fd == -1) return;
@@ -939,9 +941,10 @@ read_ircd(void)
 }
 
 /* -------------------------------------------------------------------------
- * Main event loop
+ * Main event loop — only referenced from main(), excluded in test builds.
  * ---------------------------------------------------------------------- */
 
+#ifndef DISCORD_NO_MAIN
 static void
 run(void)
 {
@@ -1005,7 +1008,6 @@ run(void)
  * main
  * ---------------------------------------------------------------------- */
 
-#ifndef DISCORD_NO_MAIN
 int
 main(int argc, char *argv[])
 {
