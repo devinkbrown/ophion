@@ -114,11 +114,18 @@ struct mapi_mheader_av2
 	unsigned long int mapi_datecode;	/* Unix timestamp of module's build */
 };
 
+/* Ensure _mheader is always visible from DSOs compiled with -fvisibility=hidden. */
+#if defined(__GNUC__) || defined(__clang__)
+# define MAPI_HEADER_EXPORT __attribute__((visibility("default")))
+#else
+# define MAPI_HEADER_EXPORT
+#endif
+
 #define DECLARE_MODULE_AV1(name, reg, unreg, cl, hl, hfnlist, v) \
-	struct mapi_mheader_av1 _mheader = { MAPI_V1, reg, unreg, cl, hl, hfnlist, v}
+	MAPI_HEADER_EXPORT struct mapi_mheader_av1 _mheader = { MAPI_V1, reg, unreg, cl, hl, hfnlist, v}
 
 #define DECLARE_MODULE_AV2(name, reg, unreg, cl, hl, hfnlist, caplist, v, desc) \
-	struct mapi_mheader_av2 _mheader = { MAPI_V2, reg, unreg, cl, hl, hfnlist, caplist, v, desc, DATECODE}
+	MAPI_HEADER_EXPORT struct mapi_mheader_av2 _mheader = { MAPI_V2, reg, unreg, cl, hl, hfnlist, caplist, v, desc, DATECODE}
 
 struct modreload
 {

@@ -456,7 +456,15 @@ load_a_module(const char *path, bool warn, int origin, bool core)
 	if((c = rb_strcasestr(mod_displayname, LT_MODULE_EXT)) != NULL)
 		*c = '\0';
 
+	/* RTLD_LOCAL: module symbols don't pollute the global namespace.
+	 * RTLD_NOW:   resolve all symbols at load time so failures surface immediately.
+	 * RTLD_DEEPBIND (Linux): prefer symbols within the DSO over the ircd's own
+	 *             globals, preventing accidental symbol hijacking between modules. */
+#ifdef RTLD_DEEPBIND
+	tmpptr = dlopen(path, RTLD_LOCAL | RTLD_NOW | RTLD_DEEPBIND);
+#else
 	tmpptr = dlopen(path, RTLD_LOCAL | RTLD_NOW);
+#endif
 
 	if(tmpptr == NULL)
 	{
@@ -475,10 +483,10 @@ load_a_module(const char *path, bool warn, int origin, bool core)
 	 * as a single int in order to determine the API version.
 	 *      -larne.
 	 */
+	/* _mheader is guaranteed visible: modules are built with -fvisibility=hidden
+	 * and DECLARE_MODULE_AV{1,2} marks _mheader __attribute__((visibility("default"))). */
 	mapi_version = (int *) (uintptr_t) dlsym(tmpptr, "_mheader");
-	if((mapi_version == NULL
-	    && (mapi_version = (int *) (uintptr_t) dlsym(tmpptr, "__mheader")) == NULL)
-	   || MAPI_MAGIC(*mapi_version) != MAPI_MAGIC_HDR)
+	if(mapi_version == NULL || MAPI_MAGIC(*mapi_version) != MAPI_MAGIC_HDR)
 	{
 		sendto_realops_snomask(SNO_GENERAL, L_ALL,
 				     "Data format error: module %s has no MAPI header.",
