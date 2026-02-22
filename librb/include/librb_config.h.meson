@@ -7,6 +7,8 @@
 #mesondefine HAVE_GMTIME_R
 #mesondefine HAVE_STRTOK_R
 #mesondefine HAVE_USLEEP
+#mesondefine HAVE_NANOSLEEP
+#mesondefine HAVE_CLOCK_NANOSLEEP
 #mesondefine HAVE_POSIX_SPAWN
 #mesondefine HAVE_GETEXECNAME
 #mesondefine HAVE_STRLCAT
@@ -32,6 +34,7 @@
 #mesondefine HAVE_ACCEPT4
 #mesondefine HAVE_PIPE2
 #mesondefine HAVE_CLOCK_GETTIME
+#mesondefine HAVE_SO_NOSIGPIPE
 
 #mesondefine HAVE_LIBURING
 

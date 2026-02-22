@@ -121,6 +121,8 @@ check_functions = [
   ['HAVE_GMTIME_R', 'gmtime_r', 'time.h'],
   ['HAVE_STRTOK_R', 'strtok_r', 'string.h'],
   ['HAVE_USLEEP', 'usleep', 'unistd.h'],
+  ['HAVE_NANOSLEEP', 'nanosleep', 'time.h'],
+  ['HAVE_CLOCK_NANOSLEEP', 'clock_nanosleep', 'time.h'],
   ['HAVE_POSIX_SPAWN', 'posix_spawn', 'spawn.h'],
   ['HAVE_GETEXECNAME', 'getexecname', 'stdlib.h'],
   ['HAVE_STRLCAT', 'strlcat', 'string.h'],
@@ -164,6 +166,11 @@ foreach f : gnu_ext_functions
     cdata.set(f.get(0), 1)
   endif
 endforeach
+
+# Socket constants checked as header symbols (not functions).
+if cc.has_header_symbol('sys/socket.h', 'SO_NOSIGPIPE')
+  cdata.set('HAVE_SO_NOSIGPIPE', 1)
+endif
 
 # paths
 prefix = get_option('prefix')

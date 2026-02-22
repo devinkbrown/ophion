@@ -1013,7 +1013,7 @@ main(int argc, char *argv[])
 	int maxfd;
 
 	(void)argc; (void)argv;
-	signal(SIGPIPE, SIG_IGN);
+	sigaction(SIGPIPE, &(struct sigaction){ .sa_handler = SIG_IGN }, NULL);
 
 	ifd_s   = getenv("IFD");
 	ofd_s   = getenv("OFD");

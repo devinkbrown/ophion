@@ -91,40 +91,45 @@ rb_spawn_process(const char *path, const char **argv)
 }
 #endif
 
-#ifndef HAVE_GETTIMEOFDAY
 int
-rb_gettimeofday(struct timeval *tv, void *tz)
+rb_gettimeofday(struct timeval *tv, void *tz __attribute__((unused)))
 {
 	if(tv == NULL)
 	{
 		errno = EFAULT;
 		return -1;
 	}
-	tv->tv_usec = 0;
-	if(time(&tv->tv_sec) == -1)
+#if defined(HAVE_CLOCK_GETTIME)
+	/* clock_gettime(CLOCK_REALTIME) is a vDSO call on Linux/BSD —
+	 * no kernel entry, nanosecond resolution, proper POSIX standard. */
+	struct timespec ts;
+	if(clock_gettime(CLOCK_REALTIME, &ts) == -1)
 		return -1;
+	tv->tv_sec  = ts.tv_sec;
+	tv->tv_usec = (suseconds_t)(ts.tv_nsec / 1000);
 	return 0;
-}
+#elif defined(HAVE_GETTIMEOFDAY)
+	return gettimeofday(tv, NULL);
 #else
-int
-rb_gettimeofday(struct timeval *tv, void *tz)
-{
-	return (gettimeofday(tv, tz));
-}
+	tv->tv_usec = 0;
+	return (time(&tv->tv_sec) == -1) ? -1 : 0;
 #endif
+}
 
 void
 rb_sleep(unsigned int seconds, unsigned int useconds)
 {
-#ifdef HAVE_NANOSLEEP
-	struct timespec tv;
-	tv.tv_nsec = (useconds * 1000);
-	tv.tv_sec = seconds;
-	nanosleep(&tv, NULL);
+	struct timespec ts = {
+		.tv_sec  = seconds,
+		.tv_nsec = (long)useconds * 1000L,
+	};
+#if defined(HAVE_CLOCK_NANOSLEEP)
+	/* CLOCK_MONOTONIC sleep is immune to NTP wall-clock adjustments. */
+	clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
+#elif defined(HAVE_NANOSLEEP)
+	nanosleep(&ts, NULL);
 #else
-	struct timeval tv;
-	tv.tv_sec = seconds;
-	tv.tv_usec = useconds;
+	struct timeval tv = { .tv_sec = seconds, .tv_usec = useconds };
 	select(0, NULL, NULL, NULL, &tv);
 #endif
 }
