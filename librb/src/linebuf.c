@@ -405,57 +405,66 @@ rb_linebuf_get(buf_head_t * bufhead, char *buf, int buflen, int partial, int raw
 	int cpylen;
 	char *start, *ch;
 
-	/* make sure we have a line */
-	if(bufhead->list.head == NULL)
-		return 0;	/* Obviously not.. hrm. */
-
-	bufline = bufhead->list.head->data;
-
-	/* make sure that the buffer was actually *terminated */
-	if(!(partial || bufline->terminated))
-		return 0;	/* Wait for more data! */
-
-	if(buflen < bufline->len)
-		cpylen = buflen - 1;
-	else
-		cpylen = bufline->len;
-
-	/* Copy it */
-	start = bufline->buf;
-
-	/* if we left extraneous '\r\n' characters in the string,
-	 * and we don't want to read the raw data, clean up the string.
-	 */
-	if(bufline->raw && !raw)
+	for(;;)
 	{
-		/* skip leading EOL characters */
-		while(cpylen && (*start == '\r' || *start == '\n'))
+		/* make sure we have a line */
+		if(bufhead->list.head == NULL)
+			return 0;	/* Obviously not.. hrm. */
+
+		bufline = bufhead->list.head->data;
+
+		/* make sure that the buffer was actually *terminated */
+		if(!(partial || bufline->terminated))
+			return 0;	/* Wait for more data! */
+
+		if(buflen < bufline->len)
+			cpylen = buflen - 1;
+		else
+			cpylen = bufline->len;
+
+		/* Copy it */
+		start = bufline->buf;
+
+		/* if we left extraneous '\r\n' characters in the string,
+		 * and we don't want to read the raw data, clean up the string.
+		 */
+		if(bufline->raw && !raw)
 		{
-			start++;
-			cpylen--;
+			/* skip leading EOL characters */
+			while(cpylen && (*start == '\r' || *start == '\n'))
+			{
+				start++;
+				cpylen--;
+			}
+			/* skip trailing EOL characters */
+			ch = &start[cpylen - 1];
+			while(cpylen && (*ch == '\r' || *ch == '\n'))
+			{
+				ch--;
+				cpylen--;
+			}
 		}
-		/* skip trailing EOL characters */
-		ch = &start[cpylen - 1];
-		while(cpylen && (*ch == '\r' || *ch == '\n'))
-		{
-			ch--;
-			cpylen--;
-		}
+
+		/* Deallocate the line */
+		rb_linebuf_done_line(bufhead, bufline, bufhead->list.head);
+
+		/* Empty lines (bare CRLF) produce cpylen == 0.  Silently
+		 * discard them and try the next line so that callers never
+		 * mistake an empty line for "no data available". */
+		if(cpylen == 0)
+			continue;
+
+		memcpy(buf, start, cpylen);
+
+		/* convert CR/LF to NULL */
+		if(!raw)
+			buf[cpylen] = '\0';
+
+		lrb_assert(cpylen >= 0);
+
+		/* return how much we copied */
+		return cpylen;
 	}
-
-	memcpy(buf, start, cpylen);
-
-	/* convert CR/LF to NULL */
-	if(!raw)
-		buf[cpylen] = '\0';
-
-	lrb_assert(cpylen >= 0);
-
-	/* Deallocate the line */
-	rb_linebuf_done_line(bufhead, bufline, bufhead->list.head);
-
-	/* return how much we copied */
-	return cpylen;
 }
 
 /*

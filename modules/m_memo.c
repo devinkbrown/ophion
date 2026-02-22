@@ -57,7 +57,7 @@ count_memos_for(const char *account)
 	if (!svc_db_memo_load_for(account, &list))
 		return 0;
 
-	count = (int) rb_dlink_length(&list);
+	count = (int) rb_dlink_list_length(&list);
 
 	RB_DLINK_FOREACH_SAFE(ptr, next_ptr, list.head)
 	{
@@ -177,7 +177,7 @@ memo_list(struct Client *source_p)
 		return;
 	}
 
-	if (rb_dlink_length(&list) == 0)
+	if (rb_dlink_list_length(&list) == 0)
 	{
 		svc_notice(source_p, "MemoServ", "You have no memos.");
 		return;
