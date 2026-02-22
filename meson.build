@@ -167,6 +167,7 @@ check_functions = [
   ['HAVE_PORT_CREATE', 'port_create', 'port.h'],
   ['HAVE_EPOLL_CTL', 'epoll_ctl', 'sys/epoll.h'],
   ['HAVE_ARC4RANDOM', 'arc4random', 'stdlib.h'],
+  ['HAVE_ARC4RANDOM_BUF', 'arc4random_buf', 'stdlib.h'],
   ['HAVE_GETRUSAGE', 'getrusage', 'sys/resource.h'],
   ['HAVE_TIMERFD_CREATE', 'timerfd_create', 'sys/timerfd.h'],
 ]
