@@ -28,6 +28,7 @@ Coverage
   §16 DROP stress               (wrong-pw flood, self-drop, oper mass-drop, hierarchy)
   §17 SENDPASS stress           (rapid requests, wrong-token flood, full cycle, concurrent)
   §18 JUPE stress               (mass cycles, many entries, concurrent, invalid name, non-oper)
+  §19 Module stress             (MODLIST, MODLOAD/UNLOAD/RELOAD, core guard, nonexistent)
 
 Run:  python3 tests/test_stress.py
       (ircd must be listening on 127.0.0.1:16667 with services enabled)
@@ -1994,6 +1995,124 @@ def test_jupelist_empty():
 
 
 # ===========================================================================
+# §19  MODULE STRESS
+# ===========================================================================
+#
+# Exercises MODLIST / MODLOAD / MODUNLOAD / MODRELOAD via oper commands.
+# Uses m_time.so as the reload target — it is simple, stateless, and
+# non-critical, so repeated unload/reload is safe.
+#
+
+_MOD_TARGET = "m_time"   # non-core module safe to unload/reload
+_CORE_MOD   = "m_join"   # a genuine core module that must be unload-protected
+
+
+def test_modlist_returns_702_703():
+    """Oper MODLIST must return at least one 702 line and end with 703."""
+    op = _oper("ml")
+    op.send("MODLIST")
+    lines = op.collect(seconds=4)
+    got702 = sum(1 for l in lines if " 702 " in l)
+    got703 = any(" 703 " in l for l in lines)
+    _check(f"modlist: ≥1 RPL_MODLIST (702) lines ({got702})", got702 >= 1)
+    _check("modlist: RPL_ENDOFMODLIST (703) received", got703)
+    op.close()
+
+
+def test_modlist_nonoper_blocked():
+    """Non-oper MODLIST must be rejected with 481 ERR_NOPRIVILEGES."""
+    c = _connect("mln")
+    c.send("MODLIST")
+    lines = c.collect(seconds=2)
+    _check("modlist-nonoper: → 481", any(" 481 " in l for l in lines))
+    c.close()
+
+
+def test_modload_already_loaded():
+    """MODLOAD on an already-loaded module must report 'already loaded'."""
+    op = _oper("mla")
+    op.send(f"MODLOAD {_MOD_TARGET}")
+    got = op.wait(r"already loaded", timeout=3)
+    _check("modload-already-loaded: 'already loaded' notice received", got is not None)
+    op.close()
+
+
+def test_modunload_core_blocked():
+    """MODUNLOAD on a core module must be refused ('core module')."""
+    op = _oper("muc")
+    op.send(f"MODUNLOAD {_CORE_MOD}")
+    got = op.wait(r"core module", timeout=3)
+    _check("modunload-core: core module unload blocked", got is not None)
+    op.close()
+
+
+def test_modunload_and_reload():
+    """MODUNLOAD then MODLOAD a non-core module; module must be functional after reload."""
+    op = _oper("mur")
+    # Unload m_time
+    op.send(f"MODUNLOAD {_MOD_TARGET}")
+    unloaded = op.wait(r"(unloaded|Module.*not loaded|Module.*is not loaded|Unloaded)", timeout=4)
+    # Verify it is gone from MODLIST
+    op.send("MODLIST")
+    modlist_lines = op.collect(seconds=3)
+    was_present = any(_MOD_TARGET in l for l in modlist_lines)
+    # Reload it
+    op.send(f"MODLOAD {_MOD_TARGET}")
+    reloaded = op.wait(r"(loaded|Module.*loaded)", timeout=4)
+    # Verify it is back in MODLIST
+    op.send("MODLIST")
+    modlist_after = op.collect(seconds=3)
+    is_back = any(_MOD_TARGET in l for l in modlist_after)
+    _check("modunload-reload: module unloaded without error", unloaded is not None)
+    _check("modunload-reload: module absent from MODLIST after unload", not was_present)
+    _check("modunload-reload: module back in MODLIST after MODLOAD", is_back)
+    op.close()
+
+
+def test_modreload():
+    """MODRELOAD a non-core module; server must survive and module must remain listed."""
+    op = _oper("mr")
+    op.send(f"MODRELOAD {_MOD_TARGET}")
+    # MODRELOAD is deferred by 1 second via rb_event; wait long enough
+    op.drain(2.5)
+    op.send("PING :post-modreload")
+    alive = op.wait(r"PONG.*post-modreload", timeout=5)
+    _check("modreload: server alive after MODRELOAD", alive is not None)
+    # Confirm module is still loaded
+    op.send("MODLIST")
+    lines = op.collect(seconds=3)
+    still_there = any(_MOD_TARGET in l for l in lines)
+    _check("modreload: module present in MODLIST after reload", still_there)
+    op.close()
+
+
+def test_modload_nonexistent():
+    """MODLOAD on a nonexistent module name must return an error notice, not crash."""
+    op = _oper("mne")
+    op.send("MODLOAD no_such_module_xyz")
+    got = op.wait(r"(Error|Cannot|not found|No such)", timeout=3)
+    op.send("PING :after-bad-modload")
+    alive = op.wait(r"PONG.*after-bad-modload", timeout=4)
+    _check("modload-nonexistent: error notice received", got is not None)
+    _check("modload-nonexistent: server alive after bad MODLOAD", alive is not None)
+    op.close()
+
+
+def test_modreload_mass():
+    """MODRELOAD five non-core modules in sequence; server must stay alive throughout."""
+    safe_mods = ["m_time", "m_ping", "m_pong", "m_admin", "m_map"]
+    op = _oper("mm")
+    for mod in safe_mods:
+        op.send(f"MODRELOAD {mod}")
+        op.drain(2.0)   # each reload is deferred 1 s
+    op.send("PING :mass-modreload")
+    alive = op.wait(r"PONG.*mass-modreload", timeout=8)
+    _check(f"modreload-mass: server alive after reloading {len(safe_mods)} modules",
+           alive is not None)
+    op.close()
+
+
+# ===========================================================================
 # TEST REGISTRY
 # ===========================================================================
 
@@ -2106,6 +2225,15 @@ TESTS = [
     ("jupe-nonoper: 20 attempts → 481 each",                 test_jupe_nonoper_blocked),
     ("unjupe-nonexistent: graceful when not juped",          test_unjupe_nonexistent),
     ("jupelist-empty: 'No active jupes' reported",           test_jupelist_empty),
+    # §19 Module stress
+    ("modlist: 702 lines + 703 end marker",                  test_modlist_returns_702_703),
+    ("modlist-nonoper: → 481",                               test_modlist_nonoper_blocked),
+    ("modload-already-loaded: 'already loaded' notice",      test_modload_already_loaded),
+    ("modunload-core: core module unload blocked",           test_modunload_core_blocked),
+    ("modunload-reload: unload + reload, module works",      test_modunload_and_reload),
+    ("modreload: server alive, module listed after reload",  test_modreload),
+    ("modload-nonexistent: error notice, server survives",   test_modload_nonexistent),
+    ("modreload-mass: 5 module reloads, server alive",       test_modreload_mass),
 ]
 
 
