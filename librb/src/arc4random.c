@@ -24,6 +24,10 @@
  * for encryption, but will generate good random numbers.
  *
  * RC4 is a registered trademark of RSA Laboratories.
+ *
+ * Seed modernization (2026): use getrandom(2) (Linux 3.17+) for the
+ * entropy source instead of opening /dev/urandom, avoiding fd
+ * allocation, EINTR handling, and partial-read retry logic.
  */
 
 
@@ -36,6 +40,11 @@
 
 #ifdef HAVE_GETRUSAGE
 #include <sys/resource.h>
+#endif
+
+#if defined(__linux__)
+#  include <sys/random.h>   /* getrandom(2), Linux 3.17+ */
+#  define HAVE_GETRANDOM 1
 #endif
 
 
@@ -89,69 +98,26 @@ arc4_addrandom(struct arc4_stream *as, uint8_t *dat, int datlen)
 static void
 arc4_stir(struct arc4_stream *as)
 {
-	struct timeval tv;
-	pid_t pid;
 	int n;
-#ifdef _WIN32
-	HMODULE lib;
-#endif
-	/* XXX this doesn't support egd sources or similiar */
+	uint8_t rnd[128];
 
-	pid = getpid();
-	arc4_addrandom(as, (void *)&pid, sizeof(pid));
-
-	rb_gettimeofday(&tv, NULL);
-	arc4_addrandom(as, (void *)&tv.tv_sec, sizeof(&tv.tv_sec));
-	arc4_addrandom(as, (void *)&tv.tv_usec, sizeof(&tv.tv_usec));
-	rb_gettimeofday(&tv, NULL);
-	arc4_addrandom(as, (void *)&tv.tv_usec, sizeof(&tv.tv_usec));
-
-#if defined(HAVE_GETRUSAGE) && RUSAGE_SELF
-	{
-		struct rusage buf;
-		getrusage(RUSAGE_SELF, &buf);
-		arc4_addrandom(as, (void *)&buf, sizeof(buf));
-	memset(&buf, 0, sizeof(buf))}
-#endif
-
-#if !defined(_WIN32)
-	{
-		uint8_t rnd[128];
-		int fd;
-		fd = open("/dev/urandom", O_RDONLY);
-		if(fd != -1)
-		{
-			read(fd, rnd, sizeof(rnd));
-			close(fd);
-			arc4_addrandom(as, (void *)rnd, sizeof(rnd));
-			memset(&rnd, 0, sizeof(rnd));
-		}
-
-	}
+#if defined(HAVE_GETRANDOM)
+	/* Single atomic call — no fd allocation, no partial-read loop. */
+	getrandom(rnd, sizeof(rnd), 0);
+	arc4_addrandom(as, rnd, sizeof(rnd));
 #else
 	{
-		LARGE_INTEGER performanceCount;
-		if(QueryPerformanceCounter(&performanceCount))
+		int fd = open("/dev/urandom", O_RDONLY);
+		if(fd != -1)
 		{
-			arc4_addrandom(as, (void *)&performanceCount, sizeof(performanceCount));
-		}
-		lib = LoadLibrary("ADVAPI32.DLL");
-		if(lib)
-		{
-			uint8_t rnd[128];
-			BOOLEAN(APIENTRY * pfn) (void *, ULONG) =
-				(BOOLEAN(APIENTRY *) (void *, ULONG))GetProcAddress(lib,
-										    "SystemFunction036");
-			if(pfn)
-			{
-				if(pfn(rnd, sizeof(rnd)) == TRUE)
-					arc4_addrandom(as, (void *)rnd, sizeof(rnd));
-				memset(&rnd, 0, sizeof(rnd));
-			}
+			ssize_t r = read(fd, rnd, sizeof(rnd));
+			close(fd);
+			if(r > 0)
+				arc4_addrandom(as, rnd, (int)r);
 		}
 	}
 #endif
-
+	memset(rnd, 0, sizeof(rnd));
 
 	/*
 	 * Throw away the first N words of output, as suggested in the

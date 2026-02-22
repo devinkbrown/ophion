@@ -44,51 +44,22 @@ bison_gen = generator(bison,
   output: ['@BASENAME@.c', '@BASENAME@.h'],
   arguments: ['@INPUT@', '--defines=@OUTPUT1@', '--output=@OUTPUT0@'])
 
-# TLS: wolfSSL (OpenSSL-compatible) is preferred, then mbedtls, then gnutls.
-# wolfSSL provides both the crypto (libcrypto equivalent) and TLS layers.
-wolfssl_dep = dependency('wolfssl', required: false)
-if wolfssl_dep.found()
-  cdata.set('HAVE_LIBCRYPTO', true)
-  # Make wolfSSL's OpenSSL compatibility headers visible as <openssl/...>
-  add_project_arguments('-I/usr/include/wolfssl', language: 'c')
-  # Force-include wolfssl/options.h so OPENSSL_EXTRA and related macros are
-  # defined before any wolfSSL or wolfSSL-OpenSSL-compat header is seen.
-  add_project_arguments('-include', 'wolfssl/options.h', language: 'c')
-endif
+# TLS: wolfSSL is the sole TLS provider.  It exposes an OpenSSL-compatible
+# API so the existing openssl.c backend is reused as-is.
+wolfssl_dep = dependency('wolfssl', required: true)
 
-# grr, mbedtls has no pc file so we have to do this ourselves.  gross.
-mbedtls_lib = cc.find_library('mbedtls', has_headers: ['mbedtls/ssl.h'], required: false)
-mbedcrypto_lib = cc.find_library('mbedcrypto', required: false)
-mbedx509_lib = cc.find_library('mbedx509', required: false)
+cdata.set('HAVE_WOLFSSL', true)
+cdata.set('HAVE_OPENSSL', true)   # openssl.c compiled via wolfSSL compat layer
+cdata.set('HAVE_LIBCRYPTO', true)
 
-if not wolfssl_dep.found() and mbedtls_lib.found() and mbedcrypto_lib.found() and mbedx509_lib.found()
-  mbedtls_dep = declare_dependency(include_directories: '/usr/include',
-    dependencies: [mbedtls_lib, mbedcrypto_lib, mbedx509_lib])
+# Expose wolfSSL's compat headers as <openssl/...> and ensure wolfssl/options.h
+# is force-included before any compat header so OPENSSL_EXTRA et al. are set.
+wolfssl_inc = run_command('pkg-config', '--variable=includedir', 'wolfssl',
+  check: true).stdout().strip()
+add_project_arguments('-I' + wolfssl_inc / 'wolfssl', language: 'c')
+add_project_arguments('-include', 'wolfssl/options.h', language: 'c')
 
-  cdata.set('HAVE_MBEDTLS', true)
-else
-  mbedtls_dep = disabler()
-endif
-
-if not wolfssl_dep.found() and not mbedtls_dep.found()
-  gnutls_dep = dependency('gnutls', required: false)
-
-  if gnutls_dep.found()
-    cdata.set('HAVE_GNUTLS', true)
-  endif
-else
-  gnutls_dep = disabler()
-endif
-
-if wolfssl_dep.found()
-  # wolfSSL is our OpenSSL replacement; use its compat layer.
-  libssl_dep = wolfssl_dep
-  cdata.set('HAVE_OPENSSL', true)
-elif not mbedtls_dep.found() and not gnutls_dep.found()
-  libssl_dep = disabler()
-else
-  libssl_dep = disabler()
-endif
+libssl_dep = wolfssl_dep
 
 # sqlite3 — required by ircd (services DB) and bandb.
 sqlite3_dep = dependency('sqlite3', required: true)
@@ -218,16 +189,8 @@ subdir('help')
 
 install_data('.ophion-keep', install_dir: log_dir)
 
-# Determine the active TLS provider for the summary.
-if wolfssl_dep.found()
-  tls_provider = 'wolfssl'
-elif mbedtls_dep.found()
-  tls_provider = 'mbedtls'
-elif gnutls_dep.found()
-  tls_provider = 'gnutls'
-else
-  tls_provider = 'none (TLS disabled)'
-endif
+tls_provider = 'wolfssl ' + run_command('pkg-config', '--modversion', 'wolfssl',
+  check: true).stdout().strip()
 
 summary({
   'TLS provider':           tls_provider,
