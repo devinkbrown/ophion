@@ -82,6 +82,35 @@ rsdb_init(rsdb_error_cb * ecb)
 		mlog(errbuf);
 		return -1;
 	}
+
+	/*
+	 * Performance and reliability tuning.
+	 *
+	 * WAL journal mode: writers don't block readers, and readers don't
+	 * block writers.  Much faster than the default DELETE mode for our
+	 * write-then-list pattern.
+	 *
+	 * synchronous=NORMAL: flush at checkpoints rather than every commit.
+	 * Safe enough for a ban database; the worst case is losing the last
+	 * few bans on an unclean shutdown, which is acceptable.
+	 *
+	 * busy_timeout: let SQLite wait up to 5 s before returning
+	 * SQLITE_BUSY, replacing the old manual 5×500 ms retry loops.
+	 *
+	 * cache_size: 8 MiB page cache avoids repeated disk reads for
+	 * list-all-bans operations.
+	 *
+	 * mmap_size: 32 MiB memory-mapped I/O for faster sequential reads.
+	 *
+	 * temp_store=MEMORY: keep temporary tables in RAM.
+	 */
+	sqlite3_exec(rb_bandb, "PRAGMA journal_mode=WAL",   NULL, NULL, NULL);
+	sqlite3_exec(rb_bandb, "PRAGMA synchronous=NORMAL", NULL, NULL, NULL);
+	sqlite3_exec(rb_bandb, "PRAGMA busy_timeout=5000",  NULL, NULL, NULL);
+	sqlite3_exec(rb_bandb, "PRAGMA cache_size=-8192",   NULL, NULL, NULL);
+	sqlite3_exec(rb_bandb, "PRAGMA mmap_size=33554432", NULL, NULL, NULL);
+	sqlite3_exec(rb_bandb, "PRAGMA temp_store=MEMORY",  NULL, NULL, NULL);
+
 	return 0;
 }
 
@@ -129,7 +158,6 @@ rsdb_exec(rsdb_callback cb, const char *format, ...)
 	va_list args;
 	char *errmsg;
 	unsigned int i;
-	int j;
 
 	va_start(args, format);
 	i = rs_vsnprintf(buf, sizeof(buf), format, args);
@@ -140,117 +168,120 @@ rsdb_exec(rsdb_callback cb, const char *format, ...)
 		mlog("fatal error: length problem with compiling sql");
 	}
 
+	/* busy_timeout (set in rsdb_init) handles SQLITE_BUSY waits
+	 * automatically; no manual retry loop is needed here. */
 	if((i = sqlite3_exec(rb_bandb, buf, (cb ? rsdb_callback_func : NULL), (void *)((uintptr_t)cb), &errmsg)))
 	{
-		switch (i)
-		{
-		case SQLITE_BUSY:
-			for(j = 0; j < 5; j++)
-			{
-				rb_sleep(0, 500000);
-				if(!sqlite3_exec
-				   (rb_bandb, buf, (cb ? rsdb_callback_func : NULL), (void *)((uintptr_t)cb), &errmsg))
-					return;
-			}
-
-			/* failed, fall through to default */
-			mlog("fatal error: problem with db file: %s", errmsg);
-			break;
-
-		default:
-			mlog("fatal error: problem with db file: %s", errmsg);
-			break;
-		}
+		mlog("fatal error: problem with db file: %s", errmsg);
 	}
 }
 
+/*
+ * rsdb_exec_fetch / rsdb_exec_fetch_end
+ *
+ * The old implementation used sqlite3_get_table(), which is deprecated
+ * since SQLite 3.x and loads the entire result set into a single flat
+ * array managed by SQLite's allocator.  We now use sqlite3_prepare_v2()
+ * + sqlite3_step() with rb_strdup()'d column values so that:
+ *
+ *   1. The result data is owned by us (freed in rsdb_exec_fetch_end).
+ *   2. We iterate the result set one row at a time, avoiding the
+ *      two-pass overhead of sqlite3_get_table().
+ *   3. The deprecated API is no longer used.
+ *
+ * The rsdb_table layout seen by callers is unchanged:
+ *   table.row[i][j]  — column j of data row i (NUL-terminated string).
+ */
 void
 rsdb_exec_fetch(struct rsdb_table *table, const char *format, ...)
 {
 	static char buf[BUFSIZE * 4];
 	va_list args;
-	char *errmsg;
-	char **data;
-	int pos;
-	unsigned int retval;
-	int i, j;
+	unsigned int fmtlen;
+	sqlite3_stmt *stmt;
+	int rc;
+	int ncol;
+	int capacity;
 
 	va_start(args, format);
-	retval = rs_vsnprintf(buf, sizeof(buf), format, args);
+	fmtlen = rs_vsnprintf(buf, sizeof(buf), format, args);
 	va_end(args);
 
-	if(retval >= sizeof(buf))
+	table->row       = NULL;
+	table->row_count = 0;
+	table->col_count = 0;
+	table->arg       = NULL;
+
+	if(fmtlen >= sizeof(buf))
 	{
 		mlog("fatal error: length problem with compiling sql");
-	}
-
-	if((retval =
-	    sqlite3_get_table(rb_bandb, buf, &data, &table->row_count, &table->col_count, &errmsg)))
-	{
-		int success = 0;
-
-		switch (retval)
-		{
-		case SQLITE_BUSY:
-			for(i = 0; i < 5; i++)
-			{
-				rb_sleep(0, 500000);
-				if(!sqlite3_get_table
-				   (rb_bandb, buf, &data, &table->row_count, &table->col_count,
-				    &errmsg))
-				{
-					success++;
-					break;
-				}
-			}
-
-			if(success)
-				break;
-
-			mlog("fatal error: problem with db file: %s", errmsg);
-			break;
-
-		default:
-			mlog("fatal error: problem with db file: %s", errmsg);
-			break;
-		}
-	}
-
-	/* we need to be able to free data afterward */
-	table->arg = data;
-
-	if(table->row_count == 0)
-	{
-		table->row = NULL;
 		return;
 	}
 
-	/* sqlite puts the column names as the first row */
-	pos = table->col_count;
-	table->row = rb_malloc(sizeof(char **) * table->row_count);
-	for(i = 0; i < table->row_count; i++)
+	if(sqlite3_prepare_v2(rb_bandb, buf, -1, &stmt, NULL) != SQLITE_OK)
 	{
-		table->row[i] = rb_malloc(sizeof(char *) * table->col_count);
+		mlog("fatal error: sqlite3_prepare_v2 failed: %s",
+		     sqlite3_errmsg(rb_bandb));
+		return;
+	}
 
-		for(j = 0; j < table->col_count; j++)
+	ncol             = sqlite3_column_count(stmt);
+	table->col_count = ncol;
+
+	capacity  = 16;
+	table->row = rb_malloc(sizeof(char **) * capacity);
+
+	while((rc = sqlite3_step(stmt)) == SQLITE_ROW)
+	{
+		int j;
+		char **row;
+
+		if(table->row_count >= capacity)
 		{
-			table->row[i][j] = data[pos++];
+			capacity *= 2;
+			table->row = rb_realloc(table->row, sizeof(char **) * capacity);
 		}
+
+		row = rb_malloc(sizeof(char *) * ncol);
+		for(j = 0; j < ncol; j++)
+		{
+			const char *val = (const char *)sqlite3_column_text(stmt, j);
+			row[j] = rb_strdup(val ? val : "");
+		}
+		table->row[table->row_count++] = row;
+	}
+
+	sqlite3_finalize(stmt);
+
+	if(rc != SQLITE_DONE)
+	{
+		mlog("fatal error: sqlite3_step failed: %s",
+		     sqlite3_errmsg(rb_bandb));
+	}
+
+	if(table->row_count == 0)
+	{
+		rb_free(table->row);
+		table->row = NULL;
 	}
 }
 
 void
 rsdb_exec_fetch_end(struct rsdb_table *table)
 {
-	int i;
+	int i, j;
 
 	for(i = 0; i < table->row_count; i++)
 	{
+		for(j = 0; j < table->col_count; j++)
+			rb_free(table->row[i][j]);
 		rb_free(table->row[i]);
 	}
 	rb_free(table->row);
 
-	sqlite3_free_table((char **)table->arg);
+	table->row = NULL;
+	/* row_count is intentionally left intact: callers (e.g. check_schema)
+	 * inspect it after this call to decide whether a row was found. */
 }
 
 void

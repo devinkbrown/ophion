@@ -297,7 +297,7 @@ setup_signals(void)
 #ifndef _WIN32
 	struct sigaction act;
 
-	act.sa_flags = 0;
+	act.sa_flags = SA_RESTART;
 	act.sa_handler = SIG_IGN;
 	sigemptyset(&act.sa_mask);
 	sigaddset(&act.sa_mask, SIGPIPE);
@@ -369,8 +369,18 @@ check_schema(void)
 		rsdb_exec_fetch_end(&table);
 
 		if(!table.row_count)
+		{
 			rsdb_exec(NULL,
 				  "CREATE TABLE %s (mask1 TEXT, mask2 TEXT, oper TEXT, time INTEGER, perm INTEGER, reason TEXT)",
 				  bandb_table[i]);
+			/* Index mask1 and the (mask1, mask2) pair so that
+			 * DELETE lookups are O(log n) rather than full scans. */
+			rsdb_exec(NULL,
+				  "CREATE INDEX %s_mask1 ON %s (mask1)",
+				  bandb_table[i], bandb_table[i]);
+			rsdb_exec(NULL,
+				  "CREATE INDEX %s_mask1_mask2 ON %s (mask1, mask2)",
+				  bandb_table[i], bandb_table[i]);
+		}
 	}
 }

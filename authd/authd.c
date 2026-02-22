@@ -165,7 +165,7 @@ setup_signals(void)
 #ifndef _WIN32
 	struct sigaction act;
 
-	act.sa_flags = 0;
+	act.sa_flags = SA_RESTART;
 	act.sa_handler = SIG_IGN;
 	sigemptyset(&act.sa_mask);
 	sigaddset(&act.sa_mask, SIGPIPE);
@@ -201,7 +201,6 @@ main(int argc, char *argv[])
 	}
 
 	rb_set_time();
-	setup_signals();
 
 	authd_option_handlers = rb_dictionary_create("authd options handlers", rb_strcasecmp);
 
