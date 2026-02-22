@@ -203,9 +203,13 @@ m_identify_account(struct Client *source_p, const char *account,
 		return;
 	}
 
-	/* Already identified? */
+	/* Already identified? Re-send 900 to confirm, then return. */
 	if(!EmptyString(source_p->user->suser))
 	{
+		sendto_one(source_p, form_str(RPL_LOGGEDIN),
+		           me.name, source_p->name,
+		           source_p->name, source_p->username, source_p->host,
+		           source_p->user->suser, source_p->user->suser);
 		svc_notice(source_p, "Services",
 		           "You are already identified as \2%s\2.",
 		           source_p->user->suser);

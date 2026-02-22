@@ -366,7 +366,7 @@ def test_nick_cycling():
     c = _connect("nc")
     failures = 0
     for i in range(30):
-        new = f"cy{_seq % 100000:05d}"
+        new = _nick("cy")
         c.send(f"NICK {new}")
         got = c.wait(rf"NICK.*{new}", timeout=3)
         if got is None:
