@@ -83,7 +83,8 @@ typedef enum {
 #define CHANREG_RESTRICTED 0x00000040u  /* only access-list users may join       */
 #define CHANREG_NOEXPIRE   0x00000080u  /* admin: never expire                   */
 #define CHANREG_GUARD      0x00000100u  /* server holds a virtual presence       */
-#define CHANREG_FANTASY    0x00000200u  /* enable !op / !voice fantasy commands  */
+#define CHANREG_FANTASY     0x00000200u  /* enable !op / !voice fantasy commands  */
+#define CHANREG_PROP_LOCKED 0x00000400u  /* only ADMIN/HOST may set channel props */
 
 /* =========================================================================
  * Channel access flags (CA_*) — unified with IRCX ACCESS

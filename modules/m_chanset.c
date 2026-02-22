@@ -491,6 +491,7 @@ m_chanset(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 	CHANSET_BOOL_FLAG("PRIVATE",    CHANREG_PRIVATE)
 	CHANSET_BOOL_FLAG("VERBOSE",    CHANREG_VERBOSE)
 	CHANSET_BOOL_FLAG("FANTASY",    CHANREG_FANTASY)
+	CHANSET_BOOL_FLAG("PROPLOCK",   CHANREG_PROP_LOCKED)
 
 #undef CHANSET_BOOL_FLAG
 
@@ -680,6 +681,6 @@ m_chanset(struct MsgBuf *msgbuf_p, struct Client *client_p, struct Client *sourc
 
 	svc_notice(source_p, "ChanServ",
 		"Unknown CHANSET option: \2%s\2.  Options: TOPICLOCK KEEPTOPIC SECURE GUARD "
-		"RESTRICTED PRIVATE VERBOSE FANTASY MODELOCK TOPIC URL DESC SUCCESSOR ACCESS",
+		"RESTRICTED PRIVATE VERBOSE FANTASY PROPLOCK MODELOCK TOPIC URL DESC SUCCESSOR ACCESS",
 		option);
 }

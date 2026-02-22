@@ -42,6 +42,7 @@
 #include "supported.h"
 #include "hash.h"
 #include "propertyset.h"
+#include "services.h"
 
 static const char ircx_prop_entity_channel_desc[] = "Provides IRCX PROP support for channels";
 
@@ -68,14 +69,25 @@ can_write_to_channel_property(struct Client *source_p, struct Channel *chptr,
                                const char *key, const char *value, int alevel)
 {
 	hook_data_prop_activity prop_activity;
+	struct svc_chanreg *reg;
+	int required_level = CHFL_CHANOP;
+
+	/* When PROPLOCK is set on a registered channel, only admin (+a) or above
+	 * may write properties — plain chanops are blocked. */
+	if (services.enabled)
+	{
+		reg = svc_chanreg_find(chptr->chname);
+		if (reg != NULL && (reg->flags & CHANREG_PROP_LOCKED))
+			required_level = CHFL_ADMIN;
+	}
 
 	prop_activity.client = source_p;
 	prop_activity.target = chptr->chname;
 	prop_activity.prop_list = &chptr->prop_list;
 	prop_activity.key = key;
-	prop_activity.value = value;   /* proposed value for range/format validation */
+	prop_activity.value = value;
 	prop_activity.alevel = alevel;
-	prop_activity.approved = alevel >= CHFL_CHANOP;
+	prop_activity.approved = alevel >= required_level;
 	prop_activity.target_ptr = chptr;
 	prop_activity.min_broadcast_alevel = 0;
 
