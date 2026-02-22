@@ -139,12 +139,28 @@ check_functions = [
   ['HAVE_EPOLL_CTL', 'epoll_ctl', 'sys/epoll.h'],
   ['HAVE_ARC4RANDOM', 'arc4random', 'stdlib.h'],
   ['HAVE_ARC4RANDOM_BUF', 'arc4random_buf', 'stdlib.h'],
+  ['HAVE_GETRANDOM', 'getrandom', 'sys/random.h'],
+  ['HAVE_GETENTROPY', 'getentropy', 'unistd.h'],
   ['HAVE_GETRUSAGE', 'getrusage', 'sys/resource.h'],
   ['HAVE_TIMERFD_CREATE', 'timerfd_create', 'sys/timerfd.h'],
+  ['HAVE_CLOCK_GETTIME', 'clock_gettime', 'time.h'],
 ]
 
 foreach f : check_functions
   if cc.has_function(f.get(1), prefix : '#include <' + f.get(2) + '>') and cc.has_header_symbol(f.get(2), f.get(1))
+    cdata.set(f.get(0), 1)
+  endif
+endforeach
+
+# GNU-extension functions that require _GNU_SOURCE to be visible in headers.
+# Checked separately with an explicit prefix so they're found on Linux.
+gnu_ext_functions = [
+  ['HAVE_ACCEPT4', 'accept4', 'sys/socket.h'],
+  ['HAVE_PIPE2',   'pipe2',   'unistd.h'],
+]
+foreach f : gnu_ext_functions
+  if cc.has_function(f.get(1),
+       prefix : '#define _GNU_SOURCE 1\n#include <' + f.get(2) + '>')
     cdata.set(f.get(0), 1)
   endif
 endforeach

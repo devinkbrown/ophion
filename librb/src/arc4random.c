@@ -25,9 +25,9 @@
  *
  * RC4 is a registered trademark of RSA Laboratories.
  *
- * Seed modernization (2026): use getrandom(2) (Linux 3.17+) for the
- * entropy source instead of opening /dev/urandom, avoiding fd
- * allocation, EINTR handling, and partial-read retry logic.
+ * Seed modernization (2026): use getrandom(2)/getentropy(3) where
+ * available instead of opening /dev/urandom, eliminating fd allocation,
+ * EINTR handling, and partial-read retry logic.
  */
 
 
@@ -42,9 +42,10 @@
 #include <sys/resource.h>
 #endif
 
-#if defined(__linux__)
-#  include <sys/random.h>   /* getrandom(2), Linux 3.17+ */
-#  define HAVE_GETRANDOM 1
+#if defined(HAVE_GETRANDOM)
+#  include <sys/random.h>   /* getrandom(2): Linux 3.17+, FreeBSD 12+ */
+#elif defined(HAVE_GETENTROPY)
+/* getentropy(3): OpenBSD 5.6+, FreeBSD 12+, macOS 10.12+ — in <unistd.h> */
 #endif
 
 
@@ -104,6 +105,10 @@ arc4_stir(struct arc4_stream *as)
 #if defined(HAVE_GETRANDOM)
 	/* Single atomic call — no fd allocation, no partial-read loop. */
 	getrandom(rnd, sizeof(rnd), 0);
+	arc4_addrandom(as, rnd, sizeof(rnd));
+#elif defined(HAVE_GETENTROPY)
+	/* getentropy() is limited to 256 bytes per call; 128 is safe. */
+	getentropy(rnd, sizeof(rnd));
 	arc4_addrandom(as, rnd, sizeof(rnd));
 #else
 	{

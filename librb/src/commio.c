@@ -23,6 +23,8 @@
  *
  */
 
+#define _GNU_SOURCE 1   /* accept4(), pipe2() */
+
 #include <librb_config.h>
 #include <rb_lib.h>
 #include <commio-int.h>
@@ -505,14 +507,11 @@ static void rb_accept_tryaccept(rb_fde_t *F, void *data __attribute__((unused)))
 		memset(&st, 0, sizeof(st));
 		addrlen = sizeof(st);
 
-		/* accept4() (Linux ≥ 2.6.28, FreeBSD ≥ 10, BSDs) atomically sets
-		 * SOCK_NONBLOCK + SOCK_CLOEXEC, eliminating two fcntl() syscalls
-		 * per connection.  ENOSYS fallback handles older kernels.       */
-#ifdef SOCK_NONBLOCK
+		/* accept4() atomically sets SOCK_NONBLOCK + SOCK_CLOEXEC,
+		 * saving two fcntl() syscalls per incoming connection.         */
+#ifdef HAVE_ACCEPT4
 		new_fd = accept4(F->fd, (struct sockaddr *)&st, &addrlen,
 		                 SOCK_NONBLOCK | SOCK_CLOEXEC);
-		if(new_fd < 0 && errno == ENOSYS)
-			new_fd = accept(F->fd, (struct sockaddr *)&st, &addrlen);
 #else
 		new_fd = accept(F->fd, (struct sockaddr *)&st, &addrlen);
 #endif
