@@ -1,9 +1,12 @@
 project('ophion', 'c',
   version : '0.8',
-  license : 'GPL-2-only',
-  meson_version : '>=0.50')
+  license : 'GPL-2.0-or-later',
+  meson_version : '>=0.53')
 
 cc = meson.get_compiler('c')
+
+# configuration_data must be declared before any cdata.set() calls below.
+cdata = configuration_data()
 
 # libdl
 libdl_lib = cc.find_library('dl', has_headers: ['dlfcn.h'], required: false)
@@ -41,52 +44,30 @@ bison_gen = generator(bison,
   output: ['@BASENAME@.c', '@BASENAME@.h'],
   arguments: ['@INPUT@', '--defines=@OUTPUT1@', '--output=@OUTPUT0@'])
 
-cdata = configuration_data()
+# TLS: wolfSSL is the sole TLS provider.  It exposes an OpenSSL-compatible
+# API so the existing openssl.c backend is reused as-is.
+wolfssl_dep = dependency('wolfssl', required: true)
 
-# TLS: wolfSSL (OpenSSL-compatible) is preferred, then mbedtls, then gnutls.
-# wolfSSL provides both the crypto (libcrypto equivalent) and TLS layers.
-wolfssl_dep = dependency('wolfssl', required: false)
-if wolfssl_dep.found()
-  cdata.set('HAVE_LIBCRYPTO', true)
-  # Make wolfSSL's OpenSSL compatibility headers visible as <openssl/...>
-  add_project_arguments('-I/usr/include/wolfssl', language: 'c')
-  # Force-include wolfssl/options.h so OPENSSL_EXTRA and related macros are
-  # defined before any wolfSSL or wolfSSL-OpenSSL-compat header is seen.
-  add_project_arguments('-include', 'wolfssl/options.h', language: 'c')
-endif
+cdata.set('HAVE_WOLFSSL', true)
+cdata.set('HAVE_OPENSSL', true)   # openssl.c compiled via wolfSSL compat layer
+cdata.set('HAVE_LIBCRYPTO', true)
 
-# grr, mbedtls has no pc file so we have to do this ourselves.  gross.
-mbedtls_lib = cc.find_library('mbedtls', has_headers: ['mbedtls/ssl.h'], required: false)
-mbedcrypto_lib = cc.find_library('mbedcrypto', required: false)
-mbedx509_lib = cc.find_library('mbedx509', required: false)
+# Expose wolfSSL's compat headers as <openssl/...> and ensure wolfssl/options.h
+# is force-included before any compat header so OPENSSL_EXTRA et al. are set.
+wolfssl_inc = run_command('pkg-config', '--variable=includedir', 'wolfssl',
+  check: true).stdout().strip()
+add_project_arguments('-I' + wolfssl_inc / 'wolfssl', language: 'c')
+add_project_arguments('-include', 'wolfssl/options.h', language: 'c')
 
-if not wolfssl_dep.found() and mbedtls_lib.found() and mbedcrypto_lib.found() and mbedx509_lib.found()
-  mbedtls_dep = declare_dependency(include_directories: '/usr/include',
-    dependencies: [mbedtls_lib, mbedcrypto_lib, mbedx509_lib])
+libssl_dep = wolfssl_dep
 
-  cdata.set('HAVE_MBEDTLS', true)
-else
-  mbedtls_dep = disabler()
-endif
+# sqlite3 — required by ircd (services DB) and bandb.
+sqlite3_dep = dependency('sqlite3', required: true)
 
-if not wolfssl_dep.found() and not mbedtls_dep.found()
-  gnutls_dep = dependency('gnutls', required: false)
-
-  if gnutls_dep.found()
-    cdata.set('HAVE_GNUTLS', true)
-  endif
-else
-  gnutls_dep = disabler()
-endif
-
-if wolfssl_dep.found()
-  # wolfSSL is our OpenSSL replacement; use its compat layer.
-  libssl_dep = wolfssl_dep
-  cdata.set('HAVE_OPENSSL', true)
-elif not mbedtls_dep.found() and not gnutls_dep.found()
-  libssl_dep = disabler()
-else
-  libssl_dep = disabler()
+# hyperscan — optional; enables the compiled-pattern filter extension.
+hyperscan_dep = dependency('hyperscan', required: false)
+if hyperscan_dep.found()
+  cdata.set('HAVE_HYPERSCAN', true)
 endif
 
 # branding
@@ -140,6 +121,8 @@ check_functions = [
   ['HAVE_GMTIME_R', 'gmtime_r', 'time.h'],
   ['HAVE_STRTOK_R', 'strtok_r', 'string.h'],
   ['HAVE_USLEEP', 'usleep', 'unistd.h'],
+  ['HAVE_NANOSLEEP', 'nanosleep', 'time.h'],
+  ['HAVE_CLOCK_NANOSLEEP', 'clock_nanosleep', 'time.h'],
   ['HAVE_POSIX_SPAWN', 'posix_spawn', 'spawn.h'],
   ['HAVE_GETEXECNAME', 'getexecname', 'stdlib.h'],
   ['HAVE_STRLCAT', 'strlcat', 'string.h'],
@@ -157,8 +140,12 @@ check_functions = [
   ['HAVE_PORT_CREATE', 'port_create', 'port.h'],
   ['HAVE_EPOLL_CTL', 'epoll_ctl', 'sys/epoll.h'],
   ['HAVE_ARC4RANDOM', 'arc4random', 'stdlib.h'],
+  ['HAVE_ARC4RANDOM_BUF', 'arc4random_buf', 'stdlib.h'],
+  ['HAVE_GETRANDOM', 'getrandom', 'sys/random.h'],
+  ['HAVE_GETENTROPY', 'getentropy', 'unistd.h'],
   ['HAVE_GETRUSAGE', 'getrusage', 'sys/resource.h'],
   ['HAVE_TIMERFD_CREATE', 'timerfd_create', 'sys/timerfd.h'],
+  ['HAVE_CLOCK_GETTIME', 'clock_gettime', 'time.h'],
 ]
 
 foreach f : check_functions
@@ -166,6 +153,24 @@ foreach f : check_functions
     cdata.set(f.get(0), 1)
   endif
 endforeach
+
+# GNU-extension functions that require _GNU_SOURCE to be visible in headers.
+# Checked separately with an explicit prefix so they're found on Linux.
+gnu_ext_functions = [
+  ['HAVE_ACCEPT4', 'accept4', 'sys/socket.h'],
+  ['HAVE_PIPE2',   'pipe2',   'unistd.h'],
+]
+foreach f : gnu_ext_functions
+  if cc.has_function(f.get(1),
+       prefix : '#define _GNU_SOURCE 1\n#include <' + f.get(2) + '>')
+    cdata.set(f.get(0), 1)
+  endif
+endforeach
+
+# Socket constants checked as header symbols (not functions).
+if cc.has_header_symbol('sys/socket.h', 'SO_NOSIGPIPE')
+  cdata.set('HAVE_SO_NOSIGPIPE', 1)
+endif
 
 # paths
 prefix = get_option('prefix')
@@ -206,3 +211,13 @@ subdir('doc')
 subdir('help')
 
 install_data('.ophion-keep', install_dir: log_dir)
+
+tls_provider = 'wolfssl ' + run_command('pkg-config', '--modversion', 'wolfssl',
+  check: true).stdout().strip()
+
+summary({
+  'TLS provider':           tls_provider,
+  'io_uring':               liburing_dep.found(),
+  'sqlite3':                sqlite3_dep.found(),
+  'hyperscan (filter ext)': hyperscan_dep.found(),
+}, section: 'Dependencies', bool_yn: true)

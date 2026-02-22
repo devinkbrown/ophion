@@ -36,8 +36,6 @@ foreach extension : extensions
     install_dir: extension_dir)
 endforeach
 
-hyperscan_dep = dependency('hyperscan', required: false)
-
 if hyperscan_dep.found()
   shared_module('filter',
     'filter.c',

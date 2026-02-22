@@ -372,7 +372,8 @@ invalidate_bancache_user(struct Client *client_p)
 	{
 		msptr = ptr->data;
 		msptr->bants = 0;
-		msptr->flags &= ~CHFL_BANNED;
+		msptr->qbants = 0;
+		msptr->flags &= ~(CHFL_BANNED | CHFL_QUIETED);
 	}
 }
 
@@ -679,7 +680,8 @@ is_banned_list(struct Channel *chptr, rb_dlink_list *list,
  * input	- channel, user to check, optional membership
  * output	- CHFL_QUIET if the user matches the +Z quiet list and is not
  *                exempted by +e; 0 otherwise
- * side effects -
+ * side effects - caches result in msptr->qbants / CHFL_QUIETED when msptr
+ *                is provided, mirroring the is_banned() / bants pattern.
  *
  * Like is_banned() but checks the quietlist instead of banlist.  Users on
  * the quiet list can still join the channel but cannot send messages.
@@ -695,6 +697,7 @@ is_quieted(struct Channel *chptr, struct Client *who, struct membership *msptr)
 	struct matchset ms;
 	rb_dlink_node *ptr;
 	struct Ban *ban;
+	int result = 0;
 
 	if (!MyClient(who))
 		return 0;
@@ -707,24 +710,39 @@ is_quieted(struct Channel *chptr, struct Client *who, struct membership *msptr)
 		ban = ptr->data;
 		if (matches_mask(&ms, ban->banstr) ||
 		    match_extban(ban->banstr, who, chptr, CHFL_QUIET))
-			goto check_exception;
+		{
+			result = CHFL_QUIET;
+			break;
+		}
 	}
-	return 0;
 
-check_exception:
-	/* +e (ban exceptions) also lift the quiet restriction. */
-	if (ConfigChannel.use_except)
+	if (result == CHFL_QUIET && ConfigChannel.use_except)
 	{
+		/* +e (ban exceptions) also lift the quiet restriction. */
 		RB_DLINK_FOREACH(ptr, chptr->exceptlist.head)
 		{
 			ban = ptr->data;
 			if (matches_mask(&ms, ban->banstr) ||
 			    match_extban(ban->banstr, who, chptr, CHFL_EXCEPTION))
-				return 0;
+			{
+				result = 0;
+				break;
+			}
 		}
 	}
 
-	return CHFL_QUIET;
+	/* Cache the quiet/not-quiet status in the membership, keyed by bants.
+	 * Mirrors the is_banned_list() / CHFL_BANNED caching pattern. */
+	if (msptr != NULL)
+	{
+		msptr->qbants = chptr->bants;
+		if (result == CHFL_QUIET)
+			msptr->flags |= CHFL_QUIETED;
+		else
+			msptr->flags &= ~CHFL_QUIETED;
+	}
+
+	return result;
 }
 
 /* is_banned()
@@ -889,8 +907,13 @@ can_send(struct Channel *chptr, struct Client *source_p, struct membership *mspt
 		else if(is_banned(chptr, source_p, msptr, NULL, NULL) == CHFL_BAN)
 			moduledata.approved = CAN_SEND_NO;
 
-		/* +Z quiet mode: user may be in the channel but cannot send. */
-		if(is_quieted(chptr, source_p, msptr) == CHFL_QUIET)
+		/* +Z quiet mode: check cached result, recompute only if stale. */
+		if(msptr->qbants == chptr->bants)
+		{
+			if(can_send_quieted(msptr))
+				moduledata.approved = CAN_SEND_NO;
+		}
+		else if(is_quieted(chptr, source_p, msptr) == CHFL_QUIET)
 			moduledata.approved = CAN_SEND_NO;
 	}
 

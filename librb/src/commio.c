@@ -23,6 +23,8 @@
  *
  */
 
+#define _GNU_SOURCE 1   /* accept4(), pipe2() */
+
 #include <librb_config.h>
 #include <rb_lib.h>
 #include <commio-int.h>
@@ -505,14 +507,11 @@ static void rb_accept_tryaccept(rb_fde_t *F, void *data __attribute__((unused)))
 		memset(&st, 0, sizeof(st));
 		addrlen = sizeof(st);
 
-		/* accept4() (Linux ≥ 2.6.28, FreeBSD ≥ 10, BSDs) atomically sets
-		 * SOCK_NONBLOCK + SOCK_CLOEXEC, eliminating two fcntl() syscalls
-		 * per connection.  ENOSYS fallback handles older kernels.       */
-#ifdef SOCK_NONBLOCK
+		/* accept4() atomically sets SOCK_NONBLOCK + SOCK_CLOEXEC,
+		 * saving two fcntl() syscalls per incoming connection.         */
+#ifdef HAVE_ACCEPT4
 		new_fd = accept4(F->fd, (struct sockaddr *)&st, &addrlen,
 		                 SOCK_NONBLOCK | SOCK_CLOEXEC);
-		if(new_fd < 0 && errno == ENOSYS)
-			new_fd = accept(F->fd, (struct sockaddr *)&st, &addrlen);
 #else
 		new_fd = accept(F->fd, (struct sockaddr *)&st, &addrlen);
 #endif
@@ -934,8 +933,14 @@ rb_pipe(rb_fde_t **F1, rb_fde_t **F2, const char *desc)
 		errno = ENFILE;
 		return -1;
 	}
+#ifdef HAVE_PIPE2
+	/* pipe2() sets O_NONBLOCK + O_CLOEXEC atomically, saving 2 fcntl() calls. */
+	if(pipe2(fd, O_NONBLOCK | O_CLOEXEC) == -1)
+		return -1;
+#else
 	if(pipe(fd) == -1)
 		return -1;
+#endif
 
 	*F1 = rb_open(fd[0], RB_FD_PIPE, desc);
 	*F2 = rb_open(fd[1], RB_FD_PIPE, desc);
@@ -990,10 +995,14 @@ rb_socket(int family, int sock_type, int proto, const char *note)
 	 * limit if/when we get an error, but we can deal with that later.
 	 * XXX !!! -- adrian
 	 */
-	/* SOCK_CLOEXEC (Linux ≥ 2.6.27 / BSDs) sets the close-on-exec flag
-	 * atomically, preventing fd leaks into child processes (ssld, wsockd,
-	 * authd, bandb).  Fall back to plain socket() on older kernels.      */
-#ifdef SOCK_CLOEXEC
+	/* Atomically set O_NONBLOCK + FD_CLOEXEC on the new socket when
+	 * the kernel supports it (Linux ≥ 2.6.27 / FreeBSD ≥ 10 / BSDs),
+	 * saving the two fcntl() calls that rb_set_nb() would otherwise
+	 * make per connection.  Fall back to plain socket() on older kernels. */
+#ifdef HAVE_ACCEPT4
+	/* HAVE_ACCEPT4 implies SOCK_NONBLOCK + SOCK_CLOEXEC are available. */
+	fd = socket(family, sock_type | SOCK_NONBLOCK | SOCK_CLOEXEC, proto);
+#elif defined(SOCK_CLOEXEC)
 	fd = socket(family, sock_type | SOCK_CLOEXEC, proto);
 #else
 	fd = socket(family, sock_type, proto);
@@ -1199,6 +1208,16 @@ rb_open(rb_platform_fd_t fd, uint8_t type, const char *desc)
 	F->fd = fd;
 	F->type = type;
 	SetFDOpen(F);
+
+#ifdef HAVE_SO_NOSIGPIPE
+	/* BSD: suppress SIGPIPE at the socket level so MSG_NOSIGNAL=0 is safe.
+	 * On Linux, MSG_NOSIGNAL on send() handles this; on BSD it doesn't exist. */
+	if(type & RB_FD_SOCKET)
+	{
+		int on = 1;
+		(void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+	}
+#endif
 
 	if(desc != NULL)
 		F->desc = rb_strndup(desc, FD_DESC_SZ);

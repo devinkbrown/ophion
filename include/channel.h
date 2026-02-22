@@ -97,7 +97,8 @@ struct membership
 	struct Client *client_p;
 	unsigned int flags;
 
-	time_t bants;
+	time_t bants;   /* invalidation stamp for ban cache (CHFL_BANNED) */
+	time_t qbants;  /* invalidation stamp for quiet cache (CHFL_QUIETED) */
 
 	/* Per-membership flood counters (channel PROP overrides server limit if stricter) */
 	time_t flood_kick_time;
@@ -170,6 +171,7 @@ typedef int (*ExtbanFunc)(const char *data, struct Client *client_p,
 #define CHFL_OWNER		CHFL_ADMIN	/* preferred alias for channel owner */
 
 #define CHFL_BANNED		0x0008  /* cached as banned */
+#define CHFL_QUIETED		0x0010  /* cached as quieted (+Z) */
 #define ONLY_SERVERS		0x0020
 #define ONLY_OPERS		0x0040
 #define ALL_MEMBERS		CHFL_PEON
@@ -181,7 +183,8 @@ typedef int (*ExtbanFunc)(const char *data, struct Client *client_p,
 #define is_chanop(x)	((x) && (x)->flags & CHFL_CHANOP)
 #define is_voiced(x)	((x) && (x)->flags & CHFL_VOICE)
 #define is_chanop_voiced(x) ((x) && (x)->flags & (CHFL_CHANOP|CHFL_VOICE|CHFL_ADMIN))
-#define can_send_banned(x) ((x) && (x)->flags & (CHFL_BANNED))
+#define can_send_banned(x)  ((x) && (x)->flags & (CHFL_BANNED))
+#define can_send_quieted(x) ((x) && (x)->flags & (CHFL_QUIETED))
 
 /* channel modes ONLY */
 #define MODE_PRIVATE    0x0001

@@ -18,6 +18,7 @@ core_modules = [
 foreach core_module : core_modules
   shared_module(core_module,
     '@0@.c'.format(core_module),
+    c_args: ['-fvisibility=hidden'],
     link_with: [librb_lib, ircd_lib],
     include_directories: [librb_inc, base_inc],
     name_prefix: '',

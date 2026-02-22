@@ -129,6 +129,7 @@ modules = [
 foreach module : modules
   shared_module(module,
     '@0@.c'.format(module),
+    c_args: ['-fvisibility=hidden'],
     link_with: [librb_lib, ircd_lib],
     include_directories: [librb_inc, base_inc],
     name_prefix: '',
@@ -139,6 +140,7 @@ endforeach
 if wolfssl_dep.found()
   shared_module('m_challenge',
     'm_challenge.c',
+    c_args: ['-fvisibility=hidden'],
     dependencies: [wolfssl_dep],
     link_with: [librb_lib, ircd_lib],
     include_directories: [librb_inc, base_inc],
