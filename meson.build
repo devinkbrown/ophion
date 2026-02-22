@@ -1,9 +1,12 @@
 project('ophion', 'c',
   version : '0.8',
   license : 'GPL-2-only',
-  meson_version : '>=0.50')
+  meson_version : '>=0.53')
 
 cc = meson.get_compiler('c')
+
+# configuration_data must be declared before any cdata.set() calls below.
+cdata = configuration_data()
 
 # libdl
 libdl_lib = cc.find_library('dl', has_headers: ['dlfcn.h'], required: false)
@@ -40,8 +43,6 @@ flex_gen = generator(flex,
 bison_gen = generator(bison,
   output: ['@BASENAME@.c', '@BASENAME@.h'],
   arguments: ['@INPUT@', '--defines=@OUTPUT1@', '--output=@OUTPUT0@'])
-
-cdata = configuration_data()
 
 # TLS: wolfSSL (OpenSSL-compatible) is preferred, then mbedtls, then gnutls.
 # wolfSSL provides both the crypto (libcrypto equivalent) and TLS layers.
@@ -87,6 +88,15 @@ elif not mbedtls_dep.found() and not gnutls_dep.found()
   libssl_dep = disabler()
 else
   libssl_dep = disabler()
+endif
+
+# sqlite3 — required by ircd (services DB) and bandb.
+sqlite3_dep = dependency('sqlite3', required: true)
+
+# hyperscan — optional; enables the compiled-pattern filter extension.
+hyperscan_dep = dependency('hyperscan', required: false)
+if hyperscan_dep.found()
+  cdata.set('HAVE_HYPERSCAN', true)
 endif
 
 # branding
@@ -206,3 +216,21 @@ subdir('doc')
 subdir('help')
 
 install_data('.ophion-keep', install_dir: log_dir)
+
+# Determine the active TLS provider for the summary.
+if wolfssl_dep.found()
+  tls_provider = 'wolfssl'
+elif mbedtls_dep.found()
+  tls_provider = 'mbedtls'
+elif gnutls_dep.found()
+  tls_provider = 'gnutls'
+else
+  tls_provider = 'none (TLS disabled)'
+endif
+
+summary({
+  'TLS provider':           tls_provider,
+  'io_uring':               liburing_dep.found(),
+  'sqlite3':                sqlite3_dep.found(),
+  'hyperscan (filter ext)': hyperscan_dep.found(),
+}, section: 'Dependencies', bool_yn: true)
